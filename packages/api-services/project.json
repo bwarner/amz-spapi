@@ -1,0 +1,26 @@
+{
+  "name": "api-services",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/api-services/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/packages/api-services",
+        "main": "packages/api-services/src/index.ts",
+        "tsConfig": "packages/api-services/tsconfig.lib.json",
+        "assets": ["packages/api-services/*.md"]
+      }
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../coverage/packages/api-services"
+      }
+    }
+  }
+}
