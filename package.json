@@ -5,6 +5,7 @@
   "scripts": {},
   "private": true,
   "dependencies": {
+    "@commander-js/extra-typings": "^12.1.0",
     "axios": "^1.6.0",
     "commander": "^12.1.0",
     "dotenv": "^16.4.7",

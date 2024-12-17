@@ -31,7 +31,8 @@
     "target": "es2022",
     "verbatimModuleSyntax": false,
     "paths": {
-      "@farvisionllc/api-services": ["packages/api-services/src/index.ts"]
+        "@farvisionllc/api-services": ["packages/api-services/src/index.ts"],
+        "@farvisionllc/models": ["packages/models/src/index.ts"]
     }
   }
 }
