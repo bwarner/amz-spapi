@@ -2,7 +2,14 @@
   "name": "@amz-spapi/source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "type": "module",
+  "scripts": {
+    "build": "nx build",
+    "test": "nx test",
+    "lint": "nx lint",
+    "format": "nx format:write",
+    "generate": "nx generate"
+  },
   "private": true,
   "dependencies": {
     "@commander-js/extra-typings": "^14.0.0",
@@ -36,7 +43,11 @@
     "eslint-config-prettier": "^10.1.5",
     "jest": "^29.7.0",
     "jest-environment-node": "^29.7.0",
+    "jiti": "2.4.2",
+    "jsonc-eslint-parser": "^2.1.0",
     "nx": "21.2.1",
+    "openapi-typescript": "^7.8.0",
+    "openapi-typescript-codegen": "^0.29.0",
     "prettier": "^2.8.8",
     "ts-jest": "^29.4.0",
     "ts-node": "10.9.2",
@@ -47,6 +58,8 @@
     "vitest": "^3.2.4"
   },
   "workspaces": [
-    "packages/**"
+    "packages/**",
+    "libs/*",
+    "amazon-ads-schema"
   ]
 }

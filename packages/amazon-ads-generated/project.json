@@ -1,0 +1,25 @@
+{
+  "name": "amazon-ads-generated",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "options": {
+        "tsConfig": "packages/amazon-ads-generated/tsconfig.lib.json",
+        "outputPath": "dist/packages/amazon-ads-generated",
+        "format": "esm",
+        "main": "packages/amazon-ads-generated/src/index.ts"
+      },
+      "outputs": ["{projectRoot}/dist"],
+      "dependsOn": ["^build"] 
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node ../../dist/packages/amazon-ads-generated/src/index.js generate",
+        "cwd": "packages/amazon-ads-generated"
+      },
+      "outputs": ["{projectRoot}/src"],
+      "dependsOn": ["build"] 
+    }
+  }
+}
