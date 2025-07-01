@@ -13,7 +13,8 @@
         "platform": "node",
         "outputPath": "dist/apps/spcli",
         "format": ["cjs"],
-        "bundle": false,
+        "bundle": true,
+        "external": ["pino", "pino-pretty"],
         "main": "apps/spcli/src/main.ts",
         "tsConfig": "apps/spcli/tsconfig.app.json",
         "assets": ["apps/spcli/src/assets"],
@@ -37,21 +38,13 @@
         }
       }
     },
-    "serve": {
+    "run": {
       "executor": "@nx/js:node",
-      "defaultConfiguration": "development",
       "dependsOn": ["build"],
       "options": {
         "buildTarget": "spcli:build",
-        "runBuildTargetDependencies": false
-      },
-      "configurations": {
-        "development": {
-          "buildTarget": "spcli:build:development"
-        },
-        "production": {
-          "buildTarget": "spcli:build:production"
-        }
+        "watch": false,
+        "args": []
       }
     }
   }

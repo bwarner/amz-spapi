@@ -2,6 +2,8 @@
   "name": "@farvisionllc/api-services",
   "version": "0.0.1",
   "dependencies": {
+    "@farvisionllc/models": "*",
+    "axios": "^1.7.9",
     "tslib": "^2.3.0"
   },
   "type": "commonjs",

@@ -13,7 +13,7 @@
     "importHelpers": true,
     "incremental": true,
     "isolatedModules": true,
-    "lib": ["es2022"],
+    "lib": ["es2024"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmitOnError": true,
@@ -30,9 +30,10 @@
     "strict": true,
     "target": "es2022",
     "verbatimModuleSyntax": false,
+    "baseUrl": ".",
     "paths": {
-        "@farvisionllc/api-services": ["packages/api-services/src/index.ts"],
-        "@farvisionllc/models": ["packages/models/src/index.ts"]
+      "@farvisionllc/api-services": ["packages/api-services/src/index.ts"],
+      "@farvisionllc/models": ["packages/models/src/index.ts"]
     }
   }
 }
