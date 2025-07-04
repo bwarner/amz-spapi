@@ -4,18 +4,25 @@ import { program } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import openapiTS, { astToString } from 'openapi-typescript';
+export * from './lib/ManagerAccount_prod_3p';
 
+const schemas = [
+  'ManagerAccount_prod_3p.json',
+  'SponsoredProducts_prod_3p.json',
+];
 program
   .command('generate')
   .description('Generate the Amazon Ads schema')
   .action(async () => {
-    const schemaPath = path.resolve(
-      '../amazon-ads-schema/src',
-      'assets',
-      'SponsoredProducts_prod_3p.json'
-    );
-    console.log(`schemaPath: ${schemaPath}`);
-    await generateSchema(schemaPath);
+    for (const schema of schemas) {
+      const schemaPath = path.resolve(
+        '../amazon-ads-schema/src',
+        'assets',
+        schema
+      );
+      console.log(`schemaPath: ${schemaPath}`);
+      await generateSchema(schemaPath);
+    }
   });
 
 program.parse(process.argv);
@@ -33,8 +40,8 @@ async function generateSchema(filePath: string) {
   const generated = astToString(ast);
   const outputPath = path.resolve(
     'src',
-    'schema',
-    'SponsoredProducts_prod_3p.ts'
+    'lib',
+    filePath.split('/').pop()?.split('.').shift() + '.ts'
   );
   console.log(`outputPath: ${outputPath}`);
   fs.writeFileSync(outputPath, generated);

@@ -14,7 +14,7 @@
         "platform": "node",
         "bundle": true,
         "external": ["pino", "pino-pretty"],                          
-        "format": ["cjs"],                        
+        "format": ["esm"],                        
         "main": "apps/adscli/src/main.ts",
         "outputPath": "dist/apps/adscli",
         "outfile": "adscli.js",                  

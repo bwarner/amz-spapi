@@ -7,7 +7,9 @@
         "tsConfig": "packages/amazon-ads-generated/tsconfig.lib.json",
         "outputPath": "dist/packages/amazon-ads-generated",
         "format": "esm",
-        "main": "packages/amazon-ads-generated/src/index.ts"
+        "main": "packages/amazon-ads-generated/src/index.ts",
+        "declaration": true,
+        "declarationMap": true
       },
       "outputs": ["{projectRoot}/dist"],
       "dependsOn": ["^build"] 
@@ -16,9 +18,16 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "node ../../dist/packages/amazon-ads-generated/src/index.js generate",
-        "cwd": "packages/amazon-ads-generated"
+        "cwd": "{projectRoot}"
       },
-      "outputs": ["{projectRoot}/src"],
+      "outputs": [
+        "{projectRoot}/src",
+        "{projectRoot}/src/schema/**/*.ts"
+      ],
+      "inputs": [
+        "{projectRoot}/src/assets/**/*.json",
+        "{projectRoot}/src/**/*.ts"
+      ],
       "dependsOn": ["build"] 
     }
   }

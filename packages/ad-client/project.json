@@ -1,0 +1,27 @@
+{
+  "name": "ad-client",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/ad-client/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/packages/ad-client",
+        "main": "packages/ad-client/src/index.ts",
+        "tsConfig": "packages/ad-client/tsconfig.lib.json",
+        "assets": ["packages/ad-client/*.md"],
+        "format": "esm"
+      }
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../coverage/packages/ad-client"
+      }
+    }
+  }
+} 

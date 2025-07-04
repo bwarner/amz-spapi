@@ -1,13 +1,18 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "rootDir": "src",
-    "outDir": "dist",
-    "tsBuildInfoFile": "dist/tsconfig.lib.tsbuildinfo",
+    "outDir": "../../dist/packages/ad-client",
+    "tsBuildInfoFile": "../../dist/packages/ad-client/tsconfig.lib.tsbuildinfo",
     "emitDeclarationOnly": false,
-    "types": ["node"]
-  },
-  "include": ["src/**/*.ts"],
+    "types": ["node"],
+    "moduleResolution": "NodeNext",
+    "module": "NodeNext",
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true
+    },
+  "include": ["src/**/*.ts", "src/lib/ad-client.ts"],
+  "exclude": ["**/*.spec.ts", "**/*.test.ts"],
   "references": []
 }

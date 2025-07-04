@@ -6,8 +6,8 @@
     "outDir": "dist",
     "tsBuildInfoFile": "../../dist/packages/amazon-ads-generated/tsconfig.lib.tsbuildinfo",
     "noUncheckedIndexedAccess": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "target": "ES2022",
     "types": ["node"]
   },

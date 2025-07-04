@@ -3,18 +3,11 @@
   "compileOnSave": false,
   "files": [],
   "references": [
-    {},
     {
       "path": "./packages/models"
     },
     {
       "path": "./packages/api-services"
-    },
-    {
-      "path": "./libs/ad-client"
-    },
-    {
-      "path": "./libs/ad-client"
     },
     {
       "path": "./packages/ad-client"
@@ -23,10 +16,7 @@
       "path": "./packages/ad-models"
     },
     {
-      "path": "./packages/ad-client"
-    },
-    {
-      "path": "./amazon-ads-schema"
+      "path": "./packages/amazon-ads-schema"
     },
     {
       "path": "./packages/amazon-ads-generated"

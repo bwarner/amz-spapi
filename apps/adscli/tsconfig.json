@@ -4,13 +4,13 @@
   "include": [],
   "references": [
     {
+      "path": "../../packages/ad-client"
+    },
+    {
       "path": "./tsconfig.app.json"
     },
     {
       "path": "./tsconfig.spec.json"
     }
-  ],
-  "compilerOptions": {
-    "esModuleInterop": true
-  }
+  ]
 }
