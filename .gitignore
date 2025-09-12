@@ -46,3 +46,7 @@ vite.config.*.timestamp*
 .swp
 
 vitest.config.*.timestamp*
+
+# Next.js
+.next
+out

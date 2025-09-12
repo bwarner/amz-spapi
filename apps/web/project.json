@@ -1,0 +1,97 @@
+{
+  "name": "web",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/web",
+  "projectType": "application",
+  "plugins": [
+    {
+      "plugin": "@nx/next/plugin",
+      "options": {
+        "buildTargetName": "build",
+        "devTargetName": "dev",
+        "startTargetName": "start",
+        "serveStaticTargetName": "serve-static"
+      }
+    }
+  ],
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/next:build",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "outputPath": "dist/apps/web"
+      },
+      "configurations": {
+        "development": {
+          "debug": true
+        },
+        "production": {
+          "debug": true,
+          "generateLockfile": true
+        }
+      }
+    },
+    "serve": {
+      "executor": "@nx/next:server",
+      "defaultConfiguration": "development",
+      "options": {
+        "port": 9443,
+        "buildTarget": "web:build",
+        "dev": true,
+        "hostname": "0.0.0.0"
+      },
+      "configurations": {
+        "development": {
+          "hostname": "local.totemsports.com",
+          "buildTarget": "web:build:development",
+          "dev": true,
+          "experimentalHttps": true,
+          "inspect": true
+        },
+        "production": {
+          "buildTarget": "web:build:production",
+          "dev": false
+        }
+      }
+    },
+    "export": {
+      "executor": "@nx/next:export",
+      "options": {
+        "buildTarget": "web:build:production"
+      }
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "passWithNoTests": true,
+        "reportsDirectory": "../../coverage/apps/web"
+      },
+      "configurations": {
+        "ci": {
+          "ci": true
+        }
+      }
+    },
+    "analyze": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "ANALYZE=true npx nx run web:build:production",
+        "cwd": "{workspaceRoot}",
+        "env": {
+          "ANALYZE": "true"
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["apps/web/**/*.{ts,tsx,js,jsx}"]
+      }
+    }
+  }
+
+}
