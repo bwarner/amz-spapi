@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(nx show:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(NX_DAEMON=false nx build web)",
+      "Bash(npm ls:*)"
     ],
     "deny": []
   }

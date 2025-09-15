@@ -31,6 +31,9 @@
     "verbatimModuleSyntax": false,
     "baseUrl": ".",
     "paths": {
+      "@/components/*": ["apps/web/src/components/*"],
+      "@/lib/*": ["apps/web/src/lib/*"],
+      "@/hooks/*": ["apps/web/src/hooks/*"],
       "@farvisionllc/ad-client": ["packages/ad-client/src/index.ts"],
       "@farvisionllc/ad-models": ["packages/ad-models/src/index.ts"],
       "@farvisionllc/amazon-ads-generated": [
