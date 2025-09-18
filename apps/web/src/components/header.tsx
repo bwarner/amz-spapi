@@ -1,5 +1,5 @@
-import { Button } from "@/components/ui/button"
 import Link from "next/link"
+import SignupLogin from './signup-login';
 
 export function Header() {
   return (
@@ -20,12 +20,6 @@ export function Header() {
             Features
           </Link>
           <Link
-            href="#getting-started"
-            className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Getting Started
-          </Link>
-          <Link
             href="#pricing"
             className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
@@ -39,14 +33,7 @@ export function Header() {
           </Link>
         </nav>
 
-        <div className="flex items-center space-x-4">
-          <Button variant="ghost" size="sm" className="hidden md:inline-flex">
-            Sign In
-          </Button>
-          <Button size="sm" className="bg-secondary text-secondary-foreground hover:bg-secondary/90">
-            Get Started
-          </Button>
-        </div>
+        <SignupLogin />
       </div>
     </header>
   )
