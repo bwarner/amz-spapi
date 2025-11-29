@@ -51,7 +51,8 @@
         "build"
       ],
       "options": {
-        "command": "node dist/apps/adscli/main.js"
+        "command": "node dist/apps/adscli/main.js",
+        "forwardAllArgs": true
       }
     },
     "test": {
