@@ -12,9 +12,9 @@
       "options": {
         "platform": "node",
         "outputPath": "dist/apps/spcli",
-        "format": ["cjs"],
+        "format": ["esm"],
         "bundle": true,
-        "external": ["pino", "pino-pretty"],
+        "thirdParty": false,
         "main": "apps/spcli/src/main.ts",
         "tsConfig": "apps/spcli/tsconfig.app.json",
         "assets": ["apps/spcli/src/assets"],
@@ -39,12 +39,11 @@
       }
     },
     "run": {
-      "executor": "@nx/js:node",
+      "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "buildTarget": "spcli:build",
-        "watch": false,
-        "args": []
+        "command": "node dist/apps/spcli/main.js",
+        "forwardAllArgs": true
       }
     }
   }
