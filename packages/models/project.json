@@ -7,17 +7,25 @@
   "targets": {
     "build": {
       "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "outputs": [
+        "{options.outputPath}"
+      ],
       "options": {
         "outputPath": "dist/packages/models",
         "main": "packages/models/src/index.ts",
         "tsConfig": "packages/models/tsconfig.lib.json",
-        "assets": ["packages/models/*.md"]
+        "assets": [
+          "packages/models/*.md",
+          "packages/models/package.json"
+        ],
+        "updateBuildableProjectDepsInPackageJson": true
       }
     },
     "test": {
       "executor": "@nx/vite:test",
-      "outputs": ["{options.reportsDirectory}"],
+      "outputs": [
+        "{options.reportsDirectory}"
+      ],
       "options": {
         "reportsDirectory": "../../coverage/packages/models"
       }

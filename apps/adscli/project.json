@@ -4,24 +4,27 @@
   "sourceRoot": "apps/adscli/src",
   "projectType": "application",
   "tags": [],
-
   "targets": {
-        "build": {
+    "build": {
       "executor": "@nx/esbuild:esbuild",
-      "outputs": ["{options.outputPath}"],
+      "outputs": [
+        "{options.outputPath}"
+      ],
       "defaultConfiguration": "production",
       "options": {
         "platform": "node",
         "bundle": true,
-        "external": ["pino", "pino-pretty"],                          
-        "format": ["esm"],                        
+        "thirdParty": false,
+        "generatePackageJson": true,
+        "format": [
+          "esm"
+        ],
         "main": "apps/adscli/src/main.ts",
         "outputPath": "dist/apps/adscli",
-        "outfile": "adscli.js",                  
         "tsConfig": "apps/adscli/tsconfig.app.json",
-        "assets": ["apps/adscli/src/assets"],
-
-
+        "assets": [
+          "apps/adscli/src/assets"
+        ],
         "esbuildOptions": {
           "banner": {
             "js": "#!/usr/bin/env node"
@@ -29,37 +32,33 @@
           "sourcemap": true
         }
       },
-
       "configurations": {
         "development": {
-          "esbuildOptions": { "sourcemap": true }
+          "esbuildOptions": {
+            "sourcemap": true
+          }
         },
         "production": {
-          "esbuildOptions": { "sourcemap": false }
+          "esbuildOptions": {
+            "sourcemap": false
+          }
         }
       }
     },
     "run": {
-      "executor": "@nx/js:node",
-      "dependsOn": ["build"],
-      "defaultConfiguration": "development",
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "build"
+      ],
       "options": {
-        "buildTarget": "adscli:build",
-        "watch": false,  
-        "args": []
-      },
-      "configurations": {
-        "development": {
-          "buildTarget": "adscli:build:development"
-        },
-        "production": {
-          "buildTarget": "adscli:build:production"
-        }
+        "command": "node dist/apps/adscli/main.js"
       }
     },
     "test": {
       "executor": "@nx/jest:jest",
-      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+      "outputs": [
+        "{workspaceRoot}/coverage/{projectRoot}"
+      ],
       "options": {
         "jestConfig": "apps/adscli/jest.config.ts",
         "passWithNoTests": true
@@ -68,7 +67,9 @@
     "lint": {
       "executor": "@nx/eslint:lint",
       "options": {
-        "lintFilePatterns": ["apps/adscli/**/*.{ts,tsx,js,jsx}"]
+        "lintFilePatterns": [
+          "apps/adscli/**/*.{ts,tsx,js,jsx}"
+        ]
       }
     }
   }

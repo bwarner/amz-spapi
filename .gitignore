@@ -55,3 +55,5 @@ out
 
 # Or more broadly exclude all local Claude settings
 .claude/*.local.json
+
+config.toml

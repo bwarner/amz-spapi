@@ -31,22 +31,10 @@
     "verbatimModuleSyntax": false,
     "baseUrl": ".",
     "paths": {
-      "@/components/*": ["apps/web/src/components/*"],
-      "@/lib/*": ["apps/web/src/lib/*"],
-      "@/hooks/*": ["apps/web/src/hooks/*"],
-      "@farvisionllc/ad-client": ["packages/ad-client/src/index.ts"],
-      "@farvisionllc/ad-models": ["packages/ad-models/src/index.ts"],
-      "@farvisionllc/amazon-ads-generated": [
-        "dist/packages/amazon-ads-generated/src/index.js"
+      "@farvisionllc/credential-store": [
+        "packages/credential-store/src/index.ts"
       ],
-      "@farvisionllc/amazon-ads-generated/*": [
-        "dist/packages/amazon-ads-generated/src/lib/*"
-      ],
-      "@farvisionllc/amazon-ads-schema": [
-        "packages/amazon-ads-schema/src/index.ts"
-      ],
-      "@farvisionllc/api-services": ["packages/api-services/src/index.ts"],
-      "@farvisionllc/models": ["packages/models/src/index.ts"]
+      "@farvisionllc/oauth": ["packages/oauth/src/index.ts"]
     }
   }
 }

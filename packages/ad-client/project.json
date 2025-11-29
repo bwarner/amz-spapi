@@ -7,21 +7,29 @@
   "targets": {
     "build": {
       "executor": "@nx/js:tsc",
-      "outputs": ["{options.outputPath}"],
+      "outputs": [
+        "{options.outputPath}"
+      ],
       "options": {
         "outputPath": "dist/packages/ad-client",
         "main": "packages/ad-client/src/index.ts",
         "tsConfig": "packages/ad-client/tsconfig.lib.json",
-        "assets": ["packages/ad-client/*.md"],
-        "format": "esm"
+        "assets": [
+          "packages/ad-client/*.md",
+          "packages/ad-client/package.json"
+        ],
+        "format": "esm",
+        "updateBuildableProjectDepsInPackageJson": true
       }
     },
     "test": {
       "executor": "@nx/vite:test",
-      "outputs": ["{options.reportsDirectory}"],
+      "outputs": [
+        "{options.reportsDirectory}"
+      ],
       "options": {
         "reportsDirectory": "../../coverage/packages/ad-client"
       }
     }
   }
-} 
+}

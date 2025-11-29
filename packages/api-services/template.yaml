@@ -1,0 +1,388 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Amazon Seller Assistant - API Services
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  CouchbaseConnStr:
+    Type: String
+    Description: Couchbase connection string
+    NoEcho: true
+
+  CouchbaseUsername:
+    Type: String
+    Description: Couchbase username
+    NoEcho: true
+
+  CouchbasePassword:
+    Type: String
+    Description: Couchbase password
+    NoEcho: true
+
+  CouchbaseBucket:
+    Type: String
+    Default: seller_ops
+    Description: Couchbase bucket name
+
+  Auth0Domain:
+    Type: String
+    Description: Auth0 domain
+
+  Auth0ClientId:
+    Type: String
+    Description: Auth0 client ID
+
+  Auth0ClientSecret:
+    Type: String
+    Description: Auth0 client secret
+    NoEcho: true
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        ENV: !Ref Environment
+        COUCHBASE_CONNSTR: !Ref CouchbaseConnStr
+        COUCHBASE_USERNAME: !Ref CouchbaseUsername
+        COUCHBASE_PASSWORD: !Ref CouchbasePassword
+        COUCHBASE_BUCKET: !Ref CouchbaseBucket
+        CREDENTIALS_KMS_KEY_ID: !Ref CredentialsKmsKey
+        POWERTOOLS_SERVICE_NAME: seller-assistant
+        POWERTOOLS_METRICS_NAMESPACE: SellerOps
+        LOG_LEVEL: INFO
+    Tracing: Active
+
+Resources:
+  # ============================================================
+  # KMS Key for Credential Encryption
+  # ============================================================
+  CredentialsKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub KMS key for encrypting Amazon API credentials - ${Environment}
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          # Allow root account full access (required)
+          - Sid: Enable IAM policies
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+          # Allow Lambda functions to decrypt credentials
+          - Sid: Allow Lambda decrypt
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt CredentialServiceFunctionRole.Arn
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+            Resource: '*'
+
+          # Allow credential management functions to encrypt
+          - Sid: Allow credential encryption
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt CredentialServiceFunctionRole.Arn
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+              - 'kms:DescribeKey'
+            Resource: '*'
+
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: CredentialEncryption
+
+  CredentialsKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/seller-assistant-credentials-${Environment}'
+      TargetKeyId: !Ref CredentialsKmsKey
+
+  # ============================================================
+  # API Gateway
+  # ============================================================
+  ApiGateway:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'  # TODO: Restrict to your domain in production
+        AllowHeaders:
+          - '*'
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        MaxAge: 300
+      Tags:
+        Environment: !Ref Environment
+
+  # ============================================================
+  # Lambda Functions - Credential Management
+  # ============================================================
+  CredentialServiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./dist
+      Handler: handlers/credentials.handler
+      Description: Manage Amazon API credentials (SP-API, Ads API)
+      Role: !GetAtt CredentialServiceFunctionRole.Arn
+      Environment:
+        Variables:
+          CREDENTIALS_KMS_KEY_ID: !Ref CredentialsKmsKey
+      Events:
+        # Store/update credentials
+        StoreCredentials:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /api/credentials
+            Method: POST
+
+        # Get credentials
+        GetCredentials:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /api/credentials/{profileName}
+            Method: GET
+
+        # List profiles
+        ListProfiles:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /api/credentials
+            Method: GET
+
+        # Delete credentials
+        DeleteCredentials:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /api/credentials/{profileName}
+            Method: DELETE
+
+  CredentialServiceFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+      Policies:
+        - PolicyName: KmsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'kms:Encrypt'
+                  - 'kms:Decrypt'
+                  - 'kms:GenerateDataKey'
+                  - 'kms:DescribeKey'
+                Resource: !GetAtt CredentialsKmsKey.Arn
+
+  # ============================================================
+  # Lambda Functions - OAuth Flow
+  # ============================================================
+  OAuthCallbackFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./dist
+      Handler: handlers/oauth-callback.handler
+      Description: Handle OAuth callbacks from Amazon LWA
+      Role: !GetAtt CredentialServiceFunctionRole.Arn
+      Events:
+        OAuthCallback:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiGateway
+            Path: /api/oauth/callback
+            Method: GET
+
+  # ============================================================
+  # SQS Queues for Async Processing
+  # ============================================================
+  TokenRefreshQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'seller-assistant-token-refresh-${Environment}'
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 86400  # 1 day
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TokenRefreshDLQ.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  TokenRefreshDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'seller-assistant-token-refresh-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  TokenRefreshFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./dist
+      Handler: handlers/token-refresh.handler
+      Description: Refresh expired Amazon API tokens
+      Role: !GetAtt CredentialServiceFunctionRole.Arn
+      Events:
+        SqsEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TokenRefreshQueue.Arn
+            BatchSize: 10
+            MaximumBatchingWindowInSeconds: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  # ============================================================
+  # EventBridge Rule - Scheduled Token Refresh
+  # ============================================================
+  TokenRefreshSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Check and refresh tokens every 30 minutes
+      ScheduleExpression: 'rate(30 minutes)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt TokenRefreshCheckFunction.Arn
+          Id: TokenRefreshCheckTarget
+
+  TokenRefreshCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./dist
+      Handler: handlers/token-refresh-check.handler
+      Description: Check for expiring tokens and queue refresh jobs
+      Role: !GetAtt TokenRefreshCheckFunctionRole.Arn
+      Environment:
+        Variables:
+          TOKEN_REFRESH_QUEUE_URL: !Ref TokenRefreshQueue
+
+  TokenRefreshCheckFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+      Policies:
+        - PolicyName: SqsSendMessage
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sqs:SendMessage'
+                  - 'sqs:GetQueueAttributes'
+                Resource: !GetAtt TokenRefreshQueue.Arn
+        - PolicyName: KmsDecrypt
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                  - 'kms:DescribeKey'
+                Resource: !GetAtt CredentialsKmsKey.Arn
+
+  TokenRefreshCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TokenRefreshCheckFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TokenRefreshSchedule.Arn
+
+  # ============================================================
+  # CloudWatch Alarms
+  # ============================================================
+  TokenRefreshDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'seller-assistant-token-refresh-dlq-${Environment}'
+      AlarmDescription: Alert when messages appear in token refresh DLQ
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt TokenRefreshDLQ.QueueName
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  CredentialsKmsKeyId:
+    Description: KMS Key ID for credential encryption
+    Value: !Ref CredentialsKmsKey
+    Export:
+      Name: !Sub '${AWS::StackName}-CredentialsKmsKeyId'
+
+  CredentialsKmsKeyArn:
+    Description: KMS Key ARN for credential encryption
+    Value: !GetAtt CredentialsKmsKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CredentialsKmsKeyArn'
+
+  TokenRefreshQueueUrl:
+    Description: SQS Queue URL for token refresh
+    Value: !Ref TokenRefreshQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-TokenRefreshQueueUrl'
+
+  TokenRefreshQueueArn:
+    Description: SQS Queue ARN for token refresh
+    Value: !GetAtt TokenRefreshQueue.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TokenRefreshQueueArn'

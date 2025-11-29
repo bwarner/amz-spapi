@@ -10,7 +10,8 @@
     "module": "NodeNext",
     "noEmit": false,
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "composite": true
     },
   "include": ["src/**/*.ts", "src/lib/ad-client.ts"],
   "exclude": ["**/*.spec.ts", "**/*.test.ts"],

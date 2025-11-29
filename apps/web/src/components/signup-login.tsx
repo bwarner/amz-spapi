@@ -35,14 +35,14 @@ export default function SignupLogin() {
         variant="ghost" 
         size="sm" 
         className="hidden md:inline-flex"
-        onClick={() => window.location.href = '/auth/login'}
+        onClick={() => window.location.href = '/auth/login?returnTo=/login/callback'}
       >
         Sign In
       </Button>
       <Button 
         size="sm" 
         className="bg-secondary text-secondary-foreground hover:bg-secondary/90"
-        onClick={() => window.location.href = '/auth/login?screen_hint=signup'}
+        onClick={() => window.location.href = '/auth/login?screen_hint=signup&returnTo=/login/callback'}
       >
         Get Started
       </Button>
