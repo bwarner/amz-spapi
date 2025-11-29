@@ -11,7 +11,8 @@
       "Bash(npx nx run:*)",
       "Bash(node:*)",
       "Bash(npx nx build:*)",
-      "Bash(npx nx show project:*)"
+      "Bash(npx nx show project:*)",
+      "Bash(./spcli.sh:*)"
     ],
     "deny": []
   }

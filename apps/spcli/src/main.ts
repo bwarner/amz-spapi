@@ -1,6 +1,7 @@
 import { Command } from '@commander-js/extra-typings';
 import { pino } from 'pino';
 import fs from 'node:fs';
+import * as readline from 'node:readline';
 import * as TOML from 'toml';
 import { z } from 'zod';
 import { SqliteCredentialStore } from '@farvisionllc/credential-store';
@@ -250,20 +251,256 @@ credsCmd
   });
 
 // ===========================================================
-// SP-API Commands (placeholder for future implementation)
+// Utility Functions
 // ===========================================================
 
-program
+/**
+ * Read lines from stdin (for pipeline support)
+ */
+async function readLinesFromStdin(): Promise<string[]> {
+  return new Promise((resolve) => {
+    const lines: string[] = [];
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: false,
+    });
+
+    rl.on('line', (line: string) => {
+      const trimmed = line.trim();
+      if (trimmed) lines.push(trimmed);
+    });
+
+    rl.on('close', () => {
+      resolve(lines);
+    });
+  });
+}
+
+/**
+ * Check if ASIN format is valid
+ */
+function isValidAsin(asin: string): boolean {
+  return /^B[0-9A-Z]{9}$/.test(asin);
+}
+
+/**
+ * Detect if output should be human-readable or machine-readable
+ */
+function isInteractive(): boolean {
+  return process.stdout.isTTY === true;
+}
+
+/**
+ * Output formatter
+ */
+function formatOutput(data: any, format?: string) {
+  const outputFormat = format || (isInteractive() ? 'table' : 'json');
+
+  switch (outputFormat) {
+    case 'json':
+      console.log(JSON.stringify(data, null, 2));
+      break;
+    case 'asin':
+      if (Array.isArray(data)) {
+        data.forEach((item) => console.log(item.asin || item));
+      } else {
+        console.log(data.asin || data);
+      }
+      break;
+    case 'table':
+      // Simple table output
+      if (Array.isArray(data)) {
+        if (data.length === 0) {
+          console.log('No results');
+          return;
+        }
+        // Print header
+        const keys = Object.keys(data[0]);
+        console.log(keys.join('\t'));
+        // Print rows
+        data.forEach((row) => {
+          console.log(keys.map((k) => row[k] || '-').join('\t'));
+        });
+      } else {
+        console.log(JSON.stringify(data, null, 2));
+      }
+      break;
+    case 'csv':
+      if (Array.isArray(data) && data.length > 0) {
+        const keys = Object.keys(data[0]);
+        console.log(keys.join(','));
+        data.forEach((row) => {
+          console.log(
+            keys
+              .map((k) => {
+                const val = row[k] || '';
+                return typeof val === 'string' && val.includes(',')
+                  ? `"${val}"`
+                  : val;
+              })
+              .join(',')
+          );
+        });
+      }
+      break;
+  }
+}
+
+// ===========================================================
+// SP-API Commands
+// ===========================================================
+
+const catalogCmd = program
   .command('catalog')
-  .description('Query catalog items')
-  .action(async () => {
-    logger.info('Catalog command - to be implemented');
-    console.log('This will query SP-API catalog items');
+  .description('Query SP-API catalog items (pipeline-friendly)');
+
+catalogCmd
+  .command('get')
+  .description('Get catalog item details for one or more ASINs')
+  .argument('[asins...]', 'ASINs to fetch (also reads from stdin)')
+  .option('--include-attributes', 'Include product attributes')
+  .option('--include-images', 'Include image URLs')
+  .option('--include-sales-ranks', 'Include sales rank data')
+  .option('--include-summaries', 'Include product summaries')
+  .option('--include-variations', 'Include variation data')
+  .option('--format <type>', 'Output format: json|table|csv|asin')
+  .option('--batch-size <n>', 'Batch size for API calls', '20')
+  .option('--marketplace <id>', 'Marketplace ID (overrides profile)')
+  .action(async (asinsFromArgs: string[], opts) => {
+    try {
+      let asins: string[] = [];
+
+      // Collect ASINs from command line arguments
+      if (asinsFromArgs && asinsFromArgs.length > 0) {
+        asins.push(...asinsFromArgs);
+      }
+
+      // Also read from stdin if not a TTY (pipeline mode)
+      if (!process.stdin.isTTY) {
+        const stdinAsins = await readLinesFromStdin();
+        asins.push(...stdinAsins);
+      }
+
+      // Remove duplicates and validate
+      asins = [...new Set(asins)].filter(isValidAsin);
+
+      if (asins.length === 0) {
+        console.error('Error: No valid ASINs provided');
+        console.error('Usage: catalog get <ASIN...>');
+        console.error('   or: echo "B001" | catalog get');
+        console.error('   or: cat asins.txt | catalog get');
+        process.exitCode = 1;
+        return;
+      }
+
+      logger.info({ count: asins.length }, 'Fetching catalog items');
+
+      // TODO: Implement actual SP-API call
+      // For now, return mock data
+      const results = asins.map((asin) => ({
+        asin,
+        title: `Product ${asin}`,
+        brand: 'Example Brand',
+        price: '$29.99',
+        salesRank: Math.floor(Math.random() * 10000),
+        status: 'available',
+      }));
+
+      formatOutput(results, opts.format);
+    } catch (error) {
+      logger.error({ error: error instanceof Error ? error.message : String(error) }, 'Failed to get catalog items');
+      console.error(error);
+      process.exitCode = 1;
+    }
+  });
+
+catalogCmd
+  .command('search')
+  .description('Search catalog items by keywords or identifiers')
+  .argument('[query]', 'Search query (keywords)')
+  .option('--keywords <text>', 'Search keywords')
+  .option('--brand <name>', 'Filter by brand')
+  .option('--identifiers <ids>', 'Comma-separated identifiers (UPC, EAN, ISBN)')
+  .option('--category <name>', 'Browse node or category')
+  .option('--limit <n>', 'Maximum results to return', '10')
+  .option('--format <type>', 'Output format: json|table|asin')
+  .option('--marketplace <id>', 'Marketplace ID (overrides profile)')
+  .action(async (query: string | undefined, opts) => {
+    try {
+      const keywords = opts.keywords || query;
+
+      if (!keywords && !opts.identifiers) {
+        console.error('Error: Provide search keywords or identifiers');
+        console.error('Usage: catalog search "coffee maker"');
+        console.error('   or: catalog search --keywords "coffee" --brand "Keurig"');
+        process.exitCode = 1;
+        return;
+      }
+
+      logger.info({ keywords, brand: opts.brand }, 'Searching catalog');
+
+      // TODO: Implement actual SP-API search
+      // For now, return mock data
+      const limit = parseInt(opts.limit, 10);
+      const results = Array.from({ length: Math.min(limit, 5) }, (_, i) => ({
+        asin: `B${String(i).padStart(9, '0')}`,
+        title: `${keywords} - Product ${i + 1}`,
+        brand: opts.brand || 'Various',
+        price: `$${(Math.random() * 100).toFixed(2)}`,
+        salesRank: Math.floor(Math.random() * 10000),
+      }));
+
+      formatOutput(results, opts.format);
+    } catch (error) {
+      logger.error({ error }, 'Failed to search catalog');
+      process.exitCode = 1;
+    }
+  });
+
+catalogCmd
+  .command('list')
+  .description('List catalog items you are selling')
+  .option('--sku <sku>', 'Filter by SKU')
+  .option('--brand <name>', 'Filter by brand')
+  .option('--include-inventory', 'Include inventory levels')
+  .option('--format <type>', 'Output format: json|table|asin')
+  .option('--limit <n>', 'Maximum results', '100')
+  .action(async (opts) => {
+    try {
+      logger.info({ sku: opts.sku, brand: opts.brand }, 'Listing your catalog items');
+
+      // TODO: Implement actual SP-API listing call
+      // For now, return mock data
+      const results = [
+        {
+          asin: 'B001234567',
+          sku: 'MY-SKU-001',
+          title: 'Your Product 1',
+          brand: 'YourBrand',
+          inventory: 150,
+          price: '$24.99',
+        },
+        {
+          asin: 'B987654321',
+          sku: 'MY-SKU-002',
+          title: 'Your Product 2',
+          brand: 'YourBrand',
+          inventory: 75,
+          price: '$19.99',
+        },
+      ];
+
+      formatOutput(results, opts.format);
+    } catch (error) {
+      logger.error({ error }, 'Failed to list catalog items');
+      process.exitCode = 1;
+    }
   });
 
 program
   .command('orders')
-  .description('Query orders')
+  .description('Query orders (coming soon)')
   .action(async () => {
     logger.info('Orders command - to be implemented');
     console.log('This will query SP-API orders');
