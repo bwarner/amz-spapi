@@ -28,7 +28,12 @@
           "configName": "tsconfig.lib.json"
         }
       },
-      "exclude": ["amazon-ads-schema/*", "packages/amazon-ads-generated/*"]
+      "exclude": [
+        "amazon-ads-schema/*",
+        "packages/amazon-ads-generated/*",
+        "packages/amazon-sp-schema/*",
+        "packages/amazon-sp-generated/*"
+      ]
     },
     {
       "plugin": "@nx/eslint/plugin",
@@ -52,7 +57,12 @@
     },
     {
       "plugin": "@nx/js/typescript",
-      "include": ["amazon-ads-schema/*", "packages/amazon-ads-generated/*"],
+      "include": [
+        "amazon-ads-schema/*",
+        "packages/amazon-ads-generated/*",
+        "packages/amazon-sp-schema/*",
+        "packages/amazon-sp-generated/*"
+      ],
       "options": {
         "typecheck": {
           "targetName": "typecheck"

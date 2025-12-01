@@ -5,6 +5,7 @@ import * as readline from 'node:readline';
 import * as TOML from 'toml';
 import { z } from 'zod';
 import { SqliteCredentialStore } from '@farvisionllc/credential-store';
+import { SpApiClient } from '@farvisionllc/sp-client';
 
 // Create logger
 const logger = pino({
@@ -51,6 +52,43 @@ function loadConfig(configPath: string): ConfigFile | null {
     logger.warn({ error, configPath }, 'Failed to load config file');
     return null;
   }
+}
+
+/**
+ * Create an SP-API client from stored credentials
+ */
+async function createSpApiClient(profileName: string): Promise<SpApiClient> {
+  const profile = await credStore.getProfile(profileName, 'SP_API');
+
+  if (!profile) {
+    throw new Error(`SP-API profile not found: ${profileName}`);
+  }
+
+  const { client_id, client_secret, refresh_token, access_token, marketplace_id, region, seller_id } = profile;
+
+  if (!client_id || !refresh_token || !marketplace_id) {
+    throw new Error('Invalid profile: missing required credentials (client_id, refresh_token, marketplace_id)');
+  }
+
+  return new SpApiClient({
+    clientId: client_id,
+    clientSecret: client_secret,
+    refreshToken: refresh_token,
+    accessToken: access_token,
+    sellerId: seller_id,
+    marketplaceId: marketplace_id,
+    region: (region as 'NA' | 'EU' | 'FE') || 'NA',
+    onTokenRefresh: async (newAccessToken, expiresIn) => {
+      // Save the new access token back to the credential store
+      logger.debug({ expiresIn }, 'Access token refreshed');
+      await credStore.setProfile({
+        ...profile,
+        access_token: newAccessToken,
+        access_token_expires_at: Date.now() + expiresIn * 1000,
+        updated_at: Date.now(),
+      });
+    },
+  });
 }
 
 const program = new Command()
@@ -297,6 +335,9 @@ function isInteractive(): boolean {
 function formatOutput(data: any, format?: string) {
   const outputFormat = format || (isInteractive() ? 'table' : 'json');
 
+  // Fields to exclude from table/csv output (complex objects that don't display well)
+  const excludeFromTableFormats = ['rawData', 'items'];
+
   switch (outputFormat) {
     case 'json':
       console.log(JSON.stringify(data, null, 2));
@@ -315,8 +356,10 @@ function formatOutput(data: any, format?: string) {
           console.log('No results');
           return;
         }
-        // Print header
-        const keys = Object.keys(data[0]);
+        // Filter out complex fields for table display
+        const allKeys = Object.keys(data[0]);
+        const keys = allKeys.filter(k => !excludeFromTableFormats.includes(k));
+
         console.log(keys.join('\t'));
         // Print rows
         data.forEach((row) => {
@@ -328,7 +371,10 @@ function formatOutput(data: any, format?: string) {
       break;
     case 'csv':
       if (Array.isArray(data) && data.length > 0) {
-        const keys = Object.keys(data[0]);
+        // Filter out complex fields for CSV display
+        const allKeys = Object.keys(data[0]);
+        const keys = allKeys.filter(k => !excludeFromTableFormats.includes(k));
+
         console.log(keys.join(','));
         data.forEach((row) => {
           console.log(
@@ -396,16 +442,57 @@ catalogCmd
 
       logger.info({ count: asins.length }, 'Fetching catalog items');
 
-      // TODO: Implement actual SP-API call
-      // For now, return mock data
-      const results = asins.map((asin) => ({
-        asin,
-        title: `Product ${asin}`,
-        brand: 'Example Brand',
-        price: '$29.99',
-        salesRank: Math.floor(Math.random() * 10000),
-        status: 'available',
-      }));
+      // Get the profile name from command options
+      const parentOpts = program.opts();
+      const profileName = parentOpts.profile || 'default';
+
+      // Create SP-API client
+      const client = await createSpApiClient(profileName);
+
+      // Build includedData array from options
+      const includedData: string[] = [];
+      if (opts.includeAttributes) includedData.push('attributes');
+      if (opts.includeImages) includedData.push('images');
+      if (opts.includeSalesRanks) includedData.push('salesRanks');
+      if (opts.includeSummaries) includedData.push('summaries');
+      if (opts.includeVariations) includedData.push('variations');
+
+      // Fetch catalog items
+      const results = [];
+      for (const asin of asins) {
+        try {
+          const response = await client.getCatalogItem(asin, {
+            includedData: includedData.length > 0 ? includedData : undefined,
+            marketplaceIds: opts.marketplace ? [opts.marketplace] : undefined,
+          });
+
+          // Extract key fields for display
+          const item = response;
+          const salesRank = item.salesRanks?.[0]?.displayGroupRanks?.[0]?.rank ||
+                           item.salesRanks?.[0]?.classificationRanks?.[0]?.rank ||
+                           'N/A';
+
+          results.push({
+            asin,
+            title: item.summaries?.[0]?.itemName || 'N/A',
+            brand: item.summaries?.[0]?.brand || 'N/A',
+            salesRank,
+            status: 'available',
+            rawData: item, // Include full response for JSON output
+          });
+        } catch (error: any) {
+          const errorDetails = error.response?.data || error.message;
+          logger.warn({ asin, error: errorDetails, status: error.response?.status }, 'Failed to fetch catalog item');
+          results.push({
+            asin,
+            title: 'ERROR',
+            brand: 'N/A',
+            salesRank: 'N/A',
+            status: error.response?.status === 404 ? 'not_found' : 'error',
+            error: typeof errorDetails === 'string' ? errorDetails : JSON.stringify(errorDetails),
+          });
+        }
+      }
 
       formatOutput(results, opts.format);
     } catch (error) {
@@ -498,12 +585,199 @@ catalogCmd
     }
   });
 
-program
+// ===========================================================
+// Orders Commands
+// ===========================================================
+
+const ordersCmd = program
   .command('orders')
-  .description('Query orders (coming soon)')
-  .action(async () => {
-    logger.info('Orders command - to be implemented');
-    console.log('This will query SP-API orders');
+  .description('Query SP-API orders (pipeline-friendly)');
+
+ordersCmd
+  .command('list')
+  .description('List orders within a time range')
+  .option('--created-after <date>', 'Orders created after this ISO 8601 date')
+  .option('--created-before <date>', 'Orders created before this ISO 8601 date')
+  .option('--last-updated-after <date>', 'Orders updated after this ISO 8601 date')
+  .option('--last-updated-before <date>', 'Orders updated before this ISO 8601 date')
+  .option('--status <statuses>', 'Order statuses (comma-separated): Pending,Unshipped,Shipped,Canceled')
+  .option('--fulfillment <channels>', 'Fulfillment channels (comma-separated): AFN,MFN')
+  .option('--max-results <n>', 'Maximum results per page', '100')
+  .option('--format <type>', 'Output format: json|table|csv|order-id')
+  .option('--marketplace <id>', 'Marketplace ID (overrides profile)')
+  .option('--days <n>', 'Shortcut: orders from last N days (uses LastUpdatedAfter)')
+  .action(async (opts) => {
+    try {
+      // Get the profile name from parent command options
+      const parentOpts = program.opts();
+      const profileName = parentOpts.profile || 'default';
+
+      // Create SP-API client
+      const client = await createSpApiClient(profileName);
+
+      // Handle --days shortcut
+      let lastUpdatedAfter = opts.lastUpdatedAfter;
+      if (opts.days && !lastUpdatedAfter) {
+        const daysAgo = new Date();
+        daysAgo.setDate(daysAgo.getDate() - parseInt(opts.days, 10));
+        lastUpdatedAfter = daysAgo.toISOString();
+        logger.debug({ lastUpdatedAfter }, `Using --days=${opts.days} shortcut`);
+      }
+
+      // Validate: either CreatedAfter or LastUpdatedAfter is required
+      if (!opts.createdAfter && !lastUpdatedAfter) {
+        console.error('Error: Either --created-after or --last-updated-after (or --days) is required');
+        console.error('Example: orders list --created-after 2024-01-01T00:00:00Z');
+        console.error('     or: orders list --days 7');
+        process.exitCode = 1;
+        return;
+      }
+
+      const orderStatuses = opts.status ? opts.status.split(',') : undefined;
+      const fulfillmentChannels = opts.fulfillment ? opts.fulfillment.split(',') : undefined;
+
+      logger.info(
+        {
+          createdAfter: opts.createdAfter,
+          lastUpdatedAfter,
+          orderStatuses,
+          fulfillmentChannels,
+        },
+        'Fetching orders'
+      );
+
+      const response = await client.getOrders({
+        createdAfter: opts.createdAfter,
+        createdBefore: opts.createdBefore,
+        lastUpdatedAfter,
+        lastUpdatedBefore: opts.lastUpdatedBefore,
+        orderStatuses,
+        fulfillmentChannels,
+        maxResultsPerPage: parseInt(opts.maxResults, 10),
+        marketplaceIds: opts.marketplace ? [opts.marketplace] : undefined,
+      });
+
+      // Extract orders from payload
+      const orders = response.payload?.Orders || [];
+
+      if (orders.length === 0) {
+        console.log('No orders found matching the criteria');
+        return;
+      }
+
+      // Format for output
+      const results = orders.map((order: any) => ({
+        orderId: order.AmazonOrderId,
+        purchaseDate: order.PurchaseDate,
+        orderStatus: order.OrderStatus,
+        fulfillmentChannel: order.FulfillmentChannel,
+        salesChannel: order.SalesChannel,
+        orderTotal: order.OrderTotal ? `${order.OrderTotal.CurrencyCode} ${order.OrderTotal.Amount}` : 'N/A',
+        numberOfItems: order.NumberOfItemsShipped + order.NumberOfItemsUnshipped || 0,
+        buyerEmail: order.BuyerInfo?.BuyerEmail || 'N/A',
+        shipServiceLevel: order.ShipmentServiceLevelCategory || 'N/A',
+        rawData: order, // Include full order for JSON output
+      }));
+
+      logger.info({ count: results.length }, 'Orders fetched successfully');
+
+      formatOutput(results, opts.format === 'order-id' ? 'asin' : opts.format);
+    } catch (error: any) {
+      const errorDetails = error.response?.data || error.message;
+      logger.error({ error: errorDetails, status: error.response?.status }, 'Failed to list orders');
+      console.error('Error:', typeof errorDetails === 'string' ? errorDetails : JSON.stringify(errorDetails, null, 2));
+      process.exitCode = 1;
+    }
+  });
+
+ordersCmd
+  .command('get')
+  .description('Get order details by Order ID')
+  .argument('[order-ids...]', 'Amazon Order IDs (also reads from stdin)')
+  .option('--include-items', 'Include order items in output')
+  .option('--format <type>', 'Output format: json|table|csv')
+  .action(async (orderIdsFromArgs: string[], opts) => {
+    try {
+      let orderIds: string[] = [];
+
+      // Collect order IDs from command line arguments
+      if (orderIdsFromArgs && orderIdsFromArgs.length > 0) {
+        orderIds.push(...orderIdsFromArgs);
+      }
+
+      // Also read from stdin if not a TTY (pipeline mode)
+      if (!process.stdin.isTTY) {
+        const stdinOrderIds = await readLinesFromStdin();
+        orderIds.push(...stdinOrderIds);
+      }
+
+      // Remove duplicates
+      orderIds = [...new Set(orderIds)];
+
+      if (orderIds.length === 0) {
+        console.error('Error: No order IDs provided');
+        console.error('Usage: orders get <ORDER_ID...>');
+        console.error('   or: echo "123-1234567-1234567" | orders get');
+        process.exitCode = 1;
+        return;
+      }
+
+      logger.info({ count: orderIds.length }, 'Fetching order details');
+
+      // Get the profile name from parent command options
+      const parentOpts = program.opts();
+      const profileName = parentOpts.profile || 'default';
+
+      // Create SP-API client
+      const client = await createSpApiClient(profileName);
+
+      const results = [];
+      for (const orderId of orderIds) {
+        try {
+          const orderResponse = await client.getOrder(orderId);
+          const order = orderResponse.payload;
+
+          let items: any[] = [];
+          if (opts.includeItems) {
+            try {
+              const itemsResponse = await client.getOrderItems(orderId);
+              items = itemsResponse.payload?.OrderItems || [];
+            } catch (itemError: any) {
+              logger.warn({ orderId, error: itemError.message }, 'Failed to fetch order items');
+            }
+          }
+
+          results.push({
+            orderId: order?.AmazonOrderId || orderId,
+            purchaseDate: order?.PurchaseDate || 'N/A',
+            orderStatus: order?.OrderStatus || 'N/A',
+            fulfillmentChannel: order?.FulfillmentChannel || 'N/A',
+            orderTotal: order?.OrderTotal ? `${order.OrderTotal.CurrencyCode} ${order.OrderTotal.Amount}` : 'N/A',
+            numberOfItems: (order?.NumberOfItemsShipped || 0) + (order?.NumberOfItemsUnshipped || 0),
+            items: items.length > 0 ? items : undefined,
+            rawData: order,
+          });
+        } catch (error: any) {
+          const errorDetails = error.response?.data || error.message;
+          logger.warn({ orderId, error: errorDetails, status: error.response?.status }, 'Failed to fetch order');
+          results.push({
+            orderId,
+            purchaseDate: 'ERROR',
+            orderStatus: error.response?.status === 404 ? 'not_found' : 'error',
+            fulfillmentChannel: 'N/A',
+            orderTotal: 'N/A',
+            numberOfItems: 0,
+            error: typeof errorDetails === 'string' ? errorDetails : JSON.stringify(errorDetails),
+          });
+        }
+      }
+
+      formatOutput(results, opts.format);
+    } catch (error: any) {
+      logger.error({ error: error.message }, 'Failed to get orders');
+      console.error(error);
+      process.exitCode = 1;
+    }
   });
 
 // Parse and execute

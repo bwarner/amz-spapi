@@ -1,0 +1,19 @@
+{
+  "name": "sp-client",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/sp-client/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/packages/sp-client",
+        "main": "packages/sp-client/src/index.ts",
+        "tsConfig": "packages/sp-client/tsconfig.lib.json",
+        "assets": ["packages/sp-client/*.md"]
+      }
+    }
+  }
+}

@@ -31,10 +31,15 @@
     "verbatimModuleSyntax": false,
     "baseUrl": ".",
     "paths": {
+      "@amz-spapi/amazon-sp-generated": [
+        "packages/amazon-sp-generated/src/index.ts"
+      ],
+      "@amz-spapi/amazon-sp-schema": ["packages/amazon-sp-schema/src/index.ts"],
       "@farvisionllc/credential-store": [
         "packages/credential-store/src/index.ts"
       ],
-      "@farvisionllc/oauth": ["packages/oauth/src/index.ts"]
+      "@farvisionllc/oauth": ["packages/oauth/src/index.ts"],
+      "@farvisionllc/sp-client": ["packages/sp-client/src/index.ts"]
     }
   }
 }

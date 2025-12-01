@@ -1,0 +1,30 @@
+{
+  "name": "amazon-sp-generated",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/amazon-sp-generated/src",
+  "projectType": "library",
+  "tags": [],
+  "// targets": "to see all targets run: nx show project amazon-sp-generated --web",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/packages/amazon-sp-generated",
+        "main": "packages/amazon-sp-generated/src/index.ts",
+        "tsConfig": "packages/amazon-sp-generated/tsconfig.lib.json",
+        "assets": []
+      }
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node dist/packages/amazon-sp-generated/src/index.js generate",
+        "cwd": "{workspaceRoot}"
+      },
+      "outputs": ["{projectRoot}/src/lib/**/*.ts"],
+      "inputs": ["{workspaceRoot}/packages/amazon-sp-schema/src/assets/**/*.json"],
+      "dependsOn": ["build"]
+    }
+  }
+}

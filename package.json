@@ -102,6 +102,7 @@
     "@types/pino": "^7.0.4",
     "@types/react": "19.0.0",
     "@types/react-dom": "19.0.0",
+    "@types/swagger2openapi": "^7.0.4",
     "@vitest/coverage-v8": "^3.2.4",
     "@vitest/ui": "^3.2.4",
     "autoprefixer": "^10.4.21",
