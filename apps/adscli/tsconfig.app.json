@@ -9,5 +9,19 @@
     "types": ["node"]
   },
   "exclude": ["jest.config.ts", "src/**/*.spec.ts", "src/**/*.test.ts"],
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../../packages/oauth/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/credential-store/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/models/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/ad-client/tsconfig.lib.json"
+    }
+  ]
 }

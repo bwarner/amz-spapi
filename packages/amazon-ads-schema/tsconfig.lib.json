@@ -1,5 +1,5 @@
 {
-  "extends": "../tsconfig.base.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": ".",
     "rootDir": "src",
@@ -10,6 +10,7 @@
     "declaration": true,
     "types": ["node"],
     "noUncheckedIndexedAccess": true,
+    "composite": true
     },
   "include": ["src/**/*.ts"],
   "references": []

@@ -1,0 +1,95 @@
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "seller-assistant-api"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+parameter_overrides = []
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "seller-assistant-api"
+region = "us-east-1"
+image_repositories = []
+
+[default.package.parameters]
+resolve_s3 = true
+
+[default.sync.parameters]
+watch = true
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+
+[default.local_start_lambda.parameters]
+warm_containers = "EAGER"
+
+# ============================================================
+# Development Environment
+# ============================================================
+[dev]
+[dev.global.parameters]
+stack_name = "seller-assistant-api-dev"
+
+[dev.deploy.parameters]
+parameter_overrides = [
+  "Environment=dev",
+  "CouchbaseConnStr=<your-couchbase-dev-connection-string>",
+  "CouchbaseUsername=<your-dev-username>",
+  "CouchbasePassword=<your-dev-password>",
+  "CouchbaseBucket=seller_ops_dev",
+  "Auth0Domain=<your-auth0-dev-domain>",
+  "Auth0ClientId=<your-auth0-dev-client-id>",
+  "Auth0ClientSecret=<your-auth0-dev-client-secret>"
+]
+
+# ============================================================
+# Staging Environment
+# ============================================================
+[staging]
+[staging.global.parameters]
+stack_name = "seller-assistant-api-staging"
+
+[staging.deploy.parameters]
+parameter_overrides = [
+  "Environment=staging",
+  "CouchbaseConnStr=<your-couchbase-staging-connection-string>",
+  "CouchbaseUsername=<your-staging-username>",
+  "CouchbasePassword=<your-staging-password>",
+  "CouchbaseBucket=seller_ops_staging",
+  "Auth0Domain=<your-auth0-staging-domain>",
+  "Auth0ClientId=<your-auth0-staging-client-id>",
+  "Auth0ClientSecret=<your-auth0-staging-client-secret>"
+]
+
+# ============================================================
+# Production Environment
+# ============================================================
+[prod]
+[prod.global.parameters]
+stack_name = "seller-assistant-api-prod"
+
+[prod.deploy.parameters]
+parameter_overrides = [
+  "Environment=prod",
+  "CouchbaseConnStr=<your-couchbase-prod-connection-string>",
+  "CouchbaseUsername=<your-prod-username>",
+  "CouchbasePassword=<your-prod-password>",
+  "CouchbaseBucket=seller_ops_prod",
+  "Auth0Domain=<your-auth0-prod-domain>",
+  "Auth0ClientId=<your-auth0-prod-client-id>",
+  "Auth0ClientSecret=<your-auth0-prod-client-secret>"
+]
+confirm_changeset = true

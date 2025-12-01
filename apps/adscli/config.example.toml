@@ -1,0 +1,29 @@
+# Amazon Seller Assistant CLI Configuration
+# Copy this to config.toml and fill in your values
+
+[ads_api]
+# Amazon Advertising API OAuth Configuration
+client_id = "amzn1.application-oa2-client.YOUR_CLIENT_ID"
+client_secret = "amzn1.oa2-cs.v1.YOUR_CLIENT_SECRET"
+redirect_uri = "http://localhost:3000/oauth/callback"
+marketplace_id = "ATVPDKIKX0DER"  # US marketplace
+region = "NA"  # NA, EU, or FE
+
+# Optional: Default profile name for this API
+# profile_name = "default"
+
+[sp_api]
+# Amazon Selling Partner API OAuth Configuration
+client_id = "amzn1.application-oa2-client.YOUR_SP_CLIENT_ID"
+client_secret = "amzn1.oa2-cs.v1.YOUR_SP_CLIENT_SECRET"
+redirect_uri = "http://localhost:3000/oauth/callback"
+marketplace_id = "ATVPDKIKX0DER"  # US marketplace
+region = "NA"  # NA, EU, or FE
+
+# Optional: Default profile name for this API
+# profile_name = "default"
+
+# You can add multiple configurations by adding sections like:
+# [ads_api.staging]
+# [ads_api.production]
+# etc.

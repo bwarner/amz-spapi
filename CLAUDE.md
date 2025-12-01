@@ -33,13 +33,20 @@ Non‑goals (v1): full multi‑tenant billing portal, advanced ML (we’ll promp
   * **adscli/**: operational CLI ADS API 
 * **packages/**
 
-  * **core/**: shared types, domain models, zod schemas.
-  * **ad-models/**: domain models, zod schemas.
-  * **db/**: Couchbase SDK wrappers, repository layer, migrations/DDL utilities.
-  * **aws/**: AWS helpers (Powertools, SQS/SNS/SES/Events wrappers, SigV4 utils if needed).
-  * **integrations/**: spapi, adsapi, alibaba, email (IMAP/SES), stripe/billing helper.
-  * **ai/**: Claude invocation, prompt templates, tool schemas.
-  * **ui/**: shared React components (shadcn/ui + charts).
+  * **amazon-ads-schema/**: Amazon Ads API OpenAPI 3.0 schemas (JSON)
+  * **amazon-ads-generated/**: Generated TypeScript types from Ads API schemas
+  * **amazon-sp-schema/**: Amazon SP-API Swagger 2.0 schemas (Catalog, Orders)
+  * **amazon-sp-generated/**: Generated TypeScript types (Swagger 2.0 → OpenAPI 3.0 → TS)
+  * **ad-client/**: Type-safe HTTP client for Amazon Ads API with auto token refresh
+  * **sp-client/**: Type-safe HTTP client for Amazon SP-API with auto token refresh
+  * **credential-store/**: SQLite-based credential storage for OAuth tokens
+  * **oauth/**: OAuth 2.0 flow helpers for LWA (Login with Amazon)
+  * **models/**: Shared domain models and Zod schemas
+  * **core/**: (planned) shared types, domain models, zod schemas
+  * **db/**: (planned) Couchbase SDK wrappers, repository layer, migrations/DDL utilities
+  * **aws/**: (planned) AWS helpers (Powertools, SQS/SNS/SES/Events wrappers, SigV4 utils if needed)
+  * **ai/**: (planned) Claude invocation, prompt templates, tool schemas
+  * **ui/**: (planned) shared React components (shadcn/ui + charts)
 
 **Runtime & infra**
 
@@ -93,10 +100,66 @@ Non‑goals (v1): full multi‑tenant billing portal, advanced ML (we’ll promp
 
 ---
 
-## 3) Data model (Couchbase collections)
+## 3) API Type Generation & Client Architecture
 
+### 3.1 Type-Safe API Clients
 
-## 4) Security & token management
+All external API integrations use **generated TypeScript types** for compile-time safety:
+
+**Amazon Ads API (OpenAPI 3.0)**
+- Source schemas in `amazon-ads-schema/src/assets/*.json`
+- Generated types via `openapi-typescript` v7.8.0
+- Output in `amazon-ads-generated/src/lib/*.ts`
+- HTTP client: `ad-client` with auto token refresh
+
+**Amazon SP-API (Swagger 2.0)**
+- Source schemas in `amazon-sp-schema/src/assets/*.json`
+- **Two-step generation**: Swagger 2.0 → OpenAPI 3.0 (via `swagger2openapi`) → TypeScript (via `openapi-typescript`)
+- Output in `amazon-sp-generated/src/lib/*.ts`
+- HTTP client: `sp-client` with auto token refresh, region-aware endpoints
+
+**Implemented APIs:**
+- SP-API Catalog Items (2022-04-01): `getCatalogItem()`, `searchCatalogItems()`
+- SP-API Orders (v0): `getOrders()`, `getOrder()`, `getOrderItems()`
+
+**To add a new API:**
+1. Download official JSON schema from Amazon
+2. Place in appropriate `-schema` package
+3. Add to generator script in `-generated` package
+4. Run generator to create TypeScript types
+5. Add methods to HTTP client package using generated types
+
+### 3.2 CLI Architecture (spcli / adscli)
+
+Both CLIs follow Unix philosophy:
+
+**Credential Management:**
+- LWA OAuth credentials in `config.toml` (gitignored, use `config.toml.example`)
+- Tokens stored in SQLite (`credential-store` package)
+- Auto-refresh via request interceptors
+
+**Pipeline-Friendly:**
+- Read from stdin for batch operations
+- Output formats: `json`, `table`, `csv`, custom
+- Exit codes for error handling
+
+**Example:**
+```bash
+# List orders, extract IDs, get details with items
+./spcli.sh orders list --days 7 --format json | \
+  jq -r '.[].orderId' | \
+  ./spcli.sh orders get --include-items
+```
+
+---
+
+## 4) Data model (Couchbase collections)
+
+(To be defined as we implement backend storage)
+
+---
+
+## 5) Security & token management
 
 * **Auth0** for app users; HTTP‑only session cookies.
 * **SP‑API & Ads** refresh tokens stored encrypted (KMS) per seller/profile; access tokens cached in Redis/Dynamo or Couchbase with TTL.
@@ -105,7 +168,7 @@ Non‑goals (v1): full multi‑tenant billing portal, advanced ML (we’ll promp
 
 ---
 
-## 5) Environments
+## 6) Environments
 
 * **dev** (local + dev AWS)
 * **staging** (preview stacks, Vercel preview)
@@ -123,7 +186,7 @@ BEDROCK/OPENAI/CLAUDE_KEYS (depending on provider)
 
 ---
 
-## 6) Nx workspace layout & targets
+## 7) Nx workspace layout & targets
 
 **apps/web (Next.js)**
 
@@ -154,20 +217,60 @@ Use `nx run-many -t test -p web api-services` in CI.
 
 ---
 
-## 7) Claude usage guidelines (for Claude Code)
+## 8) Claude usage guidelines (for Claude Code)
 
-* Prefer **TypeScript**; generate **Zod v4** schemas for DTOs; validate all external payloads.
-* When adding endpoints:
+### 8.1 General Principles
 
-  1. Update **domain types** in `packages/core`.
-  2. Implement repo in `packages/db` with **idempotent** writes.
-  3. code used in Lambdas in `apps/api-services` using Powertools middlewares (tracing/logging/metrics) and SQS partial failure when batch processing.
-  4. Add client in `packages/integrations` that wraps auth, caching, and rate limits.
-  5. Wire Next.js API route / server action in `apps/web` that calls our AWS API.
-* For long‑running tasks: enqueue SQS job; return job id; stream status to UI.
-* For image/A+ generation: write asset to S3; store doc in `catalog.images` or `catalog.a_plus_modules`; return signed URL to web.
-* For emails: normalize into `ops.email_messages`, run classifiers, open `ops.jobs`/`orders.returns` as needed.
-* Follow **conventional commits** and keep unit tests with each package.
+* Prefer **TypeScript**; use **generated types** from OpenAPI/Swagger schemas for external APIs
+* Validate all external payloads with **Zod v4** schemas
+* Follow **conventional commits** (feat/fix/docs/refactor/chore)
+* Keep unit tests with each package
+* **Never commit secrets** - use `config.toml.example` templates only
+
+### 8.2 Adding New SP-API or Ads API Endpoints
+
+1. **Get the schema**: Download official JSON schema from Amazon Developer Portal
+2. **Add to schema package**: Place in `amazon-sp-schema` or `amazon-ads-schema`
+3. **Generate types**:
+   - For SP-API (Swagger 2.0): Add to generator in `amazon-sp-generated/src/index.ts`
+   - For Ads API (OpenAPI 3.0): Add to generator in `amazon-ads-generated/src/index.ts`
+   - Run: `npx nx run amazon-sp-generated:generate` or similar
+4. **Add client methods**:
+   - Update `sp-client/src/lib/sp-client.ts` or `ad-client` with new methods
+   - Use generated types for parameters and return values
+   - Follow existing patterns for token management
+5. **Add CLI commands**:
+   - Add commands to `spcli` or `adscli`
+   - Support pipeline mode (stdin/stdout)
+   - Multiple output formats (json/table/csv)
+6. **Test with real API**: Always test with actual Amazon API before committing
+
+### 8.3 CLI Command Patterns
+
+* **Pipeline-friendly**: Accept input from stdin, output to stdout
+* **Format options**: `--format json|table|csv`
+* **Filtering**: Use query parameters for server-side filtering
+* **Batch operations**: Support reading multiple IDs from stdin
+* **Error handling**: Graceful degradation, continue on partial failures
+* **Help text**: Clear examples in `--help` output
+
+### 8.4 Web Integration (Future)
+
+When adding endpoints for web app:
+
+1. Create domain types in `packages/core`
+2. Implement repo in `packages/db` with **idempotent** writes
+3. Code used in Lambdas in `apps/api-services` using Powertools middlewares (tracing/logging/metrics)
+4. Wire Next.js API route / server action in `apps/web`
+5. For long-running tasks: enqueue SQS job; return job id; stream status to UI
+
+### 8.5 Security Best Practices
+
+* Store LWA credentials in `config.toml` (gitignored)
+* Store tokens in SQLite (`credential-store`) with encryption
+* Auto-refresh access tokens via HTTP interceptors
+* Never log or expose refresh tokens
+* Use environment-specific client IDs/secrets
 
 Prompt template (example):
 
@@ -179,7 +282,7 @@ Implement: <feature>. Provide updated files and Nx target updates.
 
 ---
 
-## 8) Coding standards
+## 9) Coding standards
 
 * **TypeScript** strict, ES2022.
 * **Lints**: eslint + @typescript-eslint + import/order.
@@ -192,23 +295,25 @@ Implement: <feature>. Provide updated files and Nx target updates.
 
 ---
 
-## 9) Deployment
+## 10) Deployment
 
 * **Web**: Vercel → env‑per‑branch previews; custom domain on prod.
 * **API**: SAM per env; pipeline stages dev→staging→prod. Use CodeDeploy for canary on critical Lambdas if needed.
 * **Secrets**: injected from AWS Secrets Manager (SAM parameters) and Vercel project secrets.
+* **CLIs**: Distributed as compiled binaries or via npm packages (future)
 
 ---
 
-## 10) Observability & ops
+## 11) Observability & ops
 
 * CloudWatch logs, metrics dashboards (errors, latency, SQS age, email backlog, SP‑API error rates).
 * Sentry for web errors.
 * Alerting via SNS/Slack (dead‑letter queues non‑empty, elevated 5xx, auth revocations).
+* CLI: Pino structured logging with configurable levels
 
 ---
 
-## 11) Roadmap (13‑week MVP plan)
+## 12) Roadmap (13‑week MVP plan)
 
 **W1‑2** Foundations
 
@@ -244,7 +349,7 @@ Implement: <feature>. Provide updated files and Nx target updates.
 
 ---
 
-## 12) Acceptance criteria (MVP)
+## 13) Acceptance criteria (MVP)
 
 * Users can log in (Auth0) and **connect Amazon** (SP‑API) successfully.
 * Chat UI can answer: *“What were my top 10 SKUs last week?”* with sources.
@@ -255,19 +360,38 @@ Implement: <feature>. Provide updated files and Nx target updates.
 
 ---
 
-## 13) Local dev quickstart
+## 14) Local dev quickstart
 
+**Web/API:**
 ```bash
-pnpm i
-pnpm nx graph
-pnpm nx run web:dev
-pnpm nx run api-services:local
+npm install
+npx nx graph
+npx nx run web:dev
+npx nx run api-services:local
 # Set COUCHBASE_*, AUTH0_*, LWA_*, ADS_* envs in .env.local
+```
+
+**CLIs:**
+```bash
+# SP-API CLI
+cd apps/spcli
+cp config.toml.example config.toml
+# Edit config.toml with your LWA credentials
+npx nx build spcli
+./spcli.sh credentials add --refresh-token YOUR_TOKEN
+./spcli.sh orders list --days 7
+
+# Ads API CLI
+cd apps/adscli
+cp config.toml.example config.toml
+# Edit config.toml with your LWA Ads credentials
+npx nx build adscli
+./adscli.sh credentials add --refresh-token YOUR_TOKEN
 ```
 
 ---
 
-## 14) Open questions / risks
+## 15) Open questions / risks
 
 * Alibaba official APIs & stability.
 * SP‑API/Ads rate limits & quotas → need backoff + job scheduling.

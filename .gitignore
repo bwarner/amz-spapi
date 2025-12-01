@@ -50,3 +50,10 @@ vitest.config.*.timestamp*
 # Next.js
 .next
 out
+
+.claude/settings.local.json
+
+# Or more broadly exclude all local Claude settings
+.claude/*.local.json
+
+config.toml

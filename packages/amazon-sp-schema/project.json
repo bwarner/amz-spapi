@@ -1,0 +1,9 @@
+{
+  "name": "amazon-sp-schema",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/amazon-sp-schema/src",
+  "projectType": "library",
+  "tags": [],
+  "// targets": "to see all targets run: nx show project amazon-sp-schema --web",
+  "targets": {}
+}

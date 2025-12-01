@@ -4,7 +4,15 @@
       "Bash(nx show:*)",
       "Bash(mv:*)",
       "Bash(NX_DAEMON=false nx build web)",
-      "Bash(npm ls:*)"
+      "Bash(npm ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(npx nx run:*)",
+      "Bash(node:*)",
+      "Bash(npx nx build:*)",
+      "Bash(npx nx show project:*)",
+      "Bash(./spcli.sh:*)"
     ],
     "deny": []
   }
