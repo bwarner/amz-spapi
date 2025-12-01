@@ -29,7 +29,7 @@ Copy the example config:
 
 ```bash
 cd apps/adscli
-cp config.example.toml config.toml
+cp config.toml.example config.toml
 ```
 
 Edit `config.toml` with your OAuth credentials:
@@ -298,8 +298,8 @@ Common marketplace IDs:
 
 ## Security Best Practices
 
-1. **Never commit `config.toml`**: Add it to `.gitignore`
-2. **Use config.example.toml as a template**: Share the example, not the real config
+1. **Never commit `config.toml`**: Already in `.gitignore` - keep it that way!
+2. **Use config.toml.example as a template**: Share the example, not the real config
 3. **Rotate credentials regularly**: Especially if they may have been exposed
 4. **Limit redirect URIs**: Only use localhost or HTTPS URLs you control
 5. **Monitor API usage**: Check for unexpected activity in Amazon's console

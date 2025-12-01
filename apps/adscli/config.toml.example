@@ -1,0 +1,17 @@
+# Amazon Ads API Configuration Example
+# Copy this file to config.toml and fill in your credentials
+
+[ads_api]
+# LWA (Login with Amazon) credentials for Amazon Ads
+# Register your app at: https://advertising.amazon.com/API/docs/en-us/setting-up/overview
+client_id = "amzn1.application-oa2-client.YOUR_ADS_CLIENT_ID"
+client_secret = "amzn1.oa2-cs.v1.YOUR_ADS_CLIENT_SECRET"
+
+# Region: NA (North America), EU (Europe), FE (Far East)
+region = "NA"
+
+# Optional: Profile name (defaults to "default")
+profile_name = "default"
+
+# Note: Amazon Ads API uses separate OAuth credentials from SP-API
+# You need to register a different LWA application for Ads API
