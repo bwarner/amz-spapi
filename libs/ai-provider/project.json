@@ -1,0 +1,22 @@
+{
+  "name": "ai-provider",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/ai-provider/src",
+  "projectType": "library",
+  "tags": ["scope:ai", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/ai-provider",
+        "main": "libs/ai-provider/src/index.ts",
+        "tsConfig": "libs/ai-provider/tsconfig.lib.json",
+        "assets": ["libs/ai-provider/*.md"]
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    }
+  }
+}

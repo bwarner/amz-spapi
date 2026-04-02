@@ -5,9 +5,8 @@ import { Analytics } from '@vercel/analytics/next'
 import './global.css'
 
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
-  generator: 'v0.app',
+  title: 'Sellavant — Amazon Seller Assistant',
+  description: 'AI-powered assistant for Amazon sellers. Analyze listings, track orders, optimize performance.',
 }
 
 export default function RootLayout({

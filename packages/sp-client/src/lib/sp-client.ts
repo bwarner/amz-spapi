@@ -65,14 +65,16 @@ export class SpApiClient {
       return config;
     });
 
-    // Response interceptor: auto token refresh on 401
+    // Response interceptor: auto token refresh on 401, retry with backoff on 429
     this.httpClient.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
         const originalRequest = error.config as InternalAxiosRequestConfig & {
           _retry?: boolean;
+          _retryCount?: number;
         };
 
+        // 401/403: refresh token and retry once
         if (
           (error.response?.status === 401 || error.response?.status === 403) &&
           !originalRequest._retry &&
@@ -80,18 +82,38 @@ export class SpApiClient {
           this.config.clientSecret
         ) {
           originalRequest._retry = true;
-
           try {
             const newAccessToken = await this.refreshAccessToken();
-
             if (originalRequest.headers) {
               originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
               originalRequest.headers['x-amz-access-token'] = newAccessToken;
             }
-
             return this.httpClient(originalRequest);
-          } catch (refreshError) {
+          } catch {
             return Promise.reject(error);
+          }
+        }
+
+        // 429: retry with exponential backoff (max 3 attempts)
+        if (error.response?.status === 429) {
+          const retryCount = originalRequest._retryCount ?? 0;
+          const maxRetries = 3;
+
+          if (retryCount < maxRetries) {
+            originalRequest._retryCount = retryCount + 1;
+
+            // Respect Retry-After header if present, else use exponential backoff
+            const retryAfterHeader = error.response.headers?.['retry-after'];
+            const retryAfterMs = retryAfterHeader
+              ? parseFloat(retryAfterHeader) * 1000
+              : Math.min(1000 * Math.pow(2, retryCount), 30_000); // 1s, 2s, 4s, max 30s
+
+            console.warn(
+              `[SpApiClient] Rate limited (429). Retry ${retryCount + 1}/${maxRetries} in ${retryAfterMs}ms. Path: ${originalRequest.url}`
+            );
+
+            await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+            return this.httpClient(originalRequest);
           }
         }
 
@@ -303,5 +325,36 @@ export class SpApiClient {
     );
 
     return response.data;
+  }
+
+  /**
+   * Get FBA inventory summaries (includes FNSKU data)
+   * GET /fba/inventory/v1/summaries
+   */
+  async getInventorySummaries(params: {
+    granularityType: string;
+    granularityId: string;
+    sellerSkus?: string[];
+    marketplaceIds?: string[];
+    nextToken?: string;
+  }): Promise<any> {
+    const queryParams: Record<string, string> = {
+      details: 'true',
+      granularityType: params.granularityType,
+      granularityId: params.granularityId,
+    };
+    if (params.sellerSkus) {
+      queryParams.sellerSkus = params.sellerSkus.join(',');
+    }
+    if (params.marketplaceIds) {
+      queryParams.marketplaceIds = params.marketplaceIds.join(',');
+    }
+    if (params.nextToken) {
+      queryParams.nextToken = params.nextToken;
+    }
+    const response = await this.httpClient.get('/fba/inventory/v1/summaries', {
+      params: queryParams,
+    });
+    return response.data.payload || response.data;
   }
 }

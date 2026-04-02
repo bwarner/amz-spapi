@@ -44,7 +44,7 @@
       },
       "configurations": {
         "development": {
-          "hostname": "local.totemsports.com",
+          "hostname": "local.sellavant.com",
           "buildTarget": "web:build:development",
           "dev": true,
           "experimentalHttps": true,

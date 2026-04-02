@@ -1,0 +1,22 @@
+{
+  "name": "couchbase-utils",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/couchbase-utils/src",
+  "projectType": "library",
+  "tags": ["scope:data", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/couchbase-utils",
+        "main": "libs/couchbase-utils/src/index.ts",
+        "tsConfig": "libs/couchbase-utils/tsconfig.lib.json",
+        "assets": ["libs/couchbase-utils/*.md"]
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    }
+  }
+}

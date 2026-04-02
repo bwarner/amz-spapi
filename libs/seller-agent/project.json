@@ -1,0 +1,22 @@
+{
+  "name": "seller-agent",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/seller-agent/src",
+  "projectType": "library",
+  "tags": ["scope:ai", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/seller-agent",
+        "main": "libs/seller-agent/src/index.ts",
+        "tsConfig": "libs/seller-agent/tsconfig.lib.json",
+        "assets": ["libs/seller-agent/*.md"]
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    }
+  }
+}

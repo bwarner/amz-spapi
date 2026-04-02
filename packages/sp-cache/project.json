@@ -1,0 +1,22 @@
+{
+  "name": "sp-cache",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/sp-cache/src",
+  "projectType": "library",
+  "tags": ["scope:data", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/packages/sp-cache",
+        "main": "packages/sp-cache/src/index.ts",
+        "tsConfig": "packages/sp-cache/tsconfig.lib.json",
+        "assets": ["packages/sp-cache/*.md"]
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    }
+  }
+}

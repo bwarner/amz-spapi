@@ -25,7 +25,7 @@ const steps = [
 export function GettingStartedSection() {
   return (
     <section id="getting-started" className="bg-muted/30 py-20 sm:py-32">
-      <div className="container">
+      <div className="container px-4 sm:px-6">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl text-balance">
             Get started in minutes

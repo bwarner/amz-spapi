@@ -5,7 +5,17 @@
     "paths": {
       "@/components/*": ["src/components/*"],
       "@/lib/*": ["src/lib/*"],
-      "@/hooks/*": ["src/hooks/*"]
+      "@/hooks/*": ["src/hooks/*"],
+      "@amz-spapi/ai-provider": ["../../libs/ai-provider/src/index.ts"],
+      "@amz-spapi/couchbase-utils": ["../../libs/couchbase-utils/src/index.ts"],
+      "@amz-spapi/sp-cache": ["../../packages/sp-cache/src/index.ts"],
+      "@amz-spapi/seller-agent": ["../../libs/seller-agent/src/index.ts"],
+      "@amz-spapi/amazon-sp-generated": ["../../packages/amazon-sp-generated/src/index.ts"],
+      "@amz-spapi/amazon-sp-generated/*": ["../../packages/amazon-sp-generated/src/*"],
+      "@farvisionllc/credential-store": ["../../packages/credential-store/src/index.ts"],
+      "@farvisionllc/models": ["../../packages/models/src/index.ts"],
+      "@farvisionllc/sp-client": ["../../packages/sp-client/src/index.ts"],
+      "@farvisionllc/oauth": ["../../packages/oauth/src/index.ts"]
     },
     "jsx": "preserve",
     "strict": true,

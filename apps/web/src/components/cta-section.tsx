@@ -6,7 +6,7 @@ const benefits = ["Free 14-day trial", "No credit card required", "Cancel anytim
 export function CTASection() {
   return (
     <section className="py-20 sm:py-32">
-      <div className="container">
+      <div className="container px-4 sm:px-6">
         <div className="mx-auto max-w-4xl">
           <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-primary to-primary/80 px-8 py-16 shadow-2xl sm:px-16">
             <div className="relative mx-auto max-w-2xl text-center">
@@ -31,9 +31,12 @@ export function CTASection() {
                   size="lg"
                   variant="secondary"
                   className="bg-secondary text-secondary-foreground hover:bg-secondary/90"
+                  asChild
                 >
-                  Start Your Free Trial
-                  <ArrowRight className="ml-2 h-4 w-4" />
+                  <a href="/auth/login?screen_hint=signup&returnTo=/chat">
+                    Start Your Free Trial
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </a>
                 </Button>
               </div>
             </div>

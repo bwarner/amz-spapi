@@ -780,5 +780,75 @@ ordersCmd
     }
   });
 
+// ===========================================================
+// Inventory Commands
+// ===========================================================
+
+const inventoryCmd = program
+  .command('inventory')
+  .description('Query FBA inventory (FNSKU, quantities)');
+
+inventoryCmd
+  .command('list')
+  .description('List FBA inventory summaries with FNSKU data')
+  .option('--sku <skus>', 'Comma-separated seller SKUs to filter')
+  .option('--format <type>', 'Output format: json|table|csv')
+  .option('--marketplace <id>', 'Marketplace ID (overrides profile)')
+  .action(async (opts) => {
+    try {
+      const parentOpts = program.opts();
+      const profileName = parentOpts.profile || 'default';
+      const client = await createSpApiClient(profileName);
+
+      const profile = await credStore.getProfile(profileName, 'SP_API');
+      const marketplaceId = opts.marketplace || profile?.marketplace_id || 'ATVPDKIKX0DER';
+
+      const sellerSkus = opts.sku ? opts.sku.split(',') : undefined;
+
+      logger.info({ sellerSkus, marketplaceId }, 'Fetching FBA inventory');
+
+      const allResults: any[] = [];
+      let nextToken: string | undefined;
+
+      do {
+        const response = await client.getInventorySummaries({
+          granularityType: 'Marketplace',
+          granularityId: marketplaceId,
+          sellerSkus,
+          marketplaceIds: [marketplaceId],
+          nextToken,
+        });
+
+        const summaries = response.inventorySummaries || [];
+        for (const item of summaries) {
+          allResults.push({
+            sku: item.sellerSku || 'N/A',
+            asin: item.asin || 'N/A',
+            fnsku: item.fnSku || 'N/A',
+            productName: item.productName || 'N/A',
+            condition: item.condition || 'N/A',
+            totalQuantity: item.totalQuantity || 0,
+            fulfillableQuantity: item.inventoryDetails?.fulfillableQuantity || 0,
+          });
+        }
+
+        nextToken = response.nextToken;
+      } while (nextToken);
+
+      if (allResults.length === 0) {
+        console.log('No FBA inventory found');
+        return;
+      }
+
+      logger.info({ count: allResults.length }, 'Inventory items fetched');
+      formatOutput(allResults, opts.format);
+    } catch (error: any) {
+      const errorDetails = error.response?.data || error.message;
+      logger.error({ error: errorDetails, status: error.response?.status }, 'Failed to list inventory');
+      console.error('Error:', typeof errorDetails === 'string' ? errorDetails : JSON.stringify(errorDetails, null, 2));
+      process.exitCode = 1;
+    }
+  });
+
 // Parse and execute
 program.parse(process.argv);

@@ -2,6 +2,13 @@
   "name": "@amz-spapi/source",
   "$schema": "node_modules/nx/schemas/project-schema.json",
   "targets": {
+    "setup-couchbase": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --loader ts-node/esm --env-file=apps/web/.env.local scripts/setup-couchbase.ts",
+        "cwd": "{workspaceRoot}"
+      }
+    },
     "local-registry": {
       "executor": "@nx/js:verdaccio",
       "options": {
