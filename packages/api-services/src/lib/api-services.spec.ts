@@ -1,7 +1,8 @@
-import { apiServices } from './api-services';
+import { AmazonSPAPI } from './api-services';
 
-describe('apiServices', () => {
-  it('should work', () => {
-    expect(apiServices()).toEqual('api-services');
+describe('AmazonSPAPI', () => {
+  it('should create an instance with access token', () => {
+    const api = new AmazonSPAPI('test-token');
+    expect(api).toBeInstanceOf(AmazonSPAPI);
   });
 });
