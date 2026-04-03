@@ -1,0 +1,21 @@
+{
+  "name": "SellAvant",
+  "homepage": "https://sellavant.com",
+  "brand_assets_base_url": "https://sellavant.com/brand/",
+  "colors": {
+    "navy": "#0B1F3B",
+    "gold": "#C89B3C"
+  },
+  "logos": {
+    "horizontal": "/brand/sellavant-logo-horizontal.svg",
+    "small": "/brand/sellavant-logo-small.svg",
+    "icon": "/brand/sellavant-icon.svg",
+    "iconInverse": "/brand/sellavant-icon-inverse.svg",
+    "mark": "/brand/sellavant-mark.svg"
+  },
+  "usage": {
+    "preferred": "horizontal logo for headers and partner pages; icon for favicons, app tiles, and compact UI",
+    "clearSpace": "Keep at least 0.5x logo height of clear space around the logo",
+    "backgrounds": "Use inverse icon on dark backgrounds"
+  }
+}

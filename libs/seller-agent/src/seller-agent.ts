@@ -1,11 +1,16 @@
 import { ToolLoopAgent, InferAgentUIMessage, stepCountIs } from 'ai';
 import { z } from 'zod';
 import type { SpCache } from '@amz-spapi/sp-cache';
-import type { AIProvider, ModelTier } from '@amz-spapi/ai-provider';
+import type {
+  AIProvider,
+  ImageGenerator,
+  ModelTier,
+} from '@amz-spapi/ai-provider';
 
 export interface SellerAgentConfig {
-  spCache: SpCache;
+  spCache?: SpCache;
   provider: AIProvider;
+  imageGenerator?: ImageGenerator;
   modelTier?: ModelTier;
   marketplaceId: string;
   additionalInstructions?: string;
@@ -19,29 +24,78 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
         'Returns product titles, ASINs, brands, images, and classification info. ' +
         'Use this to find products before fetching detailed listing data.',
       inputSchema: z.object({
-        keywords: z.string().optional().describe('Search keywords (e.g., "tea infuser stainless steel")'),
-        identifiers: z.array(z.string()).optional().describe('Product identifiers (ASINs, UPCs, etc.)'),
-        identifiersType: z.enum(['ASIN', 'EAN', 'GTIN', 'ISBN', 'JAN', 'MINSAN', 'SKU', 'UPC']).optional()
+        keywords: z
+          .string()
+          .optional()
+          .describe('Search keywords (e.g., "tea infuser stainless steel")'),
+        identifiers: z
+          .array(z.string())
+          .optional()
+          .describe('Product identifiers (ASINs, UPCs, etc.)'),
+        identifiersType: z
+          .enum(['ASIN', 'EAN', 'GTIN', 'ISBN', 'JAN', 'MINSAN', 'SKU', 'UPC'])
+          .optional()
           .describe('Type of identifiers provided'),
-        brandNames: z.array(z.string()).optional().describe('Filter by brand names'),
-        pageSize: z.number().min(1).max(20).optional().describe('Results per page (max 20)'),
+        brandNames: z
+          .array(z.string())
+          .optional()
+          .describe('Filter by brand names'),
+        pageSize: z
+          .number()
+          .min(1)
+          .max(20)
+          .optional()
+          .describe('Results per page (max 20)'),
       }),
       execute: async (input: {
         keywords?: string;
         identifiers?: string[];
-        identifiersType?: 'ASIN' | 'EAN' | 'GTIN' | 'ISBN' | 'JAN' | 'MINSAN' | 'SKU' | 'UPC';
+        identifiersType?:
+          | 'ASIN'
+          | 'EAN'
+          | 'GTIN'
+          | 'ISBN'
+          | 'JAN'
+          | 'MINSAN'
+          | 'SKU'
+          | 'UPC';
         brandNames?: string[];
         pageSize?: number;
       }) => {
-        return spCache.searchCatalogItems({
-          keywords: input.keywords,
-          identifiers: input.identifiers,
-          identifiersType: input.identifiersType,
-          brandNames: input.brandNames,
-          pageSize: input.pageSize,
-          marketplaceIds: [marketplaceId],
-          includedData: ['summaries', 'images'],
-        });
+        console.log(
+          '[tool:search-catalog] Executing with input:',
+          JSON.stringify(input)
+        );
+        try {
+          const result = await spCache.searchCatalogItems({
+            keywords: input.keywords,
+            identifiers: input.identifiers,
+            identifiersType: input.identifiersType,
+            brandNames: input.brandNames,
+            pageSize: input.pageSize,
+            marketplaceIds: [marketplaceId],
+            includedData: ['summaries', 'images'],
+          });
+          console.log(
+            '[tool:search-catalog] Success, got',
+            result?.numberOfResults,
+            'results'
+          );
+          return result;
+        } catch (err: any) {
+          console.error('[tool:search-catalog] ERROR:', err.message);
+          if (err.response) {
+            console.error(
+              '[tool:search-catalog] Response status:',
+              err.response.status
+            );
+            console.error(
+              '[tool:search-catalog] Response data:',
+              JSON.stringify(err.response.data)
+            );
+          }
+          throw err;
+        }
       },
     },
 
@@ -56,7 +110,14 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
       execute: async (input: { asin: string }) => {
         return spCache.getCatalogItem(input.asin, {
           marketplaceIds: [marketplaceId],
-          includedData: ['summaries', 'attributes', 'images', 'productTypes', 'salesRanks', 'dimensions'],
+          includedData: [
+            'summaries',
+            'attributes',
+            'images',
+            'productTypes',
+            'salesRanks',
+            'dimensions',
+          ],
         });
       },
     },
@@ -66,13 +127,27 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
         'Get recent orders for the seller. Can filter by date range, status, and fulfillment channel. ' +
         'Returns order IDs, status, dates, and totals. Does NOT include buyer PII.',
       inputSchema: z.object({
-        days: z.number().min(1).max(365).optional()
+        days: z
+          .number()
+          .min(1)
+          .max(365)
+          .optional()
           .describe('Number of days back to search (default 7)'),
-        orderStatuses: z.array(z.string()).optional()
-          .describe('Filter by status: Pending, Unshipped, PartiallyShipped, Shipped, Canceled, Unfulfillable'),
-        fulfillmentChannels: z.array(z.string()).optional()
+        orderStatuses: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Filter by status: Pending, Unshipped, PartiallyShipped, Shipped, Canceled, Unfulfillable'
+          ),
+        fulfillmentChannels: z
+          .array(z.string())
+          .optional()
           .describe('Filter: AFN (FBA) or MFN (merchant fulfilled)'),
-        maxResults: z.number().min(1).max(100).optional()
+        maxResults: z
+          .number()
+          .min(1)
+          .max(100)
+          .optional()
           .describe('Max results per page (default 20)'),
       }),
       execute: async (input: {
@@ -82,7 +157,9 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
         maxResults?: number;
       }) => {
         const days = input.days ?? 7;
-        const createdAfter = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const createdAfter = new Date(
+          Date.now() - days * 24 * 60 * 60 * 1000
+        ).toISOString();
         return spCache.getOrders({
           marketplaceIds: [marketplaceId],
           createdAfter,
@@ -99,7 +176,10 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
         'Returns order status, dates, totals, and item details (ASIN, quantity, price).',
       inputSchema: z.object({
         orderId: z.string().min(1).describe('The Amazon order ID'),
-        includeItems: z.boolean().optional().describe('Also fetch order line items (default true)'),
+        includeItems: z
+          .boolean()
+          .optional()
+          .describe('Also fetch order line items (default true)'),
       }),
       execute: async (input: { orderId: string; includeItems?: boolean }) => {
         const order = await spCache.getOrder(input.orderId);
@@ -116,7 +196,9 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
         'Check FBA inventory levels. Returns quantity available, inbound, reserved, ' +
         'and FNSKU for each SKU.',
       inputSchema: z.object({
-        sellerSkus: z.array(z.string()).optional()
+        sellerSkus: z
+          .array(z.string())
+          .optional()
           .describe('Filter by specific seller SKUs. Omit to get all.'),
       }),
       execute: async (input: { sellerSkus?: string[] }) => {
@@ -131,16 +213,133 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
   };
 }
 
+function getImageTools(imageGenerator: ImageGenerator) {
+  return {
+    'generate-image': {
+      description:
+        'Generate an image using DALL-E 3. Use this for creating A+ content images, ' +
+        'lifestyle photos, infographics, or product context images. ' +
+        'Provide a detailed prompt describing the image you want to create. ' +
+        'For best results, be specific about style, composition, lighting, and context.',
+      inputSchema: z.object({
+        prompt: z
+          .string()
+          .min(10)
+          .describe(
+            'Detailed description of the image to generate. Include: ' +
+              '1) Subject/product description, 2) Setting/background, 3) Style (photorealistic, ' +
+              'illustration, etc.), 4) Lighting, 5) Composition/angle. ' +
+              'Example: "Professional product photo of a stainless steel tea infuser ' +
+              'on a marble countertop with fresh tea leaves scattered around, soft natural ' +
+              'lighting from the left, clean white background, 45-degree angle view"'
+          ),
+        size: z
+          .enum(['1024x1024', '1792x1024', '1024x1792'])
+          .optional()
+          .describe(
+            'Image dimensions. Use 1792x1024 for landscape/banner images, ' +
+              '1024x1792 for portrait, 1024x1024 for square (default)'
+          ),
+        quality: z
+          .enum(['standard', 'hd'])
+          .optional()
+          .describe(
+            'Image quality. Use "hd" for detailed product shots (default), ' +
+              '"standard" for quick drafts'
+          ),
+        style: z
+          .enum(['natural', 'vivid'])
+          .optional()
+          .describe(
+            'Image style. "natural" for photorealistic product images (default), ' +
+              '"vivid" for more dramatic/artistic images'
+          ),
+      }),
+      execute: async (input: {
+        prompt: string;
+        size?: '1024x1024' | '1792x1024' | '1024x1792';
+        quality?: 'standard' | 'hd';
+        style?: 'natural' | 'vivid';
+      }) => {
+        console.log(
+          '[tool:generate-image] Generating with prompt:',
+          input.prompt.substring(0, 100) + '...'
+        );
+        try {
+          const results = await imageGenerator.generate({
+            prompt: input.prompt,
+            size: input.size || '1024x1024',
+            quality: input.quality || 'hd',
+            style: input.style || 'natural',
+          });
+          console.log(
+            '[tool:generate-image] Success, generated',
+            results.length,
+            'image(s)'
+          );
+          return {
+            success: true,
+            images: results.map((r) => ({
+              url: r.url,
+              revisedPrompt: r.revisedPrompt,
+            })),
+          };
+        } catch (err: any) {
+          console.error('[tool:generate-image] ERROR:', err.message);
+          return {
+            success: false,
+            error: err.message,
+          };
+        }
+      },
+    },
+  };
+}
+
 export function createSellerAgent({
   spCache,
   provider,
+  imageGenerator,
   modelTier,
   marketplaceId,
   additionalInstructions,
 }: SellerAgentConfig) {
-  const tools = getToolsForAgent(spCache, marketplaceId);
+  // Only include Amazon tools if spCache is available (user has connected their Amazon account)
+  const spTools = spCache ? getToolsForAgent(spCache, marketplaceId) : {};
+  const imageTools = imageGenerator ? getImageTools(imageGenerator) : {};
+  const tools = { ...spTools, ...imageTools };
 
-  const baseInstructions = `You are Sellavant, an expert Amazon Seller Assistant.
+  const hasAmazonConnection = !!spCache;
+  const hasImageGeneration = !!imageGenerator;
+
+  const imageInstructions = hasImageGeneration
+    ? `
+- generate-image: Create images using DALL-E 3 for A+ content, lifestyle photos, or infographics.
+  Provide detailed prompts including subject, setting, style, lighting, and composition.
+
+IMAGE GENERATION FOR A+ CONTENT:
+When asked to create images for A+ content or product listings:
+1. Ask clarifying questions about the product, brand style, and intended use.
+2. Craft a detailed prompt that includes:
+   - Product description and key features to highlight
+   - Setting/context (lifestyle, studio, in-use, etc.)
+   - Style (photorealistic, minimalist, lifestyle, infographic)
+   - Lighting and mood
+   - Composition and angle
+3. Use appropriate size: 1792x1024 for banners, 1024x1024 for modules, 1024x1792 for mobile.
+4. Generate the image and present the URL to the user.
+5. Offer to generate variations or adjustments.
+
+Example prompt for a tea infuser:
+"Professional product lifestyle photo of a stainless steel mesh tea infuser steeping in a clear
+glass mug of amber tea, steam rising gently, on a light wood table with scattered dried tea leaves
+and a small honey jar in soft focus background. Warm morning sunlight from left side, cozy kitchen
+setting, photorealistic style, 45-degree overhead angle."
+`
+    : '';
+
+  const baseInstructions = hasAmazonConnection
+    ? `You are Sellavant, an expert Amazon Seller Assistant.
 You help Amazon sellers understand their business, optimize listings, and grow sales.
 
 AVAILABLE TOOLS:
@@ -149,7 +348,7 @@ AVAILABLE TOOLS:
   Use this for listing analysis and critique.
 - get-orders: Get recent orders with filtering by date, status, fulfillment channel.
 - get-order-details: Get specific order details with line items.
-- get-inventory: Check FBA inventory levels by SKU.
+- get-inventory: Check FBA inventory levels by SKU.${imageInstructions}
 
 LISTING CRITIQUE WORKFLOW:
 When asked to critique, analyze, or improve a listing:
@@ -202,6 +401,20 @@ GENERAL GUIDELINES:
 - Present data in clear markdown tables when appropriate.
 - Be concise but thorough in your analysis.
 - When you don't have enough data, explain what additional info you'd need.
+`
+    : `You are Sellavant, an expert Amazon Seller Assistant.
+You help Amazon sellers understand their business, optimize listings, and grow sales.
+
+NOTE: Your Amazon account is not yet connected. You can still:
+- Answer general questions about Amazon selling best practices
+- Discuss listing optimization strategies
+- Explain how to improve titles, bullet points, and descriptions
+- Provide guidance on inventory management and order fulfillment
+- Help with keyword research and competitive analysis concepts
+
+To access your real Amazon data (orders, inventory, listings), please go to Settings and connect your Amazon Seller account.
+
+For now, feel free to ask me anything about Amazon selling!
 `;
 
   const instructions = additionalInstructions
@@ -223,4 +436,6 @@ GENERAL GUIDELINES:
   });
 }
 
-export type SellerAgentUIMessage = InferAgentUIMessage<ReturnType<typeof createSellerAgent>>;
+export type SellerAgentUIMessage = InferAgentUIMessage<
+  ReturnType<typeof createSellerAgent>
+>;

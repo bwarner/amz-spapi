@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" fill="none">
+  <rect x="10" y="18" width="120" height="120" rx="22" stroke="#0B1F3B" stroke-width="7"/>
+  <path d="M63 38c-18 0-32 10-32 24 0 10 6 17 20 22l17 6c9 4 13 7 13 13 0 7-8 13-18 13-11 0-20-5-27-12l-12 15c10 10 23 16 39 16 24 0 41-12 41-31 0-14-9-23-27-29l-15-5c-7-2-10-5-10-9 0-6 7-10 16-10 9 0 17 4 24 10l10-16c-9-7-22-12-39-12z" fill="#0B1F3B"/>
+  <path d="M39 111c21-2 40-12 56-35 10-14 18-29 22-45l16 4c-5 22-14 39-27 54-18 23-40 34-67 36v-14z" fill="#C89B3C"/>
+  <path d="M106 26l18 43-36-11 18-32z" fill="#C89B3C"/>
+  <text x="152" y="112" font-size="72" font-weight="500" font-family="Inter, Arial, Helvetica, sans-serif" fill="#0B1F3B">Sell</text>
+  <text x="300" y="112" font-size="78" font-weight="500" font-family="Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, Times New Roman, serif" fill="#C89B3C">Avant</text>
+</svg>

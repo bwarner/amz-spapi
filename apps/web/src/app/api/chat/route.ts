@@ -23,17 +23,24 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return Response.json({ error: 'Invalid or empty request body' }, { status: 400 });
+    return Response.json(
+      { error: 'Invalid or empty request body' },
+      { status: 400 }
+    );
   }
 
   const { messages } = body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return Response.json({ error: 'messages array is required' }, { status: 400 });
+    return Response.json(
+      { error: 'messages array is required' },
+      { status: 400 }
+    );
   }
 
   const aiProvider =
-    (process.env['AI_PROVIDER'] as 'bedrock' | 'anthropic' | 'openai') || 'anthropic';
+    (process.env['AI_PROVIDER'] as 'bedrock' | 'anthropic' | 'openai') ||
+    'anthropic';
 
   const provider = createAIProvider({
     provider: aiProvider,
@@ -50,40 +57,68 @@ export async function POST(request: Request) {
   let refreshToken = process.env['LWA_REFRESH_TOKEN'];
   let userMarketplaceId = marketplaceId;
 
+  // Debug logging
+  console.log(
+    '[chat] LWA_CLIENT_ID:',
+    clientId ? clientId.substring(0, 30) + '...' : 'NOT SET'
+  );
+  console.log('[chat] LWA_CLIENT_SECRET:', clientSecret ? 'SET' : 'NOT SET');
+  console.log(
+    '[chat] LWA_REFRESH_TOKEN:',
+    refreshToken ? 'SET (len:' + refreshToken.length + ')' : 'NOT SET'
+  );
+
   try {
     const credStore = getCredentialStore();
-    const profile = await credStore.getProfile('default', 'SP_API', session.user.sub);
-    if (profile && profile.refresh_token && !('deleted' in profile)) {
-      clientId = profile.client_id;
-      clientSecret = profile.client_secret;
-      refreshToken = profile.refresh_token;
-      userMarketplaceId = profile.marketplace_id || marketplaceId;
+    // Resolve profile: use default pointer first, then fall back to first available
+    const userId = session.user.sub;
+    let profileName = await credStore.getDefaultProfile('SP_API', userId);
+    if (!profileName) {
+      const names = await credStore.listProfiles('SP_API', userId);
+      profileName = names[0] ?? null;
+    }
+    if (profileName) {
+      const profile = await credStore.getProfile(profileName, 'SP_API', userId);
+      if (profile && profile.refresh_token) {
+        clientId = profile.client_id;
+        clientSecret = profile.client_secret;
+        refreshToken = profile.refresh_token;
+        userMarketplaceId = profile.marketplace_id || marketplaceId;
+      }
     }
   } catch {
     // Couchbase not available — fall back to env vars
   }
 
-  if (!clientId || !refreshToken) {
-    return Response.json({
-      error: 'No Amazon account connected. Please go to Settings to connect your Amazon Seller account.',
-    }, { status: 400 });
+  // Create SP client and cache only if credentials are available
+  // The agent will work without Amazon connection for basic conversations
+  let spCache: SpCache | undefined;
+
+  if (clientId && refreshToken) {
+    console.log('[chat] Creating SpApiClient...');
+    const spClient = new SpApiClient({
+      clientId,
+      clientSecret,
+      refreshToken,
+      marketplaceId: userMarketplaceId,
+    });
+
+    spCache = new SpCache({
+      spClient,
+      marketplaceId: userMarketplaceId,
+    });
+    console.log('[chat] SpCache created successfully');
+  } else {
+    console.log('[chat] No credentials - skipping SP client creation');
   }
 
-  const spClient = new SpApiClient({
-    clientId,
-    clientSecret,
-    refreshToken,
-    marketplaceId: userMarketplaceId,
-  });
-
-  const spCache = new SpCache({
-    spClient,
-    marketplaceId: userMarketplaceId,
-  });
+  // Get image generator if available (requires OPENAI_API_KEY)
+  const imageGenerator = provider.imageGenerator?.();
 
   const agent = createSellerAgent({
     spCache,
     provider,
+    imageGenerator,
     marketplaceId: userMarketplaceId,
   });
 
@@ -109,7 +144,8 @@ export async function POST(request: Request) {
       writer.merge(result.toUIMessageStream());
     },
     onError: (error) => {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       return errorMessage;
     },
   });
