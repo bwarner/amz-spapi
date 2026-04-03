@@ -5,9 +5,7 @@
   "projectType": "library",
   "release": {
     "version": {
-      "manifestRootsToUpdate": [
-        "dist/{projectRoot}"
-      ],
+      "manifestRootsToUpdate": ["dist/{projectRoot}"],
       "currentVersionResolver": "git-tag",
       "fallbackCurrentVersionResolver": "disk"
     }
@@ -16,17 +14,12 @@
   "targets": {
     "build": {
       "executor": "@nx/js:tsc",
-      "outputs": [
-        "{options.outputPath}"
-      ],
+      "outputs": ["{options.outputPath}"],
       "options": {
         "outputPath": "dist/packages/oauth",
         "main": "packages/oauth/src/index.ts",
         "tsConfig": "packages/oauth/tsconfig.lib.json",
-        "assets": [
-          "packages/oauth/*.md",
-          "packages/oauth/package.json"
-        ],
+        "assets": ["packages/oauth/*.md", "packages/oauth/package.json"],
         "updateBuildableProjectDepsInPackageJson": true
       }
     },
@@ -37,11 +30,10 @@
     },
     "test": {
       "executor": "@nx/jest:jest",
-      "outputs": [
-        "{workspaceRoot}/coverage/{projectRoot}"
-      ],
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
       "options": {
-        "jestConfig": "packages/oauth/jest.config.ts"
+        "jestConfig": "packages/oauth/jest.config.ts",
+        "passWithNoTests": true
       }
     }
   }
