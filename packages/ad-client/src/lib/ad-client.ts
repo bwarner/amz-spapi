@@ -1,6 +1,10 @@
 // import * as ManagerAccount_prod_3p from '@farvisionllc/amazon-ads-generated/ManagerAccount_prod_3p.js';
 
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import axios, {
+  AxiosInstance,
+  AxiosError,
+  InternalAxiosRequestConfig,
+} from 'axios';
 
 export interface AmazonAdsClientConfig {
   clientId: string; // LwA Client ID
@@ -20,6 +24,13 @@ interface LwaTokenResponse {
   token_type: 'bearer';
   expires_in: number;
 }
+
+export type AdsBrand = {
+  id?: string;
+  name?: string;
+};
+
+export type AdsBrandsResponse = AdsBrand[];
 
 export class AmazonAdsApiClient {
   private httpClient: AxiosInstance;
@@ -128,7 +139,9 @@ export class AmazonAdsApiClient {
    */
   private async _doRefresh(): Promise<string> {
     if (!this.config.refreshToken || !this.config.clientSecret) {
-      throw new Error('Missing refresh token or client secret for token refresh');
+      throw new Error(
+        'Missing refresh token or client secret for token refresh'
+      );
     }
 
     const params = new URLSearchParams({
@@ -168,7 +181,9 @@ export class AmazonAdsApiClient {
     } catch (error: any) {
       if (error.response) {
         throw new Error(
-          `Token refresh failed: ${error.response.status} - ${JSON.stringify(error.response.data)}`
+          `Token refresh failed: ${error.response.status} - ${JSON.stringify(
+            error.response.data
+          )}`
         );
       }
       throw new Error(`Token refresh failed: ${error.message}`);
@@ -188,5 +203,31 @@ export class AmazonAdsApiClient {
     // Check Amazon Advertising API documentation specifically for GET /profiles.
     // Profiles call does not require Scope (profile id) header; omit it here.
     return this.httpClient.get(`/v2/profiles`);
+  }
+
+  public async getNegativeBrands(): Promise<AdsBrandsResponse> {
+    const response = await this.httpClient.get<AdsBrandsResponse>(
+      '/sp/negativeTargets/brands/recommendations',
+      {
+        headers: {
+          Accept: 'application/vnd.spproducttargetingresponse.v3+json',
+        },
+      }
+    );
+    return response.data;
+  }
+
+  public async searchBrands(keyword: string): Promise<AdsBrandsResponse> {
+    const response = await this.httpClient.post<AdsBrandsResponse>(
+      '/sp/negativeTargets/brands/search',
+      { keyword },
+      {
+        headers: {
+          Accept: 'application/vnd.spproducttargetingresponse.v3+json',
+          'Content-Type': 'application/vnd.spproducttargeting.v3+json',
+        },
+      }
+    );
+    return response.data;
   }
 }

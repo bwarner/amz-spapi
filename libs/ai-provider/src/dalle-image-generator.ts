@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import OpenAI, { type Uploadable } from 'openai';
 import type { ImageGenerator } from './types';
 
 /**
@@ -13,7 +13,7 @@ export function createDalleImageGenerator(apiKey: string): ImageGenerator {
   const openai = new OpenAI({ apiKey });
 
   return {
-    async generate(params) {
+    async generate(params: Parameters<ImageGenerator['generate']>[0]) {
       const response = await openai.images.generate({
         model: 'dall-e-3',
         prompt: params.prompt,
@@ -24,16 +24,22 @@ export function createDalleImageGenerator(apiKey: string): ImageGenerator {
         response_format: 'url',
       });
 
-      return response.data.map((img) => ({
-        url: img.url!,
-        revisedPrompt: img.revised_prompt,
-      }));
+      return (response.data ?? []).flatMap((img) =>
+        img.url
+          ? [
+              {
+                url: img.url,
+                revisedPrompt: img.revised_prompt,
+              },
+            ]
+          : []
+      );
     },
 
-    async edit(params) {
+    async edit(params: Parameters<NonNullable<ImageGenerator['edit']>>[0]) {
       // DALL-E 2 for editing (DALL-E 3 doesn't support edit yet)
-      let image: OpenAI.Uploadable;
-      let mask: OpenAI.Uploadable | undefined;
+      let image: Uploadable;
+      let mask: Uploadable | undefined;
 
       if (typeof params.image === 'string') {
         // Assume base64 or file path
@@ -78,9 +84,9 @@ export function createDalleImageGenerator(apiKey: string): ImageGenerator {
         response_format: 'url',
       });
 
-      return response.data.map((img) => ({
-        url: img.url!,
-      }));
+      return (response.data ?? []).flatMap((img) =>
+        img.url ? [{ url: img.url }] : []
+      );
     },
   };
 }

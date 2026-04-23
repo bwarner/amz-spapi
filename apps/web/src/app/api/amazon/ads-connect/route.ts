@@ -16,15 +16,25 @@ export async function GET(request: NextRequest) {
   }
 
   const searchParams = request.nextUrl.searchParams;
-  const marketplaceId = searchParams.get('marketplace') || process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
-  const profileName = searchParams.get('profile') || 'default';
+  const marketplaceId =
+    searchParams.get('marketplace') ||
+    process.env['SP_MARKETPLACE_ID'] ||
+    'ATVPDKIKX0DER';
 
   // Validate marketplace
-  if (!MARKETPLACE_REGIONS[marketplaceId]) {
-    return NextResponse.json({ error: 'Invalid marketplace ID' }, { status: 400 });
+  const region = MARKETPLACE_REGIONS[marketplaceId];
+  if (!region) {
+    return NextResponse.json(
+      { error: 'Invalid marketplace ID' },
+      { status: 400 }
+    );
   }
 
-  const oauthFlow = createAdsApiOAuthFlow();
+  const profileName =
+    searchParams.get('profile') ||
+    `ads-${marketplaceId}-${Date.now().toString(36)}`;
+
+  const oauthFlow = createAdsApiOAuthFlow(region);
   const { authUrl, state } = oauthFlow.generateAuthUrl(
     'ADS_API',
     profileName,

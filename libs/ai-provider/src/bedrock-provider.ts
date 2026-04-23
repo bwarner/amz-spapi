@@ -14,7 +14,6 @@ const DEFAULT_MODELS: Record<ModelTier, string> = {
 };
 
 const DEFAULT_EMBEDDING_MODEL = 'amazon.titan-embed-text-v2:0';
-const DEFAULT_IMAGE_MODEL = 'amazon.nova-canvas-v1:0';
 
 /**
  * Direct Bedrock provider.
@@ -24,8 +23,21 @@ const DEFAULT_IMAGE_MODEL = 'amazon.nova-canvas-v1:0';
  * 2. Default credential chain (local dev): SSO profiles, env vars, etc.
  */
 export function createBedrockProvider(config: AIProviderConfig): AIProvider {
-  const models = { ...DEFAULT_MODELS, ...config.models };
-  const embeddingModelId = config.embeddingModelId ?? DEFAULT_EMBEDDING_MODEL;
+  const models = {
+    ...DEFAULT_MODELS,
+    default: process.env['AWS_BEDROCK_MODEL_ID'] || DEFAULT_MODELS.default,
+    fast: process.env['AWS_BEDROCK_FAST_MODEL_ID'] || DEFAULT_MODELS.fast,
+    ...config.models,
+  };
+  const embeddingModelId =
+    config.embeddingModelId ||
+    process.env['AWS_BEDROCK_EMBEDDING_MODEL_ID'] ||
+    DEFAULT_EMBEDDING_MODEL;
+  const region =
+    config.region ||
+    process.env['AWS_BEDROCK_REGION'] ||
+    process.env['AWS_REGION'] ||
+    'us-east-1';
   const useOidc = Boolean(config.roleArn && process.env['VERCEL']);
 
   // Use DALL-E for image generation if OpenAI key is available
@@ -40,13 +52,17 @@ export function createBedrockProvider(config: AIProviderConfig): AIProvider {
   function getBedrock() {
     if (!bedrockInstance) {
       if (useOidc) {
+        const roleArn = config.roleArn;
+        if (!roleArn) {
+          throw new Error('roleArn is required for OIDC Bedrock credentials');
+        }
         const {
           awsCredentialsProvider,
         } = require('@vercel/oidc-aws-credentials-provider');
         bedrockInstance = createAmazonBedrock({
-          region: 'us-east-1',
+          region,
           credentialProvider: awsCredentialsProvider({
-            roleArn: config.roleArn!,
+            roleArn,
           }),
         });
       } else {
@@ -55,7 +71,7 @@ export function createBedrockProvider(config: AIProviderConfig): AIProvider {
         } = require('@aws-sdk/credential-provider-node');
         const provider = defaultProvider();
         bedrockInstance = createAmazonBedrock({
-          region: 'us-east-1',
+          region,
           credentialProvider: () => provider(),
         });
       }
@@ -63,7 +79,7 @@ export function createBedrockProvider(config: AIProviderConfig): AIProvider {
     return bedrockInstance;
   }
 
-  return {
+  const provider: AIProvider = {
     providerName: 'bedrock',
 
     modelId(tier: ModelTier = 'default'): string {
@@ -81,9 +97,13 @@ export function createBedrockProvider(config: AIProviderConfig): AIProvider {
         embeddingModelId
       ) as unknown as EmbeddingModelV2<string>;
     },
-
-    imageGenerator(): ImageGenerator | undefined {
-      return imageGen;
-    },
   };
+
+  if (imageGen) {
+    provider.imageGenerator = function imageGenerator(): ImageGenerator {
+      return imageGen;
+    };
+  }
+
+  return provider;
 }

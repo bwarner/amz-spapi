@@ -10,6 +10,10 @@
  *   sp_cache.orders        — SP-API orders cache (TTL: 15min)
  *   sp_cache.inventory     — SP-API inventory cache (TTL: 30min)
  *   credentials.profiles   — Amazon OAuth credential profiles (no TTL)
+ *   media.assets           — Uploaded media asset metadata
+ *   media.asset_hashes     — Per-user duplicate detection pointers
+ *   a_plus.drafts          — Saved A+ content builder drafts
+ *   a_plus.brand_guides    — Reusable A+ brand guides
  *
  * Usage:
  *   npx tsx scripts/setup-couchbase.ts
@@ -31,6 +35,14 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
   {
     scope: 'credentials',
     collections: ['profiles'],
+  },
+  {
+    scope: 'media',
+    collections: ['assets', 'asset_hashes'],
+  },
+  {
+    scope: 'a_plus',
+    collections: ['drafts', 'brand_guides'],
   },
 ];
 
@@ -86,7 +98,10 @@ async function createScopeIfNotExists(
     console.log(`  ✅ Created scope '${scopeName}'`);
   } catch (err: any) {
     // ScopeExists error code from Couchbase SDK
-    if (err?.cause?.first_error_code === 0x0b0a || err?.message?.includes('already exists')) {
+    if (
+      err?.cause?.first_error_code === 0x0b0a ||
+      err?.message?.includes('already exists')
+    ) {
       console.log(`  ✓ Scope '${scopeName}' already exists (race condition)`);
     } else {
       throw err;
@@ -102,15 +117,22 @@ async function createCollectionIfNotExists(
   const mgr = bucket.collections();
   const exists = await collectionExists(bucket, scopeName, collectionName);
   if (exists) {
-    console.log(`    ✓ Collection '${scopeName}.${collectionName}' already exists`);
+    console.log(
+      `    ✓ Collection '${scopeName}.${collectionName}' already exists`
+    );
     return;
   }
   try {
     await mgr.createCollection({ name: collectionName, scopeName });
     console.log(`    ✅ Created collection '${scopeName}.${collectionName}'`);
   } catch (err: any) {
-    if (err?.cause?.first_error_code === 0x0b09 || err?.message?.includes('already exists')) {
-      console.log(`    ✓ Collection '${scopeName}.${collectionName}' already exists (race condition)`);
+    if (
+      err?.cause?.first_error_code === 0x0b09 ||
+      err?.message?.includes('already exists')
+    ) {
+      console.log(
+        `    ✓ Collection '${scopeName}.${collectionName}' already exists (race condition)`
+      );
     } else {
       throw err;
     }
@@ -129,7 +151,9 @@ async function waitForCollection(
     if (exists) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error(`Timed out waiting for collection '${scopeName}.${collectionName}' to become available`);
+  throw new Error(
+    `Timed out waiting for collection '${scopeName}.${collectionName}' to become available`
+  );
 }
 
 async function createIndex(
@@ -148,13 +172,20 @@ async function createIndex(
   `;
   try {
     await cluster.query(n1ql);
-    console.log(`    ✅ Created index '${indexName}' on '${scopeName}.${collectionName}'`);
+    console.log(
+      `    ✅ Created index '${indexName}' on '${scopeName}.${collectionName}'`
+    );
   } catch (err: any) {
-    if (err?.message?.includes('already exists') || err?.cause?.message?.includes('already exists')) {
+    if (
+      err?.message?.includes('already exists') ||
+      err?.cause?.message?.includes('already exists')
+    ) {
       console.log(`    ✓ Index '${indexName}' already exists`);
     } else {
       // Index creation failures are non-fatal — app still works without them (just slower queries)
-      console.warn(`    ⚠ Could not create index '${indexName}': ${err.message}`);
+      console.warn(
+        `    ⚠ Could not create index '${indexName}': ${err.message}`
+      );
     }
   }
 }
@@ -170,12 +201,21 @@ async function createPrimaryIndex(
   `;
   try {
     await cluster.query(n1ql);
-    console.log(`    ✅ Created primary index on '${scopeName}.${collectionName}'`);
+    console.log(
+      `    ✅ Created primary index on '${scopeName}.${collectionName}'`
+    );
   } catch (err: any) {
-    if (err?.message?.includes('already exists') || err?.cause?.message?.includes('already exists')) {
-      console.log(`    ✓ Primary index already exists on '${scopeName}.${collectionName}'`);
+    if (
+      err?.message?.includes('already exists') ||
+      err?.cause?.message?.includes('already exists')
+    ) {
+      console.log(
+        `    ✓ Primary index already exists on '${scopeName}.${collectionName}'`
+      );
     } else {
-      console.warn(`    ⚠ Could not create primary index on '${scopeName}.${collectionName}': ${err.message}`);
+      console.warn(
+        `    ⚠ Could not create primary index on '${scopeName}.${collectionName}': ${err.message}`
+      );
     }
   }
 }
@@ -186,9 +226,11 @@ async function main() {
   const password = getEnvVar('COUCHBASE_PASSWORD');
   const bucketName = getEnvVar('COUCHBASE_BUCKET');
 
-  const connStr = connectionString.startsWith('couchbases') && !connectionString.includes('?tls_verify=none')
-    ? connectionString + '?tls_verify=none'
-    : connectionString;
+  const connStr =
+    connectionString.startsWith('couchbases') &&
+    !connectionString.includes('?tls_verify=none')
+      ? connectionString + '?tls_verify=none'
+      : connectionString;
 
   console.log(`\n🔌 Connecting to Couchbase...`);
   console.log(`   Host: ${connectionString}`);
@@ -249,15 +291,47 @@ async function main() {
     ['`user_id`', '`api_type`']
   );
 
+  // media.assets / media.asset_hashes — uploaded image metadata and dedupe pointers
+  await createPrimaryIndex(cluster, bucketName, 'media', 'assets');
+  await createPrimaryIndex(cluster, bucketName, 'media', 'asset_hashes');
+
+  // a_plus.drafts / a_plus.brand_guides — saved content packages and reusable brand guides
+  await createPrimaryIndex(cluster, bucketName, 'a_plus', 'drafts');
+  await createPrimaryIndex(cluster, bucketName, 'a_plus', 'brand_guides');
+  await createIndex(
+    cluster,
+    bucketName,
+    'a_plus',
+    'drafts',
+    'idx_a_plus_drafts_user_updated',
+    ['`userId`', '`updatedAt`']
+  );
+  await createIndex(
+    cluster,
+    bucketName,
+    'a_plus',
+    'brand_guides',
+    'idx_a_plus_brand_guides_user_updated',
+    ['`userId`', '`updatedAt`']
+  );
+
   console.log('\n✅ Couchbase setup complete!\n');
   console.log('📋 Summary of structures created:');
   console.log('   sp_cache.catalog    — SP-API catalog item cache (TTL: 24h)');
   console.log('   sp_cache.orders     — SP-API orders cache (TTL: 15min)');
   console.log('   sp_cache.inventory  — SP-API inventory cache (TTL: 30min)');
   console.log('   credentials.profiles — Amazon OAuth credential profiles');
+  console.log('   media.assets        — Uploaded media asset metadata');
+  console.log('   media.asset_hashes  — Per-user duplicate detection pointers');
+  console.log('   a_plus.drafts       — Saved A+ content builder drafts');
+  console.log('   a_plus.brand_guides — Reusable A+ brand guides');
   console.log('');
-  console.log('ℹ  Note: Document TTLs are set by the application, not Couchbase.');
-  console.log('   PII data (buyer info) is never stored — complies with Amazon Developer Agreement.\n');
+  console.log(
+    'ℹ  Note: Document TTLs are set by the application, not Couchbase.'
+  );
+  console.log(
+    '   PII data (buyer info) is never stored — complies with Amazon Developer Agreement.\n'
+  );
 
   await cluster.close();
 }

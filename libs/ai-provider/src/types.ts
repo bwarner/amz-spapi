@@ -3,6 +3,7 @@ export type ModelTier = 'default' | 'fast';
 export interface AIProviderConfig {
   provider: 'bedrock' | 'anthropic' | 'openai';
   roleArn?: string;
+  region?: string;
   apiKey?: string;
   openaiApiKey?: string; // For DALL-E image generation
   models?: Partial<Record<ModelTier, string>>;

@@ -3,12 +3,25 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { MessageSquare, Settings, LogOut } from 'lucide-react';
+import {
+  LayoutTemplate,
+  MessageSquare,
+  Settings,
+  LogOut,
+  Activity,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 const navItems = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
+  { href: '/a-plus', label: 'A+ Content', icon: LayoutTemplate },
+  { href: '/connections', label: 'Connections', icon: Activity },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -48,7 +61,7 @@ export function DashboardNav() {
               variant="ghost"
               size="icon"
               className="ml-1 h-8 w-8 text-muted-foreground hover:text-foreground"
-              onClick={() => window.location.href = '/auth/logout'}
+              onClick={() => (window.location.href = '/auth/logout')}
             >
               <LogOut className="h-4 w-4" />
               <span className="sr-only">Logout</span>

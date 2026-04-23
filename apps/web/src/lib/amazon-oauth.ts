@@ -1,9 +1,10 @@
 import { AmazonOAuthFlow } from '@farvisionllc/credential-store';
+import type { AmazonRegion } from '@farvisionllc/models';
 
 /**
  * Create an OAuth flow instance for SP-API (uses the SP-API LWA app credentials).
  */
-export function createSpApiOAuthFlow() {
+export function createSpApiOAuthFlow(region?: AmazonRegion) {
   const clientId = process.env['LWA_CLIENT_ID'];
   const clientSecret = process.env['LWA_CLIENT_SECRET'];
   const redirectUri = process.env['AMAZON_OAUTH_REDIRECT_URI'];
@@ -14,14 +15,14 @@ export function createSpApiOAuthFlow() {
     );
   }
 
-  return new AmazonOAuthFlow({ clientId, clientSecret, redirectUri });
+  return new AmazonOAuthFlow({ clientId, clientSecret, redirectUri, region });
 }
 
 /**
  * Create an OAuth flow instance for Ads API (uses the Ads API LWA app credentials).
  * This is a separate Amazon app from the SP-API app.
  */
-export function createAdsApiOAuthFlow() {
+export function createAdsApiOAuthFlow(region?: AmazonRegion) {
   const clientId = process.env['ADS_CLIENT_ID'];
   const clientSecret = process.env['ADS_CLIENT_SECRET'];
   const redirectUri = process.env['AMAZON_OAUTH_REDIRECT_URI'];
@@ -32,5 +33,5 @@ export function createAdsApiOAuthFlow() {
     );
   }
 
-  return new AmazonOAuthFlow({ clientId, clientSecret, redirectUri });
+  return new AmazonOAuthFlow({ clientId, clientSecret, redirectUri, region });
 }

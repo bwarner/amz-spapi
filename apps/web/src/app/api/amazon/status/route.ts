@@ -1,5 +1,21 @@
 import { auth0 } from '../../../../lib/auth0';
-import { getCredentialStore } from '../../../../lib/credential-store';
+import type { AmazonCredentialProfile } from '@farvisionllc/models';
+import { listAmazonConnections } from '../../../../lib/amazon-connections';
+
+type PublicProfile = ReturnType<typeof toPublicProfile>;
+
+function toPublicProfile(profile: AmazonCredentialProfile) {
+  return {
+    profile_name: profile.profile_name,
+    api_type: profile.api_type,
+    marketplace_id: profile.marketplace_id,
+    region: profile.region,
+    seller_id: profile.seller_id,
+    advertiser_profile_id: profile.advertiser_profile_id,
+    created_at: profile.created_at,
+    updated_at: profile.updated_at,
+  };
+}
 
 /**
  * GET /api/amazon/status
@@ -12,21 +28,29 @@ export async function GET() {
   }
 
   const userId = session.user.sub;
-  const credStore = getCredentialStore();
-
-  let spProfiles: any[] = [];
-  let adsProfiles: any[] = [];
+  let spProfiles: PublicProfile[] = [];
+  let adsProfiles: PublicProfile[] = [];
 
   try {
-    spProfiles = await credStore.listFullProfiles('SP_API', userId);
+    spProfiles = (
+      await listAmazonConnections({
+        apiType: 'SP_API',
+        userId,
+      })
+    ).map((connection) => toPublicProfile(connection.profile));
   } catch {
-    // Not connected or Couchbase unavailable
+    // Not connected or credential store unavailable
   }
 
   try {
-    adsProfiles = await credStore.listFullProfiles('ADS_API', userId);
+    adsProfiles = (
+      await listAmazonConnections({
+        apiType: 'ADS_API',
+        userId,
+      })
+    ).map((connection) => toPublicProfile(connection.profile));
   } catch {
-    // Not connected or Couchbase unavailable
+    // Not connected or credential store unavailable
   }
 
   return Response.json({

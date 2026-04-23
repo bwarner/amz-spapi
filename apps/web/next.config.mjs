@@ -28,15 +28,23 @@ const nextConfig = {
     '@aws-sdk/credential-provider-node',
   ],
   webpack: (config, context) => {
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      '.js': ['.ts', '.tsx', '.js'],
+      '.mjs': ['.mts', '.mjs'],
+      '.cjs': ['.cts', '.cjs'],
+    };
+
     if (context.isServer) {
-      config.externals = [...config.externals, { couchbase: 'commonjs couchbase' }];
+      config.externals = [
+        ...config.externals,
+        { couchbase: 'commonjs couchbase' },
+      ];
     }
     return config;
   },
 };
 
-const plugins = [
-  withNx,
-];
+const plugins = [withNx];
 
 export default composePlugins(...plugins)(nextConfig);
