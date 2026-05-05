@@ -1,0 +1,9 @@
+{
+  "app": "node --loader ts-node/esm bin/app.ts",
+  "context": {
+    "@aws-cdk/core:newStyleStackSynthesis": true,
+    "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
+    "@aws-cdk/aws-s3:keepNotificationInImportedBucket": false,
+    "@aws-cdk/aws-iam:minimizePolicies": true
+  }
+}

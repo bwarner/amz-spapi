@@ -1,4 +1,8 @@
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import axios, {
+  AxiosInstance,
+  AxiosError,
+  InternalAxiosRequestConfig,
+} from 'axios';
 import type { paths as CatalogPaths } from '@amz-spapi/amazon-sp-generated/lib/catalogItems_2022-04-01';
 import type { paths as OrdersPaths } from '@amz-spapi/amazon-sp-generated/lib/ordersV0';
 
@@ -21,12 +25,34 @@ interface LwaTokenResponse {
 }
 
 // Type helpers for API responses
-type CatalogItemResponse = CatalogPaths['/catalog/2022-04-01/items/{asin}']['get']['responses']['200']['content']['application/json'];
-type CatalogSearchResponse = CatalogPaths['/catalog/2022-04-01/items']['get']['responses']['200']['content']['application/json'];
+type CatalogItemResponse =
+  CatalogPaths['/catalog/2022-04-01/items/{asin}']['get']['responses']['200']['content']['application/json'];
+type CatalogSearchResponse =
+  CatalogPaths['/catalog/2022-04-01/items']['get']['responses']['200']['content']['application/json'];
 
-type OrdersListResponse = OrdersPaths['/orders/v0/orders']['get']['responses']['200']['content']['application/json'];
-type OrderResponse = OrdersPaths['/orders/v0/orders/{orderId}']['get']['responses']['200']['content']['application/json'];
-type OrderItemsResponse = OrdersPaths['/orders/v0/orders/{orderId}/orderItems']['get']['responses']['200']['content']['application/json'];
+type OrdersListResponse =
+  OrdersPaths['/orders/v0/orders']['get']['responses']['200']['content']['application/json'];
+type OrderResponse =
+  OrdersPaths['/orders/v0/orders/{orderId}']['get']['responses']['200']['content']['application/json'];
+type OrderItemsResponse =
+  OrdersPaths['/orders/v0/orders/{orderId}/orderItems']['get']['responses']['200']['content']['application/json'];
+
+export interface APlusContentDocumentRequest {
+  contentDocument: Record<string, unknown>;
+}
+
+export interface APlusAsinRelationsRequest {
+  asinSet: string[];
+}
+
+export interface APlusValidateRequest extends APlusContentDocumentRequest {
+  asinSet: string[];
+}
+
+export interface UploadDestinationRequest {
+  contentMD5?: string;
+  contentType?: string;
+}
 
 export class SpApiClient {
   private httpClient: AxiosInstance;
@@ -53,7 +79,11 @@ export class SpApiClient {
     // Request interceptor: inject access token (and refresh if missing)
     this.httpClient.interceptors.request.use(async (config) => {
       // If no access token, try to get one via refresh
-      if (!this.config.accessToken && this.config.refreshToken && this.config.clientSecret) {
+      if (
+        !this.config.accessToken &&
+        this.config.refreshToken &&
+        this.config.clientSecret
+      ) {
         await this.refreshAccessToken();
       }
 
@@ -109,7 +139,11 @@ export class SpApiClient {
               : Math.min(1000 * Math.pow(2, retryCount), 30_000); // 1s, 2s, 4s, max 30s
 
             console.warn(
-              `[SpApiClient] Rate limited (429). Retry ${retryCount + 1}/${maxRetries} in ${retryAfterMs}ms. Path: ${originalRequest.url}`
+              `[SpApiClient] Rate limited (429). Retry ${
+                retryCount + 1
+              }/${maxRetries} in ${retryAfterMs}ms. Path: ${
+                originalRequest.url
+              }`
             );
 
             await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
@@ -195,12 +229,17 @@ export class SpApiClient {
    * Get catalog item details by ASIN
    * GET /catalog/2022-04-01/items/{asin}
    */
-  async getCatalogItem(asin: string, params?: {
-    marketplaceIds?: string[];
-    includedData?: string[];
-    locale?: string;
-  }): Promise<CatalogItemResponse> {
-    const marketplaceIds = params?.marketplaceIds || [this.config.marketplaceId];
+  async getCatalogItem(
+    asin: string,
+    params?: {
+      marketplaceIds?: string[];
+      includedData?: string[];
+      locale?: string;
+    }
+  ): Promise<CatalogItemResponse> {
+    const marketplaceIds = params?.marketplaceIds || [
+      this.config.marketplaceId,
+    ];
 
     const response = await this.httpClient.get<CatalogItemResponse>(
       `/catalog/2022-04-01/items/${asin}`,
@@ -223,7 +262,15 @@ export class SpApiClient {
   async searchCatalogItems(params: {
     keywords?: string;
     identifiers?: string[];
-    identifiersType?: 'ASIN' | 'EAN' | 'GTIN' | 'ISBN' | 'JAN' | 'MINSAN' | 'SKU' | 'UPC';
+    identifiersType?:
+      | 'ASIN'
+      | 'EAN'
+      | 'GTIN'
+      | 'ISBN'
+      | 'JAN'
+      | 'MINSAN'
+      | 'SKU'
+      | 'UPC';
     marketplaceIds?: string[];
     includedData?: string[];
     brandNames?: string[];
@@ -266,7 +313,9 @@ export class SpApiClient {
    * GET /orders/v0/orders/{orderId}
    */
   async getOrder(orderId: string): Promise<OrderResponse> {
-    const response = await this.httpClient.get<OrderResponse>(`/orders/v0/orders/${orderId}`);
+    const response = await this.httpClient.get<OrderResponse>(
+      `/orders/v0/orders/${orderId}`
+    );
     return response.data;
   }
 
@@ -291,23 +340,26 @@ export class SpApiClient {
   }): Promise<OrdersListResponse> {
     const marketplaceIds = params.marketplaceIds || [this.config.marketplaceId];
 
-    const response = await this.httpClient.get<OrdersListResponse>('/orders/v0/orders', {
-      params: {
-        MarketplaceIds: marketplaceIds.join(','),
-        CreatedAfter: params.createdAfter,
-        CreatedBefore: params.createdBefore,
-        LastUpdatedAfter: params.lastUpdatedAfter,
-        LastUpdatedBefore: params.lastUpdatedBefore,
-        OrderStatuses: params.orderStatuses?.join(','),
-        FulfillmentChannels: params.fulfillmentChannels?.join(','),
-        PaymentMethods: params.paymentMethods?.join(','),
-        BuyerEmail: params.buyerEmail,
-        SellerOrderId: params.sellerOrderId,
-        MaxResultsPerPage: params.maxResultsPerPage,
-        EasyShipShipmentStatuses: params.easyShipShipmentStatuses?.join(','),
-        NextToken: params.nextToken,
-      },
-    });
+    const response = await this.httpClient.get<OrdersListResponse>(
+      '/orders/v0/orders',
+      {
+        params: {
+          MarketplaceIds: marketplaceIds.join(','),
+          CreatedAfter: params.createdAfter,
+          CreatedBefore: params.createdBefore,
+          LastUpdatedAfter: params.lastUpdatedAfter,
+          LastUpdatedBefore: params.lastUpdatedBefore,
+          OrderStatuses: params.orderStatuses?.join(','),
+          FulfillmentChannels: params.fulfillmentChannels?.join(','),
+          PaymentMethods: params.paymentMethods?.join(','),
+          BuyerEmail: params.buyerEmail,
+          SellerOrderId: params.sellerOrderId,
+          MaxResultsPerPage: params.maxResultsPerPage,
+          EasyShipShipmentStatuses: params.easyShipShipmentStatuses?.join(','),
+          NextToken: params.nextToken,
+        },
+      }
+    );
 
     return response.data;
   }
@@ -316,7 +368,10 @@ export class SpApiClient {
    * Get order items
    * GET /orders/v0/orders/{orderId}/orderItems
    */
-  async getOrderItems(orderId: string, nextToken?: string): Promise<OrderItemsResponse> {
+  async getOrderItems(
+    orderId: string,
+    nextToken?: string
+  ): Promise<OrderItemsResponse> {
     const response = await this.httpClient.get<OrderItemsResponse>(
       `/orders/v0/orders/${orderId}/orderItems`,
       {
@@ -356,5 +411,146 @@ export class SpApiClient {
       params: queryParams,
     });
     return response.data.payload || response.data;
+  }
+
+  // ========================================
+  // A+ Content API (2020-11-01)
+  // ========================================
+
+  async searchAPlusContentDocuments(params?: {
+    marketplaceId?: string;
+    pageToken?: string;
+  }): Promise<unknown> {
+    const response = await this.httpClient.get(
+      '/aplus/2020-11-01/contentDocuments',
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+          pageToken: params?.pageToken,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async getAPlusContentDocument(
+    contentReferenceKey: string,
+    params?: {
+      marketplaceId?: string;
+      includedDataSet?: Array<'CONTENTS' | 'METADATA'>;
+    }
+  ): Promise<unknown> {
+    const response = await this.httpClient.get(
+      `/aplus/2020-11-01/contentDocuments/${encodeURIComponent(
+        contentReferenceKey
+      )}`,
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+          includedDataSet: params?.includedDataSet?.join(','),
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async createAPlusContentDocument(
+    request: APlusContentDocumentRequest,
+    params?: { marketplaceId?: string }
+  ): Promise<unknown> {
+    const response = await this.httpClient.post(
+      '/aplus/2020-11-01/contentDocuments',
+      request,
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async updateAPlusContentDocument(
+    contentReferenceKey: string,
+    request: APlusContentDocumentRequest,
+    params?: { marketplaceId?: string }
+  ): Promise<unknown> {
+    const response = await this.httpClient.post(
+      `/aplus/2020-11-01/contentDocuments/${encodeURIComponent(
+        contentReferenceKey
+      )}`,
+      request,
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async validateAPlusContentDocumentAsinRelations(
+    request: APlusValidateRequest,
+    params?: { marketplaceId?: string }
+  ): Promise<unknown> {
+    const response = await this.httpClient.post(
+      '/aplus/2020-11-01/contentAsinValidations',
+      { contentDocument: request.contentDocument },
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+          asinSet: request.asinSet,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async postAPlusContentDocumentAsinRelations(
+    contentReferenceKey: string,
+    request: APlusAsinRelationsRequest,
+    params?: { marketplaceId?: string }
+  ): Promise<unknown> {
+    const response = await this.httpClient.post(
+      `/aplus/2020-11-01/contentDocuments/${encodeURIComponent(
+        contentReferenceKey
+      )}/asins`,
+      request,
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async submitAPlusContentDocumentForApproval(
+    contentReferenceKey: string,
+    params?: { marketplaceId?: string }
+  ): Promise<unknown> {
+    const response = await this.httpClient.post(
+      `/aplus/2020-11-01/contentDocuments/${encodeURIComponent(
+        contentReferenceKey
+      )}/approvalSubmissions`,
+      undefined,
+      {
+        params: {
+          marketplaceId: params?.marketplaceId || this.config.marketplaceId,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  async createUploadDestinationForResource(
+    resource: string,
+    request?: UploadDestinationRequest
+  ): Promise<unknown> {
+    const response = await this.httpClient.post(
+      `/uploads/2020-11-01/uploadDestinations/${encodeURIComponent(resource)}`,
+      request || {}
+    );
+    return response.data;
   }
 }

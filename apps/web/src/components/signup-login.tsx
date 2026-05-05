@@ -1,6 +1,7 @@
-"use client";
+'use client';
 import { useUser } from '@auth0/nextjs-auth0';
-import { Button } from "./ui/button";
+import Link from 'next/link';
+import { Button } from './ui/button';
 import { LogIn } from 'lucide-react';
 
 export default function SignupLogin() {
@@ -15,7 +16,7 @@ export default function SignupLogin() {
           {user.name}
         </span>
         <Button variant="ghost" size="sm" asChild>
-          <a href="/chat">Dashboard</a>
+          <Link href="/chat">Dashboard</Link>
         </Button>
       </div>
     );
@@ -27,26 +28,30 @@ export default function SignupLogin() {
         variant="ghost"
         size="sm"
         className="hidden sm:inline-flex"
-        onClick={() => window.location.href = '/auth/login?returnTo=/chat'}
+        asChild
       >
-        Sign In
+        <Link href="/auth/login?returnTo=/chat">Sign In</Link>
       </Button>
       {/* Mobile: icon-only sign in */}
       <Button
         variant="ghost"
         size="icon"
         className="sm:hidden"
-        onClick={() => window.location.href = '/auth/login?returnTo=/chat'}
-        aria-label="Sign in"
+        aria-label="Sign In"
+        asChild
       >
-        <LogIn className="h-4 w-4" />
+        <Link href="/auth/login?returnTo=/chat">
+          <LogIn className="h-4 w-4" aria-hidden="true" />
+        </Link>
       </Button>
       <Button
         size="sm"
         className="bg-secondary text-secondary-foreground hover:bg-secondary/90"
-        onClick={() => window.location.href = '/auth/login?screen_hint=signup&returnTo=/chat'}
+        asChild
       >
-        Get Started
+        <Link href="/auth/login?screen_hint=signup&returnTo=/chat">
+          Get Started
+        </Link>
       </Button>
     </div>
   );

@@ -1,123 +1,178 @@
-import type { Metadata } from 'next'
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'Terms of Service — Sellavant',
-  description: 'Terms and conditions for using the Sellavant platform.',
-}
+  title: 'Terms of Service',
+  description:
+    'Terms governing access to the Sellavant platform and connected workflows.',
+};
+
+const lastUpdated = 'April 23, 2026';
 
 export default function TermsPage() {
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-16">
-      <h1 className="text-3xl font-bold tracking-tight">Terms of Service</h1>
-      <p className="mt-2 text-sm text-muted-foreground">Last updated: March 29, 2026</p>
+    <div className="container max-w-4xl px-4 py-16 sm:px-6">
+      <div className="max-w-3xl">
+        <h1 className="text-4xl font-semibold tracking-tight text-foreground text-balance">
+          Terms of Service
+        </h1>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Last updated {lastUpdated}
+        </p>
+        <p className="mt-6 text-lg leading-8 text-muted-foreground text-pretty">
+          These terms govern access to the Sellavant product, website, and
+          connected account workflows. By using the service, the user agrees to
+          these terms.
+        </p>
+      </div>
 
-      <div className="mt-8 space-y-8 text-muted-foreground leading-relaxed">
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">1. Acceptance of Terms</h2>
-          <p className="mt-3">
-            By accessing or using Sellavant (&quot;the Service&quot;), you agree to be bound by these Terms
-            of Service. If you do not agree, do not use the Service.
+      <div className="mt-12 space-y-10 text-muted-foreground">
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            1. Service Scope
+          </h2>
+          <p className="leading-7">
+            Sellavant provides software that helps users organize source
+            materials, maintain brand guides, connect Amazon-related accounts
+            where authorized, and generate AI-assisted draft outputs for seller
+            workflows such as A+ content preparation.
           </p>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">2. Description of Service</h2>
-          <p className="mt-3">
-            Sellavant is an AI-powered assistant for Amazon sellers. The Service provides tools to
-            analyze product listings, review orders, monitor inventory, and optimize advertising
-            campaigns by connecting to your Amazon Seller Central and Amazon Advertising accounts
-            via official Amazon APIs.
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            2. Accounts
+          </h2>
+          <p className="leading-7">
+            Users are responsible for maintaining the confidentiality of their
+            login credentials and for all activity that occurs under their
+            account. Users must provide accurate account information and may
+            only use the service for lawful business purposes.
           </p>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">3. Account Requirements</h2>
-          <ul className="mt-3 list-disc pl-6 space-y-1">
-            <li>You must be at least 18 years old to use the Service</li>
-            <li>You must have a valid Amazon Seller Central or Amazon Advertising account</li>
-            <li>You are responsible for maintaining the confidentiality of your account credentials</li>
-            <li>You are responsible for all activities under your account</li>
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            3. Connected Platforms
+          </h2>
+          <p className="leading-7">
+            When users connect third-party services, including Amazon seller or
+            advertising accounts, Sellavant may access the scopes and data
+            explicitly authorized through those workflows. Users remain
+            responsible for ensuring they have the authority to connect the
+            accounts and to use the resulting data inside their organization.
+          </p>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            4. User Content
+          </h2>
+          <p className="leading-7">
+            Users may upload logos, PDFs, style guides, product assets,
+            screenshots, and other materials. Users retain responsibility for
+            the legality, accuracy, and permissions associated with those
+            materials. Sellavant may process uploaded materials to extract
+            structured suggestions for brand guides and draft workflows.
+          </p>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            5. AI-Assisted Output
+          </h2>
+          <p className="leading-7">
+            AI-assisted responses, extracted suggestions, and generated drafts
+            are provided to help users work faster. Users remain responsible for
+            reviewing and approving any final content, legal claims, product
+            messaging, or marketplace submissions before publication.
+          </p>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            6. Acceptable Use
+          </h2>
+          <ul className="list-disc space-y-2 pl-6 leading-7">
+            <li>
+              Do not use the service to violate marketplace rules or third-party
+              terms.
+            </li>
+            <li>Do not upload materials you are not authorized to use.</li>
+            <li>
+              Do not attempt to access other users&apos; accounts or data.
+            </li>
+            <li>
+              Do not use the service for unlawful, deceptive, or abusive
+              activity.
+            </li>
           </ul>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">4. Amazon Account Authorization</h2>
-          <p className="mt-3">
-            By connecting your Amazon account, you authorize Sellavant to access your seller data
-            through Amazon&apos;s official APIs (SP-API and Ads API). This authorization is governed by
-            Amazon&apos;s Developer Agreement and Acceptable Use Policy. You may revoke this authorization
-            at any time through your Amazon Seller Central settings or our settings page.
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            7. Availability & Changes
+          </h2>
+          <p className="leading-7">
+            Sellavant may change, improve, suspend, or remove features from time
+            to time. Access to third-party integrations may also change based on
+            provider policies, review status, or account configuration.
           </p>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">5. Acceptable Use</h2>
-          <p className="mt-3">You agree not to:</p>
-          <ul className="mt-2 list-disc pl-6 space-y-1">
-            <li>Use the Service to violate Amazon&apos;s terms of service or policies</li>
-            <li>Attempt to access data belonging to other sellers</li>
-            <li>Use the Service for any unlawful purpose</li>
-            <li>Reverse engineer or attempt to extract source code from the Service</li>
-            <li>Share your account with unauthorized third parties</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">6. AI-Generated Content</h2>
-          <p className="mt-3">
-            The Service uses artificial intelligence to analyze your data and provide recommendations.
-            AI-generated suggestions (including listing optimization, keyword recommendations, and
-            business insights) are provided as guidance only. You are responsible for reviewing and
-            approving any changes before applying them to your Amazon listings or campaigns.
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            8. Warranty Disclaimer
+          </h2>
+          <p className="leading-7">
+            The service is provided on an “as is” and “as available” basis. To
+            the maximum extent permitted by law, Sellavant disclaims warranties
+            of merchantability, fitness for a particular purpose, and
+            non-infringement.
           </p>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">7. Data Handling</h2>
-          <p className="mt-3">
-            Our handling of your data is described in our{' '}
-            <a href="/privacy" className="text-primary hover:underline">Privacy Policy</a>.
-            We cache Amazon API data temporarily to improve performance and comply with Amazon&apos;s
-            rate limits. Personally identifiable buyer information is never stored.
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            9. Limitation of Liability
+          </h2>
+          <p className="leading-7">
+            Sellavant is not liable for indirect, incidental, special,
+            consequential, or punitive damages arising out of or related to use
+            of the service. Users remain responsible for business decisions and
+            published content.
           </p>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">8. Limitation of Liability</h2>
-          <p className="mt-3">
-            The Service is provided &quot;as is&quot; without warranty of any kind. Sellavant is not responsible
-            for any losses, damages, or negative outcomes resulting from actions taken based on
-            AI-generated recommendations, Amazon API downtime, or data inaccuracies.
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            10. Privacy
+          </h2>
+          <p className="leading-7">
+            Use of the service is also governed by the{' '}
+            <Link href="/privacy" className="text-primary hover:underline">
+              Privacy Policy
+            </Link>
+            .
           </p>
         </section>
 
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">9. Termination</h2>
-          <p className="mt-3">
-            We may suspend or terminate your account at any time for violation of these terms. You
-            may terminate your account at any time by contacting us. Upon termination, your stored
-            credentials and cached data will be deleted.
-          </p>
-        </section>
-
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">10. Changes to Terms</h2>
-          <p className="mt-3">
-            We may update these terms from time to time. Continued use of the Service after changes
-            constitutes acceptance of the updated terms.
-          </p>
-        </section>
-
-        <section>
-          <h2 className="text-xl font-semibold text-foreground">11. Contact</h2>
-          <p className="mt-3">
-            Questions about these terms? Contact us at{' '}
-            <a href="mailto:legal@sellavant.com" className="text-primary hover:underline">
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            11. Contact
+          </h2>
+          <p className="leading-7">
+            Questions about these terms can be sent to{' '}
+            <a
+              href="mailto:legal@sellavant.com"
+              className="text-primary hover:underline"
+            >
               legal@sellavant.com
-            </a>.
+            </a>
+            .
           </p>
         </section>
       </div>
     </div>
-  )
+  );
 }

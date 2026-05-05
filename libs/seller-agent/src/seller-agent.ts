@@ -217,10 +217,10 @@ function getImageTools(imageGenerator: ImageGenerator) {
   return {
     'generate-image': {
       description:
-        'Generate an image using DALL-E 3. Use this for creating A+ content images, ' +
-        'lifestyle photos, infographics, or product context images. ' +
-        'Provide a detailed prompt describing the image you want to create. ' +
-        'For best results, be specific about style, composition, lighting, and context.',
+        'Generate an image for A+ content, lifestyle photos, infographics, or product ' +
+        'context. Provide a detailed prompt describing the image. The generated image is ' +
+        'NOT returned in the chat — it is saved separately. Tell the user to view and ' +
+        'download generated images from the A+ Content Studio review page.',
       inputSchema: z.object({
         prompt: z
           .string()
@@ -228,38 +228,18 @@ function getImageTools(imageGenerator: ImageGenerator) {
           .describe(
             'Detailed description of the image to generate. Include: ' +
               '1) Subject/product description, 2) Setting/background, 3) Style (photorealistic, ' +
-              'illustration, etc.), 4) Lighting, 5) Composition/angle. ' +
-              'Example: "Professional product photo of a stainless steel tea infuser ' +
-              'on a marble countertop with fresh tea leaves scattered around, soft natural ' +
-              'lighting from the left, clean white background, 45-degree angle view"'
+              'illustration, etc.), 4) Lighting, 5) Composition/angle.'
           ),
         size: z
           .enum(['1024x1024', '1792x1024', '1024x1792'])
           .optional()
           .describe(
-            'Image dimensions. Use 1792x1024 for landscape/banner images, ' +
-              '1024x1792 for portrait, 1024x1024 for square (default)'
-          ),
-        quality: z
-          .enum(['standard', 'hd'])
-          .optional()
-          .describe(
-            'Image quality. Use "hd" for detailed product shots (default), ' +
-              '"standard" for quick drafts'
-          ),
-        style: z
-          .enum(['natural', 'vivid'])
-          .optional()
-          .describe(
-            'Image style. "natural" for photorealistic product images (default), ' +
-              '"vivid" for more dramatic/artistic images'
+            'Image dimensions. 1792x1024 landscape, 1024x1792 portrait, 1024x1024 square (default).'
           ),
       }),
       execute: async (input: {
         prompt: string;
         size?: '1024x1024' | '1792x1024' | '1024x1792';
-        quality?: 'standard' | 'hd';
-        style?: 'natural' | 'vivid';
       }) => {
         console.log(
           '[tool:generate-image] Generating with prompt:',
@@ -269,8 +249,6 @@ function getImageTools(imageGenerator: ImageGenerator) {
           const results = await imageGenerator.generate({
             prompt: input.prompt,
             size: input.size || '1024x1024',
-            quality: input.quality || 'hd',
-            style: input.style || 'natural',
           });
           console.log(
             '[tool:generate-image] Success, generated',
@@ -279,10 +257,9 @@ function getImageTools(imageGenerator: ImageGenerator) {
           );
           return {
             success: true,
-            images: results.map((r) => ({
-              url: r.url,
-              revisedPrompt: r.revisedPrompt,
-            })),
+            count: results.length,
+            mediaType: results[0]?.mediaType,
+            note: 'Image generated. Bytes are not returned in chat. Direct the user to the A+ Content Studio review page to view and download.',
           };
         } catch (err: any) {
           console.error('[tool:generate-image] ERROR:', err.message);
@@ -314,7 +291,7 @@ export function createSellerAgent({
 
   const imageInstructions = hasImageGeneration
     ? `
-- generate-image: Create images using DALL-E 3 for A+ content, lifestyle photos, or infographics.
+- generate-image: Create images for A+ content, lifestyle photos, or infographics.
   Provide detailed prompts including subject, setting, style, lighting, and composition.
 
 IMAGE GENERATION FOR A+ CONTENT:
@@ -401,6 +378,9 @@ GENERAL GUIDELINES:
 - Present data in clear markdown tables when appropriate.
 - Be concise but thorough in your analysis.
 - When you don't have enough data, explain what additional info you'd need.
+
+A+ CONTENT RULE — NO TIME-SENSITIVE CLAIMS:
+When suggesting A+ Content copy, image briefs, or module direction, NEVER include price points, dollar amounts, promotional language ("sale", "X% off", "limited time"), delivery/shipping claims ("ships in", "Prime delivery", "free shipping"), stock claims ("in stock", "limited quantity"), or any time-bound statement. A+ Content stays live indefinitely once approved — these claims go stale and Amazon rejects them. Lead with durable benefits: materials, use cases, durability, brand story, problem-solving.
 `
     : `You are Sellavant, an expert Amazon Seller Assistant.
 You help Amazon sellers understand their business, optimize listings, and grow sales.

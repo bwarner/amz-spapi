@@ -51,6 +51,9 @@ vitest.config.*.timestamp*
 .next
 out
 
+# AWS CDK
+cdk.out
+
 .claude/settings.local.json
 
 # Or more broadly exclude all local Claude settings
@@ -63,3 +66,4 @@ apps/web/certificates/*.pem
 
 # TypeScript build info
 *.tsbuildinfo
+.vercel

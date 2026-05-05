@@ -1,76 +1,77 @@
-import type { Metadata } from 'next'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Mail, MessageSquare } from "lucide-react"
+import type { Metadata } from 'next';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Mail, ShieldAlert, Sparkles } from 'lucide-react';
 
 export const metadata: Metadata = {
-  title: 'Contact Us — Sellavant',
-  description: 'Get in touch with the Sellavant team for support and inquiries.',
-}
+  title: 'Contact',
+  description:
+    'Contact Sellavant for product questions, support, and privacy or legal requests.',
+};
+
+const contactCards = [
+  {
+    icon: Mail,
+    title: 'Product & Support',
+    email: 'support@sellavant.com',
+    description:
+      'Questions about the product, account access, or current workflow behavior.',
+  },
+  {
+    icon: Sparkles,
+    title: 'Feature Requests',
+    email: 'feedback@sellavant.com',
+    description:
+      'Ideas for A+ content workflows, brand guide improvements, or future integrations.',
+  },
+  {
+    icon: ShieldAlert,
+    title: 'Privacy & Legal',
+    email: 'privacy@sellavant.com',
+    description:
+      'Privacy questions, deletion requests, or legal inquiries related to the service.',
+  },
+];
 
 export default function ContactPage() {
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-16">
-      <h1 className="text-3xl font-bold tracking-tight">Contact Us</h1>
-      <p className="mt-4 text-lg text-muted-foreground">
-        Have a question, feedback, or need help? We&apos;d love to hear from you.
-      </p>
-
-      <div className="mt-12 grid gap-6 sm:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <Mail className="h-8 w-8 text-primary" />
-            <CardTitle className="mt-2">Email Support</CardTitle>
-            <CardDescription>
-              For general questions and account help
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <a
-              href="mailto:support@sellavant.com"
-              className="text-primary font-medium hover:underline"
-            >
-              support@sellavant.com
-            </a>
-            <p className="mt-2 text-sm text-muted-foreground">
-              We typically respond within 24 hours.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <MessageSquare className="h-8 w-8 text-primary" />
-            <CardTitle className="mt-2">Feature Requests</CardTitle>
-            <CardDescription>
-              Suggest new features or improvements
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <a
-              href="mailto:feedback@sellavant.com"
-              className="text-primary font-medium hover:underline"
-            >
-              feedback@sellavant.com
-            </a>
-            <p className="mt-2 text-sm text-muted-foreground">
-              We read every message and prioritize based on seller feedback.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="mt-12 rounded-lg border bg-muted/30 p-6">
-        <h2 className="text-lg font-semibold text-foreground">Privacy &amp; Security Concerns</h2>
-        <p className="mt-2 text-muted-foreground">
-          For privacy-related inquiries or to request data deletion, please email{' '}
-          <a href="mailto:privacy@sellavant.com" className="text-primary hover:underline">
-            privacy@sellavant.com
-          </a>.
-          See our{' '}
-          <a href="/privacy" className="text-primary hover:underline">Privacy Policy</a> for
-          details on how we handle your data.
+    <div className="container max-w-5xl px-4 py-16 sm:px-6">
+      <div className="max-w-3xl">
+        <h1 className="text-4xl font-semibold tracking-tight text-foreground text-balance">
+          Contact Sellavant
+        </h1>
+        <p className="mt-6 text-lg leading-8 text-muted-foreground text-pretty">
+          Use the addresses below for support, feature planning, or
+          privacy-related requests. If a message is sent to the wrong inbox, it
+          can still be routed internally.
         </p>
       </div>
+
+      <div className="mt-12 grid gap-6 lg:grid-cols-3">
+        {contactCards.map((card) => (
+          <Card key={card.title} className="border-border/70 bg-card shadow-sm">
+            <CardHeader className="space-y-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+                <card.icon
+                  className="h-6 w-6 text-primary"
+                  aria-hidden="true"
+                />
+              </div>
+              <CardTitle className="text-xl">{card.title}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm leading-6 text-muted-foreground">
+                {card.description}
+              </p>
+              <a
+                href={`mailto:${card.email}`}
+                className="font-medium text-primary hover:underline"
+              >
+                {card.email}
+              </a>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
-  )
+  );
 }

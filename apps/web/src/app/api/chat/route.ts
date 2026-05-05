@@ -9,7 +9,7 @@ import { createAIProvider } from '@amz-spapi/ai-provider';
 import { SpApiClient } from '@farvisionllc/sp-client';
 import { SpCache } from '@amz-spapi/sp-cache';
 import { auth0 } from '../../../lib/auth0';
-import { getCredentialStore } from '../../../lib/credential-store';
+import { resolveAmazonConnection } from '../../../lib/amazon-connections';
 
 export const maxDuration = 60;
 
@@ -38,21 +38,22 @@ export async function POST(request: Request) {
     );
   }
 
-  const aiProvider =
-    (process.env['AI_PROVIDER'] as 'bedrock' | 'anthropic' | 'openai') ||
-    'anthropic';
+  const models = {
+    ...(process.env['AI_DEFAULT_MODEL']
+      ? { default: process.env['AI_DEFAULT_MODEL'] }
+      : {}),
+    ...(process.env['AI_FAST_MODEL']
+      ? { fast: process.env['AI_FAST_MODEL'] }
+      : {}),
+  };
 
-  const provider = createAIProvider({
-    provider: aiProvider,
-    roleArn: process.env['AWS_BEDROCK_ROLE_ARN'],
-    apiKey: process.env['OPENAI_API_KEY'],
-  });
+  const provider = createAIProvider({ models });
 
   const marketplaceId = process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
 
   // Try to load user's stored SP-API credentials from Couchbase
   // Fall back to env vars for development
-  let clientId = process.env['LWA_CLIENT_ID']!;
+  let clientId = process.env['LWA_CLIENT_ID'];
   let clientSecret = process.env['LWA_CLIENT_SECRET'];
   let refreshToken = process.env['LWA_REFRESH_TOKEN'];
   let userMarketplaceId = marketplaceId;
@@ -69,22 +70,17 @@ export async function POST(request: Request) {
   );
 
   try {
-    const credStore = getCredentialStore();
-    // Resolve profile: use default pointer first, then fall back to first available
     const userId = session.user.sub;
-    let profileName = await credStore.getDefaultProfile('SP_API', userId);
-    if (!profileName) {
-      const names = await credStore.listProfiles('SP_API', userId);
-      profileName = names[0] ?? null;
-    }
-    if (profileName) {
-      const profile = await credStore.getProfile(profileName, 'SP_API', userId);
-      if (profile && profile.refresh_token) {
-        clientId = profile.client_id;
-        clientSecret = profile.client_secret;
-        refreshToken = profile.refresh_token;
-        userMarketplaceId = profile.marketplace_id || marketplaceId;
-      }
+    const resolved = await resolveAmazonConnection({
+      apiType: 'SP_API',
+      userId,
+    });
+    if (resolved.connected) {
+      const { profile } = resolved.connection;
+      clientId = profile.client_id;
+      clientSecret = profile.client_secret;
+      refreshToken = profile.refresh_token;
+      userMarketplaceId = profile.marketplace_id || marketplaceId;
     }
   } catch {
     // Couchbase not available — fall back to env vars
@@ -112,7 +108,6 @@ export async function POST(request: Request) {
     console.log('[chat] No credentials - skipping SP client creation');
   }
 
-  // Get image generator if available (requires OPENAI_API_KEY)
   const imageGenerator = provider.imageGenerator?.();
 
   const agent = createSellerAgent({
