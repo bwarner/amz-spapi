@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "auth0": {
+      "command": "npx",
+      "args": ["@auth0/auth0-mcp-server", "run"],
+      "env": {
+        "AUTH0_DOMAIN": "sellavant-dev.us.auth0.com"
+      }
+    }
+  }
+}

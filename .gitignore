@@ -34,6 +34,12 @@ yarn-error.log
 testem.log
 /typings
 
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+
 # System Files
 .DS_Store
 Thumbs.db
