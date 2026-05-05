@@ -38,26 +38,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const aiProvider =
-    (process.env['AI_PROVIDER'] as 'bedrock' | 'anthropic' | 'openai') ||
-    'anthropic';
   const models = {
-    ...(process.env['AWS_BEDROCK_MODEL_ID']
-      ? { default: process.env['AWS_BEDROCK_MODEL_ID'] }
+    ...(process.env['AI_DEFAULT_MODEL']
+      ? { default: process.env['AI_DEFAULT_MODEL'] }
       : {}),
-    ...(process.env['AWS_BEDROCK_FAST_MODEL_ID']
-      ? { fast: process.env['AWS_BEDROCK_FAST_MODEL_ID'] }
+    ...(process.env['AI_FAST_MODEL']
+      ? { fast: process.env['AI_FAST_MODEL'] }
       : {}),
   };
 
-  const provider = createAIProvider({
-    provider: aiProvider,
-    roleArn: process.env['AWS_BEDROCK_ROLE_ARN'],
-    region: process.env['AWS_BEDROCK_REGION'] || process.env['AWS_REGION'],
-    apiKey: process.env['OPENAI_API_KEY'],
-    embeddingModelId: process.env['AWS_BEDROCK_EMBEDDING_MODEL_ID'],
-    models,
-  });
+  const provider = createAIProvider({ models });
 
   const marketplaceId = process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
 
@@ -118,7 +108,6 @@ export async function POST(request: Request) {
     console.log('[chat] No credentials - skipping SP client creation');
   }
 
-  // Get image generator if available (requires OPENAI_API_KEY)
   const imageGenerator = provider.imageGenerator?.();
 
   const agent = createSellerAgent({

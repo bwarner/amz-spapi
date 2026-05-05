@@ -42,16 +42,18 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
   },
   {
     scope: 'a_plus',
-    collections: ['drafts', 'brand_guides'],
+    collections: ['drafts', 'brand_guides', 'source_cache'],
   },
 ];
 
-function getEnvVar(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
+function getEnvVar(...names: string[]): string {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value) return value;
   }
-  return value;
+  throw new Error(
+    `Missing required environment variable. Set one of: ${names.join(', ')}`
+  );
 }
 
 async function scopeExists(
@@ -221,10 +223,13 @@ async function createPrimaryIndex(
 }
 
 async function main() {
-  const connectionString = getEnvVar('COUCHBASE_CONNECTION_STRING');
-  const username = getEnvVar('COUCHBASE_USERNAME');
-  const password = getEnvVar('COUCHBASE_PASSWORD');
-  const bucketName = getEnvVar('COUCHBASE_BUCKET');
+  const connectionString = getEnvVar(
+    'CB_CONNECT_STRING',
+    'COUCHBASE_CONNECTION_STRING'
+  );
+  const username = getEnvVar('CB_USERNAME', 'COUCHBASE_USERNAME');
+  const password = getEnvVar('CB_PASSWORD', 'COUCHBASE_PASSWORD');
+  const bucketName = getEnvVar('CB_BUCKET', 'COUCHBASE_BUCKET');
 
   const connStr =
     connectionString.startsWith('couchbases') &&
@@ -298,6 +303,7 @@ async function main() {
   // a_plus.drafts / a_plus.brand_guides — saved content packages and reusable brand guides
   await createPrimaryIndex(cluster, bucketName, 'a_plus', 'drafts');
   await createPrimaryIndex(cluster, bucketName, 'a_plus', 'brand_guides');
+  await createPrimaryIndex(cluster, bucketName, 'a_plus', 'source_cache');
   await createIndex(
     cluster,
     bucketName,
@@ -325,6 +331,9 @@ async function main() {
   console.log('   media.asset_hashes  — Per-user duplicate detection pointers');
   console.log('   a_plus.drafts       — Saved A+ content builder drafts');
   console.log('   a_plus.brand_guides — Reusable A+ brand guides');
+  console.log(
+    '   a_plus.source_cache — Cached extracted facts from source URLs (TTL: 24h)'
+  );
   console.log('');
   console.log(
     'ℹ  Note: Document TTLs are set by the application, not Couchbase.'

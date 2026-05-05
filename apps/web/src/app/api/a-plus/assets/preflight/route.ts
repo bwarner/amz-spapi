@@ -13,6 +13,45 @@ import {
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
+function normalizeAssetPreflightError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : 'Asset preflight failed.';
+
+  if (
+    message.includes('Token is expired') ||
+    message.includes('aws sso login') ||
+    message.includes('SSO session')
+  ) {
+    return {
+      status: 503,
+      code: 'aws_credentials_expired',
+      message:
+        'Media storage needs a fresh AWS session before uploads can continue.',
+      action: 'Run aws sso login with the configured AWS profile, then retry.',
+    };
+  }
+
+  if (
+    message.includes('Media asset storage is not configured') ||
+    message.includes('MEDIA_ASSETS_BUCKET')
+  ) {
+    return {
+      status: 503,
+      code: 'media_storage_not_configured',
+      message: 'Media storage is not configured for this environment.',
+      action: 'Set MEDIA_ASSETS_BUCKET and redeploy or restart the server.',
+    };
+  }
+
+  return {
+    status: 500,
+    code: 'asset_preflight_failed',
+    message: 'Could not prepare this image for upload.',
+    action:
+      'Retry the upload. If it fails again, check the media storage logs.',
+  };
+}
+
 function isValidSha256(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
 }
@@ -122,8 +161,14 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Asset preflight failed.';
-    return Response.json({ error: message }, { status: 500 });
+    const normalized = normalizeAssetPreflightError(error);
+    return Response.json(
+      {
+        error: normalized.message,
+        code: normalized.code,
+        action: normalized.action,
+      },
+      { status: normalized.status }
+    );
   }
 }

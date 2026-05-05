@@ -1,86 +1,153 @@
-import * as couchbase from 'couchbase';
+type QueryOptions = {
+  parameters?: Record<string, unknown>;
+  readonly?: boolean;
+  preserve_expiry?: boolean;
+  [key: string]: unknown;
+};
 
-const { connect } = couchbase;
+type DataApiConfig = {
+  baseUrl: string;
+  username: string;
+  password: string;
+  bucket: string;
+  defaultScope?: string;
+};
 
-/**
- * Global cached connection to survive hot reloads in development.
- */
-let cached = (globalThis as any).__couchbase;
+type DataApiQueryResponse<T> = {
+  status?: string;
+  results?: T[];
+  errors?: Array<{ msg?: string }>;
+  [key: string]: unknown;
+};
 
-if (!cached) {
-  cached = (globalThis as any).__couchbase = { conn: null };
+function getDataApiConfig(): DataApiConfig {
+  const baseUrl = process.env['CB_DATA_API_URL'];
+  const username = process.env['CB_USERNAME'];
+  const password = process.env['CB_PASSWORD'];
+  const bucket = process.env['CB_BUCKET'];
+  const defaultScope = process.env['CB_SCOPE'];
+
+  if (!baseUrl || !username || !password || !bucket) {
+    throw new Error(
+      'Couchbase Data API is not configured. Set CB_DATA_API_URL, CB_USERNAME, CB_PASSWORD, and CB_BUCKET.'
+    );
+  }
+
+  return {
+    baseUrl: baseUrl.replace(/\/+$/, ''),
+    username,
+    password,
+    bucket,
+    defaultScope,
+  };
 }
 
-export async function createCouchbaseCluster(
-  connectionString: string | undefined,
-  username: string | undefined,
-  password: string | undefined
-): Promise<couchbase.Cluster> {
-  if (cached.conn) {
-    return cached.conn;
-  }
-  if (!connectionString || !username || !password) {
-    throw new Error('Couchbase connection string, username, and password are required');
-  }
-
-  if (
-    connectionString.startsWith('couchbases') &&
-    !connectionString.includes('?tls_verify=none')
-  ) {
-    connectionString = connectionString + '?tls_verify=none';
-  }
-
-  cached.conn = await connect(connectionString, { username, password });
-  return cached.conn;
+function getAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
 }
 
-export async function connectToDatabase(
-  connectionString: string | undefined,
-  username: string | undefined,
-  password: string | undefined,
-  bucketName: string | undefined
-) {
-  const cluster = await createCouchbaseCluster(connectionString, username, password);
-  if (!bucketName) {
-    throw new Error('Couchbase bucket name is required');
-  }
-  const bucket = cluster.bucket(bucketName);
-  return { cluster, bucket };
+function escapeIdentifier(value: string): string {
+  return `\`${value.replace(/`/g, '``')}\``;
 }
 
-export async function getContext() {
-  return connectToDatabase(
-    process.env['COUCHBASE_CONNECTION_STRING'],
-    process.env['COUCHBASE_USERNAME'],
-    process.env['COUCHBASE_PASSWORD'],
-    process.env['COUCHBASE_BUCKET']
+function getQueryContext(bucket: string, scopeName: string): string {
+  return `default:${escapeIdentifier(bucket)}.${escapeIdentifier(scopeName)}`;
+}
+
+async function executeDataApiQuery<T>(params: {
+  scopeName: string;
+  statement: string;
+  options?: QueryOptions;
+}): Promise<{ rows: T[]; meta: DataApiQueryResponse<T> }> {
+  const config = getDataApiConfig();
+  const { parameters, ...restOptions } = params.options ?? {};
+  const scopeName = params.scopeName || config.defaultScope;
+
+  if (!scopeName) {
+    throw new Error(
+      'Couchbase scope is required for Data API queries. Set CB_SCOPE.'
+    );
+  }
+
+  const body: Record<string, unknown> = {
+    statement: params.statement,
+    query_context: getQueryContext(config.bucket, scopeName),
+    ...restOptions,
+  };
+
+  for (const [key, value] of Object.entries(parameters ?? {})) {
+    body[`$${key}`] = value;
+  }
+
+  const response = await fetch(`${config.baseUrl}/_p/query/query/service`, {
+    method: 'POST',
+    headers: {
+      Authorization: getAuthHeader(config.username, config.password),
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = (await response.json()) as DataApiQueryResponse<T>;
+
+  if (!response.ok || payload.status === 'errors') {
+    const message =
+      payload.errors
+        ?.map((error) => error.msg)
+        .filter(Boolean)
+        .join('; ') ||
+      `Couchbase Data API request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return { rows: payload.results ?? [], meta: payload };
+}
+
+export async function createCouchbaseCluster(): Promise<never> {
+  throw new Error(
+    'Native Couchbase SDK access is disabled in the web runtime. Use the Couchbase Data API instead.'
   );
 }
 
-/**
- * Get a document by key, returning null if not found.
- */
+export async function connectToDatabase(): Promise<{
+  mode: 'data-api';
+  cluster: null;
+  bucket: { name: string };
+}> {
+  const config = getDataApiConfig();
+  return {
+    mode: 'data-api',
+    cluster: null,
+    bucket: {
+      name: config.bucket,
+    },
+  };
+}
+
+export async function getContext() {
+  return connectToDatabase();
+}
+
 export async function getDocument<T>(
   scopeName: string,
   collectionName: string,
   key: string
 ): Promise<T | null> {
-  const { bucket } = await getContext();
-  const collection = bucket.scope(scopeName).collection(collectionName);
-  try {
-    const result = await collection.get(key);
-    return result.content as T;
-  } catch (err: any) {
-    if (err instanceof couchbase.DocumentNotFoundError) {
-      return null;
-    }
-    throw err;
-  }
+  const { rows } = await executeDataApiQuery<T>({
+    scopeName,
+    statement: `SELECT RAW doc
+      FROM ${escapeIdentifier(collectionName)} AS doc
+      USE KEYS $key`,
+    options: {
+      parameters: { key },
+      readonly: true,
+    },
+  });
+
+  return rows[0] ?? null;
 }
 
-/**
- * Upsert a document with optional TTL (expiry in seconds).
- */
 export async function upsertDocument<T>(
   scopeName: string,
   collectionName: string,
@@ -88,45 +155,55 @@ export async function upsertDocument<T>(
   document: T,
   expirySeconds?: number
 ): Promise<void> {
-  const { bucket } = await getContext();
-  const collection = bucket.scope(scopeName).collection(collectionName);
-  const options: couchbase.UpsertOptions = {};
-  if (expirySeconds) {
-    options.expiry = expirySeconds;
-  }
-  await collection.upsert(key, document, options);
+  const statement = expirySeconds
+    ? `UPSERT INTO ${escapeIdentifier(collectionName)} (KEY, VALUE, OPTIONS)
+       VALUES ($key, $document, {"expiration": $expiry})
+       RETURNING RAW META().id`
+    : `UPSERT INTO ${escapeIdentifier(collectionName)} (KEY, VALUE)
+       VALUES ($key, $document)
+       RETURNING RAW META().id`;
+
+  await executeDataApiQuery<string>({
+    scopeName,
+    statement,
+    options: {
+      parameters: {
+        key,
+        document,
+        ...(expirySeconds ? { expiry: expirySeconds } : {}),
+      },
+    },
+  });
 }
 
-/**
- * Delete a document by key. Returns true if deleted, false if not found.
- */
 export async function deleteDocument(
   scopeName: string,
   collectionName: string,
   key: string
 ): Promise<boolean> {
-  const { bucket } = await getContext();
-  const collection = bucket.scope(scopeName).collection(collectionName);
-  try {
-    await collection.remove(key);
-    return true;
-  } catch (err: any) {
-    if (err instanceof couchbase.DocumentNotFoundError) {
-      return false;
-    }
-    throw err;
-  }
+  const { rows } = await executeDataApiQuery<string>({
+    scopeName,
+    statement: `DELETE FROM ${escapeIdentifier(collectionName)}
+      USE KEYS $key
+      RETURNING RAW META().id`,
+    options: {
+      parameters: { key },
+    },
+  });
+
+  return rows.length > 0;
 }
 
-/**
- * Execute a N1QL/SQL++ query against a scope.
- */
 export async function executeQuery<T>(
   scopeName: string,
   query: string,
-  options?: couchbase.QueryOptions
-) {
-  const { bucket } = await getContext();
-  const scope = bucket.scope(scopeName);
-  return scope.query<T>(query, options);
+  options?: QueryOptions
+): Promise<{ rows: T[]; meta?: Record<string, unknown> }> {
+  const { rows, meta } = await executeDataApiQuery<T>({
+    scopeName,
+    statement: query,
+    options,
+  });
+
+  return { rows, meta };
 }

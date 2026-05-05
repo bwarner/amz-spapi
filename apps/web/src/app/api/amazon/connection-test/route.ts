@@ -168,14 +168,26 @@ export async function GET() {
         },
       });
 
-      const [profilesResponse, brands] = await Promise.all([
-        client.getProfiles(),
-        client.getNegativeBrands(),
-      ]);
-
+      const profilesResponse = await client.getProfiles();
       const profiles = Array.isArray(profilesResponse.data)
         ? profilesResponse.data
         : [];
+      let brandsSupported = false;
+      let brandsCount = 0;
+      let firstBrand: string | undefined;
+      let firstBrandId: string | undefined;
+      let brandProbeError: string | undefined;
+
+      try {
+        const brands = await client.getNegativeBrands();
+        brandsSupported = true;
+        brandsCount = brands.length;
+        firstBrand = brands[0]?.name;
+        firstBrandId = brands[0]?.id;
+      } catch (error) {
+        brandProbeError =
+          error instanceof Error ? error.message : 'Unknown brand probe error';
+      }
 
       results.push({
         apiType: 'ADS_API',
@@ -185,12 +197,17 @@ export async function GET() {
         advertiserProfileId: profile.advertiser_profile_id,
         ok: true,
         source: 'stored',
-        probe: 'profiles+brandRecommendations',
-        summary: `Ads probe succeeded with ${profiles.length} visible profiles and ${brands.length} brand recommendations.`,
+        probe: 'profiles',
+        summary: brandsSupported
+          ? `Ads connection succeeded with ${profiles.length} visible profiles and ${brandsCount} brand recommendations.`
+          : `Ads connection succeeded with ${profiles.length} visible profiles. Brand recommendations are not available for this profile yet.`,
         details: {
           profileCount: profiles.length,
-          firstBrand: brands[0]?.name,
-          firstBrandId: brands[0]?.id,
+          brandRecommendationsSupported: brandsSupported,
+          brandRecommendationCount: brandsCount,
+          firstBrand,
+          firstBrandId,
+          brandProbeError,
         },
       });
     } catch (error) {

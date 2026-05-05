@@ -1,11 +1,7 @@
-export { createAIProvider } from './create-provider';
-export { createBedrockProvider } from './bedrock-provider';
-export { createAnthropicProvider } from './anthropic-provider';
-export { createOpenAIProvider } from './openai-provider';
-export { createDalleImageGenerator } from './dalle-image-generator';
+export { createAIProvider } from './create-provider.js';
 export type {
   AIProvider,
   AIProviderConfig,
   ImageGenerator,
   ModelTier,
-} from './types';
+} from './types.js';

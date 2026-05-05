@@ -1,0 +1,161 @@
+import crypto from 'node:crypto';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { createAIProvider } from '@amz-spapi/ai-provider';
+import { auth0 } from '../../../../lib/auth0';
+import {
+  type MediaAsset,
+  createAssetId,
+  createAssetKey,
+  createAssetS3Client,
+  getAssetBucket,
+  getDuplicateAsset,
+  upsertAsset,
+  upsertHashPointer,
+} from '../../../../lib/media-assets';
+
+export const maxDuration = 60;
+
+function extensionForMime(mime: string): string {
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('webp')) return 'webp';
+  return 'png';
+}
+
+type ImageSize = '1024x1024' | '1792x1024' | '1024x1792';
+
+function pickImageSize(requested: string | undefined): ImageSize {
+  if (!requested) return '1024x1024';
+  const match = requested.match(/(\d+)\s*[x×]\s*(\d+)/i);
+  if (!match) return '1024x1024';
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return '1024x1024';
+  if (width > height * 1.1) return '1792x1024';
+  if (height > width * 1.1) return '1024x1792';
+  return '1024x1024';
+}
+
+export async function POST(request: Request) {
+  const session = await auth0.getSession();
+  if (!session?.user?.sub) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  let body: { prompt?: unknown; size?: unknown };
+  try {
+    body = (await request.json()) as { prompt?: unknown; size?: unknown };
+  } catch {
+    return Response.json({ error: 'Invalid request body.' }, { status: 400 });
+  }
+
+  if (typeof body.prompt !== 'string' || body.prompt.trim().length < 10) {
+    return Response.json(
+      { error: 'A prompt of at least 10 characters is required.' },
+      { status: 400 }
+    );
+  }
+
+  const provider = createAIProvider();
+
+  const imageGenerator = provider.imageGenerator?.();
+  if (!imageGenerator) {
+    return Response.json(
+      { error: 'Image generation is not configured.' },
+      { status: 503 }
+    );
+  }
+
+  const size = pickImageSize(
+    typeof body.size === 'string' ? body.size : undefined
+  );
+
+  let generated: { url: string; mediaType: string; revisedPrompt?: string };
+  try {
+    const results = await imageGenerator.generate({
+      prompt: body.prompt,
+      size,
+    });
+    const first = results[0];
+    if (!first?.url) {
+      return Response.json(
+        { error: 'Image generation returned no image.' },
+        { status: 502 }
+      );
+    }
+    generated = first;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Image generation failed.';
+    return Response.json({ error: message }, { status: 500 });
+  }
+
+  const userId = session.user.sub;
+  let asset: MediaAsset | null = null;
+
+  try {
+    const dataUrlMatch = generated.url.match(/^data:([^;]+);base64,(.+)$/);
+    if (!dataUrlMatch) {
+      throw new Error('Image generator did not return decodable image bytes.');
+    }
+    const mimeType = dataUrlMatch[1] || generated.mediaType || 'image/png';
+    const buffer = Buffer.from(dataUrlMatch[2], 'base64');
+    const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+
+    const existing = await getDuplicateAsset({ userId, sha256 });
+    if (existing) {
+      asset = existing;
+    } else {
+      const assetId = createAssetId();
+      const fileName = `generated-${assetId}.${extensionForMime(mimeType)}`;
+      const bucket = getAssetBucket();
+      const key = createAssetKey({ userId, assetId, fileName });
+      const s3 = createAssetS3Client();
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: buffer,
+          ContentType: mimeType,
+        })
+      );
+      const now = Date.now();
+      asset = {
+        assetId,
+        userId,
+        createdForFeature: 'a-plus',
+        originalFileName: fileName,
+        mimeType,
+        sizeBytes: buffer.byteLength,
+        hashes: { sha256 },
+        status: 'uploaded',
+        storage: { provider: 's3', bucket, key },
+        createdAt: now,
+        updatedAt: now,
+      };
+      await Promise.all([upsertAsset(asset), upsertHashPointer(asset)]);
+    }
+  } catch (error) {
+    const persistError =
+      error instanceof Error ? error.message : 'Could not persist image.';
+    return Response.json({
+      url: generated.url,
+      revisedPrompt: generated.revisedPrompt,
+      size,
+      persistError,
+    });
+  }
+
+  return Response.json({
+    url: `/api/a-plus/assets/${asset.assetId}`,
+    revisedPrompt: generated.revisedPrompt,
+    size,
+    asset: {
+      assetId: asset.assetId,
+      originalFileName: asset.originalFileName,
+      mimeType: asset.mimeType,
+      sizeBytes: asset.sizeBytes,
+      status: asset.status,
+      storage: asset.storage,
+    },
+  });
+}

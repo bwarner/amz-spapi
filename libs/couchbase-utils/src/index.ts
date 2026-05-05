@@ -6,4 +6,4 @@ export {
   upsertDocument,
   deleteDocument,
   executeQuery,
-} from './couchbase-utils';
+} from './couchbase-utils.js';

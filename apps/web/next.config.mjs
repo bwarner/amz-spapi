@@ -21,13 +21,12 @@ const nextConfig = {
     'react-markdown',
     'remark-gfm',
   ],
-  // Native modules and optional provider dependencies must not be bundled by webpack
+  // Optional provider dependencies must not be bundled by webpack
   serverExternalPackages: [
-    'couchbase',
     '@vercel/oidc-aws-credentials-provider',
     '@aws-sdk/credential-provider-node',
   ],
-  webpack: (config, context) => {
+  webpack: (config) => {
     config.resolve.extensionAlias = {
       ...config.resolve.extensionAlias,
       '.js': ['.ts', '.tsx', '.js'],
@@ -35,12 +34,6 @@ const nextConfig = {
       '.cjs': ['.cts', '.cjs'],
     };
 
-    if (context.isServer) {
-      config.externals = [
-        ...config.externals,
-        { couchbase: 'commonjs couchbase' },
-      ];
-    }
     return config;
   },
 };

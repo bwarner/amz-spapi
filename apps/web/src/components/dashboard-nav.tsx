@@ -9,6 +9,7 @@ import {
   Settings,
   LogOut,
   Activity,
+  BookTemplate,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,6 +22,7 @@ import {
 const navItems = [
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/a-plus', label: 'A+ Content', icon: LayoutTemplate },
+  { href: '/brand-guides', label: 'Brand Guides', icon: BookTemplate },
   { href: '/connections', label: 'Connections', icon: Activity },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

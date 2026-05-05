@@ -1,62 +1,80 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { MessageSquare, TrendingUp, Mail, BarChart3 } from "lucide-react"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { BookTemplate, Files, Link2, ShieldCheck } from 'lucide-react';
 
 const features = [
   {
-    icon: MessageSquare,
-    title: "Conversational Console",
+    icon: Files,
+    title: 'Source Collection',
     description:
-      "Chat with your Amazon data using natural language. Ask questions and get instant insights about your business performance.",
+      'Bring in listing pages, supplier links, competitor references, raw product photography, and polished assets in one workspace.',
   },
   {
-    icon: TrendingUp,
-    title: "Campaign Optimization",
+    icon: BookTemplate,
+    title: 'Brand Guide Workspace',
     description:
-      "AI-powered recommendations to optimize your advertising campaigns and maximize ROI across all Amazon ad types.",
+      'Store logos, colors, fonts, usage notes, and source guidelines so creative decisions stay reusable across future A+ packages.',
   },
   {
-    icon: Mail,
-    title: "Email Triage",
+    icon: Link2,
+    title: 'AI-Assisted Packaging',
     description:
-      "Automatically categorize and prioritize customer emails. Generate smart responses and manage communications efficiently.",
+      'Turn scattered source material into structured A+ drafts with module planning, extracted suggestions, and saved work-in-progress drafts.',
   },
   {
-    icon: BarChart3,
-    title: "Profit Analytics",
+    icon: ShieldCheck,
+    title: 'Account-Aware Integrations',
     description:
-      "Deep dive into your profit margins with comprehensive analytics. Track performance across products, campaigns, and time periods.",
+      'Connect Amazon seller and advertising accounts when available, while still supporting manual creative workflows when they are not.',
   },
-]
+];
 
 export function FeaturesSection() {
   return (
-    <section id="features" className="py-20 sm:py-32">
-      <div className="container px-4 sm:px-6">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl text-balance">
-            Everything you need to scale your Amazon business
+    <section id="product" className="py-20 sm:py-24">
+      <div className="container mx-auto px-4 sm:px-6">
+        <div className="mx-auto max-w-3xl text-center">
+          <h2 className="text-3xl font-semibold tracking-tight text-foreground text-balance sm:text-4xl">
+            A product surface built for actual Amazon content work
           </h2>
-          <p className="mt-4 text-lg text-muted-foreground text-pretty">
-            Our AI-powered platform provides all the tools you need to optimize operations and maximize profits.
+          <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-muted-foreground text-pretty">
+            Sellavant is designed for the messy middle of e-commerce creative
+            work: collecting inputs, shaping brand rules, and preparing
+            publishable A+ packages without losing the source context along the
+            way.
           </p>
         </div>
 
-        <div className="mx-auto mt-16 grid max-w-5xl grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-2">
-          {features.map((feature, index) => (
-            <Card key={index} className="relative overflow-hidden border-border/50 bg-card/50 backdrop-blur">
-              <CardHeader>
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                  <feature.icon className="h-6 w-6 text-primary" />
+        <div className="mt-12 grid gap-6 lg:grid-cols-2">
+          {features.map((feature) => (
+            <Card
+              key={feature.title}
+              className="border-border/70 bg-card text-center shadow-sm"
+            >
+              <CardHeader className="space-y-4">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+                  <feature.icon
+                    className="h-6 w-6 text-primary"
+                    aria-hidden="true"
+                  />
                 </div>
-                <CardTitle className="text-xl font-semibold text-card-foreground">{feature.title}</CardTitle>
+                <div className="space-y-2">
+                  <CardTitle className="text-xl">{feature.title}</CardTitle>
+                  <CardDescription className="text-base leading-7 text-muted-foreground">
+                    {feature.description}
+                  </CardDescription>
+                </div>
               </CardHeader>
-              <CardContent>
-                <CardDescription className="text-base text-muted-foreground">{feature.description}</CardDescription>
-              </CardContent>
+              <CardContent />
             </Card>
           ))}
         </div>
       </div>
     </section>
-  )
+  );
 }

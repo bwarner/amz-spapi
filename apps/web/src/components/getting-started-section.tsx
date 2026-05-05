@@ -1,59 +1,74 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { UserPlus, Settings, Rocket } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { BadgeCheck, Database, WandSparkles } from 'lucide-react';
 
 const steps = [
   {
-    icon: UserPlus,
-    step: "01",
-    title: "Create Your Account",
-    description: "Sign up in seconds and connect your Amazon Seller Central account securely.",
+    icon: BadgeCheck,
+    step: '1',
+    title: 'Set Up Access',
+    description:
+      'Create your workspace, connect available Amazon accounts, and confirm the legal and privacy information required for production access.',
   },
   {
-    icon: Settings,
-    step: "02",
-    title: "Configure Settings",
-    description: "Set up your preferences, connect your advertising accounts, and customize your dashboard.",
+    icon: Database,
+    step: '2',
+    title: 'Add Sources',
+    description:
+      'Upload raw product photos, polished assets, logos, PDFs, and source links so the system has the same context your creative team uses.',
   },
   {
-    icon: Rocket,
-    step: "03",
-    title: "Start Optimizing",
-    description: "Begin using AI-powered insights to optimize campaigns, manage emails, and track profits.",
+    icon: WandSparkles,
+    step: '3',
+    title: 'Build The Package',
+    description:
+      'Use brand guides and AI-assisted drafting to shape A+ content packages, review modules, and keep revisions saved as reusable drafts.',
   },
-]
+];
 
 export function GettingStartedSection() {
   return (
-    <section id="getting-started" className="bg-muted/30 py-20 sm:py-32">
-      <div className="container px-4 sm:px-6">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl text-balance">
-            Get started in minutes
+    <section id="workflow" className="border-y bg-muted/20 py-20 sm:py-24">
+      <div className="container mx-auto px-4 sm:px-6">
+        <div className="mx-auto max-w-3xl text-center">
+          <h2 className="text-3xl font-semibold tracking-tight text-foreground text-balance sm:text-4xl">
+            A workflow that starts with source material, not assumptions
           </h2>
-          <p className="mt-4 text-lg text-muted-foreground text-pretty">
-            Our streamlined onboarding process gets you up and running quickly.
+          <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-muted-foreground text-pretty">
+            Public OAuth, legal pages, brand rules, and content assembly all
+            need to work together if the app is going to survive real seller
+            review and production use.
           </p>
         </div>
 
-        <div className="mx-auto mt-16 grid max-w-4xl grid-cols-1 gap-8 sm:grid-cols-3">
-          {steps.map((step, index) => (
-            <Card key={index} className="relative text-center border-border/50 bg-background/80 backdrop-blur">
-              <CardHeader className="pb-4">
-                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-                  <step.icon className="h-8 w-8 text-primary" />
+        <div className="mt-12 grid gap-6 lg:grid-cols-3">
+          {steps.map((step) => (
+            <Card
+              key={step.step}
+              className="border-border/70 bg-background text-center shadow-sm"
+            >
+              <CardHeader className="space-y-4">
+                <div className="flex items-center justify-center gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary/15">
+                    <step.icon
+                      className="h-6 w-6 text-secondary"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    {step.step}
+                  </span>
                 </div>
-                <div className="absolute -top-3 left-4 flex h-6 w-6 items-center justify-center rounded-full bg-secondary text-xs font-bold text-secondary-foreground">
-                  {step.step}
-                </div>
+                <CardTitle className="text-xl">{step.title}</CardTitle>
               </CardHeader>
-              <CardContent className="pt-0">
-                <CardTitle className="text-lg font-semibold text-card-foreground mb-2">{step.title}</CardTitle>
-                <CardDescription className="text-sm text-muted-foreground">{step.description}</CardDescription>
+              <CardContent>
+                <p className="text-base leading-7 text-muted-foreground">
+                  {step.description}
+                </p>
               </CardContent>
             </Card>
           ))}
         </div>
       </div>
     </section>
-  )
+  );
 }

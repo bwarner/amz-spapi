@@ -34,8 +34,37 @@ export type APlusBrandGuide = {
   name: string;
   brandName?: string;
   colors?: string;
+  palette?: {
+    primaryForeground?: string;
+    secondaryForeground?: string;
+    background?: string;
+  };
+  fonts?: {
+    primary?: string;
+    secondary?: string;
+    accent?: string;
+  };
   voice?: string;
+  logoAsset?: {
+    assetId: string;
+    originalFileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    storage: {
+      provider: 's3';
+      bucket: string;
+      key: string;
+    };
+  };
   logoNotes?: string;
+  styleGuideFiles?: Array<{
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    lastModified: number;
+  }>;
+  styleGuideLinks?: string[];
+  styleGuideNotes?: string;
   createdAt: number;
   updatedAt: number;
   deleted?: boolean;
@@ -124,7 +153,7 @@ export async function listBrandGuides(
 ): Promise<APlusBrandGuide[]> {
   const result = await executeQuery<APlusBrandGuide>(
     SCOPE,
-    `SELECT brandGuideId, userId, name, brandName, colors, voice, logoNotes, createdAt, updatedAt
+    `SELECT brandGuideId, userId, name, brandName, colors, palette, fonts, voice, logoAsset, logoNotes, styleGuideFiles, styleGuideLinks, styleGuideNotes, createdAt, updatedAt
      FROM \`${BRAND_GUIDES_COLLECTION}\`
      WHERE userId = $userId
      AND \`deleted\` IS MISSING

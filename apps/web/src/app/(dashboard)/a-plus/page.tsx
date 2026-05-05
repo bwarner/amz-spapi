@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
@@ -23,9 +24,10 @@ import {
   Smartphone,
   Sparkles,
   Trash2,
-  Upload,
   WandSparkles,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,10 +40,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
 
 type SourceKind = 'Product listing' | 'Competitor' | 'Supplier' | 'Reference';
 type ContentTier = 'Basic A+' | 'Premium A+';
+type BuilderMode = 'simple' | 'advanced';
+type WizardStep = 'basics' | 'sources' | 'assets' | 'review';
 
 type SourceLink = {
   id: number;
@@ -60,6 +65,24 @@ type SourceCheck = {
   message?: string;
   httpStatus?: number;
   finalUrl?: string;
+};
+
+type SourceExtraction = {
+  status: 'idle' | 'extracting' | 'extracted' | 'warning' | 'error';
+  message?: string;
+  cacheHit?: boolean;
+  facts?: {
+    productName?: string;
+    brandName?: string;
+    asin?: string;
+    oneLiner?: string;
+    pricePoint?: string;
+    features: string[];
+    differentiators: string[];
+    warnings: string[];
+    evidence: string[];
+    finalUrl?: string;
+  };
 };
 
 type AssetSlot = {
@@ -97,6 +120,18 @@ type UploadedAsset = {
   duplicateOfAssetId?: string;
 };
 
+type AssetLibraryItem = {
+  id: string;
+  fileName: string;
+  description: string;
+  file?: File;
+  asset?: UploadedAsset;
+  uploadStatus: 'hashing' | 'uploading' | 'uploaded' | 'duplicate' | 'error';
+  uploadMessage?: string;
+  uploadAction?: string;
+  uploadErrorCode?: string;
+};
+
 type APlusModule = {
   id: string;
   tier: ContentTier;
@@ -108,6 +143,17 @@ type APlusModule = {
   copy: string[];
   imageSlots: AssetSlot[];
   status: 'ready' | 'needs-assets' | 'needs-review';
+};
+
+type CompositeMockupVariant = {
+  size: '1024x1024' | '1792x1024' | '1024x1792';
+  prompt: string;
+  textElements: Array<{
+    role: string;
+    text: string;
+    position: string;
+    typography: string;
+  }>;
 };
 
 type DraftSummary = {
@@ -125,26 +171,34 @@ type BrandGuide = {
   name: string;
   brandName?: string;
   colors?: string;
+  palette?: {
+    primaryForeground?: string;
+    secondaryForeground?: string;
+    background?: string;
+  };
+  fonts?: {
+    primary?: string;
+    secondary?: string;
+    accent?: string;
+  };
   voice?: string;
+  logoAsset?: {
+    assetId: string;
+    originalFileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    storage: {
+      provider: 's3';
+      bucket: string;
+      key: string;
+    };
+  };
   logoNotes?: string;
 };
 
-type AmazonBrand = {
-  name: string;
-  asinCount: number;
-  sampleAsins: string[];
-  sampleProducts: string[];
-  profiles: Array<{
-    profileName: string;
-    marketplaceId: string;
-    region?: string;
-    sellerId?: string;
-    advertiserProfileId?: string;
-  }>;
-  source: 'ads' | 'sp-api';
-};
-
 type DraftPayload = {
+  builderMode?: BuilderMode;
+  wizardStep?: WizardStep;
   productName?: string;
   asin?: string;
   contentTier?: ContentTier;
@@ -157,11 +211,230 @@ type DraftPayload = {
   brandColors?: string;
   logoNotes?: string;
   brandVoice?: string;
+  brandFontNotes?: string;
+  brandLogoAssetId?: string;
   rawNotes?: string;
   strategyId?: string;
   sources?: SourceLink[];
+  assets?: AssetLibraryItem[];
   modules?: APlusModule[];
 };
+
+type GeneratedAPlusPackage = {
+  title: string;
+  executiveSummary: string;
+  creativeDirection: {
+    positioning: string;
+    visualSystem: string;
+    mobilePrinciple: string;
+    imagePlan: string;
+  };
+  assumptions: string[];
+  modules: Array<{
+    order: number;
+    amazonModuleType: string;
+    title: string;
+    objective: string;
+    visualBrief: string;
+    desktopLayout: string;
+    mobileLayout: string;
+    desktopWireframe: string[];
+    mobileWireframe: string[];
+    headline: string;
+    bodyCopy: string;
+    bullets: string[];
+    canvaLayers: Array<{
+      layer: string;
+      content: string;
+      notes: string;
+    }>;
+    assetAssignments: Array<{
+      assetFileName: string;
+      role: string;
+      editNotes: string;
+    }>;
+    imageJobs: Array<{
+      jobId: string;
+      purpose: string;
+      size: string;
+      prompt: string;
+      avoid: string[];
+    }>;
+    logoDropzone: {
+      needed: boolean;
+      placement: string;
+      notes: string;
+    };
+    altText: string;
+    complianceNotes: string[];
+    compositeMockup?: {
+      purpose: string;
+      desktop: CompositeMockupVariant;
+      mobile: CompositeMockupVariant;
+    };
+  }>;
+  sellerCentralBuildSheet: Array<{
+    step: string;
+    value: string;
+  }>;
+  qualityChecklist: string[];
+};
+
+type GeneratedAPlusResponse = {
+  strategy: unknown;
+  package: GeneratedAPlusPackage;
+  imageGeneration: {
+    enabled: boolean;
+    results: unknown[];
+  };
+  modelRuns: Array<{
+    role: string;
+    provider: string;
+    modelId: string;
+  }>;
+};
+
+function summarizeBrandGuideColors(guide: BrandGuide | null) {
+  if (!guide) return '';
+  if (guide.colors?.trim()) return guide.colors.trim();
+
+  const palette = [
+    guide.palette?.primaryForeground
+      ? `Primary foreground ${guide.palette.primaryForeground}`
+      : null,
+    guide.palette?.secondaryForeground
+      ? `Secondary foreground ${guide.palette.secondaryForeground}`
+      : null,
+    guide.palette?.background ? `Background ${guide.palette.background}` : null,
+  ].filter(Boolean);
+
+  return palette.join(', ');
+}
+
+function summarizeBrandGuideFonts(guide: BrandGuide | null) {
+  if (!guide) return '';
+
+  const fonts = [
+    guide.fonts?.primary ? `Primary ${guide.fonts.primary}` : null,
+    guide.fonts?.secondary ? `Secondary ${guide.fonts.secondary}` : null,
+    guide.fonts?.accent ? `Accent ${guide.fonts.accent}` : null,
+  ].filter(Boolean);
+
+  return fonts.join(', ');
+}
+
+function summarizeBrandGuideLogoNotes(guide: BrandGuide | null) {
+  if (!guide) return '';
+
+  const details = [
+    guide.logoAsset?.originalFileName
+      ? `Use uploaded logo asset ${guide.logoAsset.originalFileName}`
+      : null,
+    guide.logoNotes?.trim() || null,
+  ].filter(Boolean);
+
+  return details.join('. ');
+}
+
+function getBrandGuidePaletteEntries(guide: BrandGuide | null) {
+  if (!guide) return [];
+
+  return [
+    {
+      label: 'Primary',
+      color: guide.palette?.primaryForeground || '',
+      textColor: guide.palette?.background || '#ffffff',
+    },
+    {
+      label: 'Secondary',
+      color: guide.palette?.secondaryForeground || '',
+      textColor: guide.palette?.background || '#ffffff',
+    },
+    {
+      label: 'Background',
+      color: guide.palette?.background || '',
+      textColor: guide.palette?.primaryForeground || '#111827',
+    },
+  ].filter((entry) => entry.color);
+}
+
+function getBrandGuideFontEntries(guide: BrandGuide | null) {
+  if (!guide) return [];
+
+  return [
+    {
+      label: 'Primary',
+      name: guide.fonts?.primary || '',
+      sample: 'Aa',
+    },
+    {
+      label: 'Secondary',
+      name: guide.fonts?.secondary || '',
+      sample: 'The quick brown fox',
+    },
+    {
+      label: 'Accent',
+      name: guide.fonts?.accent || '',
+      sample: '123 ABC',
+    },
+  ].filter((entry) => entry.name);
+}
+
+function fontPreviewStyle(fontName?: string) {
+  const normalized = fontName?.trim();
+  return normalized
+    ? {
+        fontFamily: `"${normalized}", ui-sans-serif, system-ui, sans-serif`,
+      }
+    : undefined;
+}
+
+function normalizeFontName(value?: string) {
+  return (
+    value
+      ?.trim()
+      .replace(/^["']|["']$/g, '')
+      .replace(/\s+/g, ' ') || ''
+  );
+}
+
+function googleFontHref(fontName?: string) {
+  const normalized = normalizeFontName(fontName);
+  if (!normalized) return '';
+  const family = normalized.split(' ').filter(Boolean).join('+');
+  return `https://fonts.googleapis.com/css2?family=${family}:wght@400;500;600;700&display=swap`;
+}
+
+function mergeGuideIntoDraftPayload(
+  payload: DraftPayload,
+  guide: BrandGuide | null
+): DraftPayload {
+  if (!guide) return payload;
+
+  return {
+    ...payload,
+    brandColors:
+      payload.brandColors !== undefined && payload.brandColors.trim()
+        ? payload.brandColors
+        : summarizeBrandGuideColors(guide),
+    brandVoice:
+      payload.brandVoice !== undefined && payload.brandVoice.trim()
+        ? payload.brandVoice
+        : guide.voice || '',
+    logoNotes:
+      payload.logoNotes !== undefined && payload.logoNotes.trim()
+        ? payload.logoNotes
+        : summarizeBrandGuideLogoNotes(guide),
+    brandFontNotes:
+      payload.brandFontNotes !== undefined && payload.brandFontNotes.trim()
+        ? payload.brandFontNotes
+        : summarizeBrandGuideFonts(guide),
+    brandLogoAssetId:
+      payload.brandLogoAssetId !== undefined && payload.brandLogoAssetId.trim()
+        ? payload.brandLogoAssetId
+        : guide.logoAsset?.assetId || '',
+  };
+}
 
 const DEFAULT_SOURCES: SourceLink[] = [
   { id: 1, kind: 'Product listing', url: '' },
@@ -188,6 +461,46 @@ const APLUS_PROMPT_RULES = [
 
 const BASIC_MODULE_LIMIT = 5;
 const PREMIUM_MODULE_LIMIT = 7;
+const SIMPLE_WIZARD_STEPS: Array<{
+  id: WizardStep;
+  title: string;
+  body: string;
+}> = [
+  {
+    id: 'basics',
+    title: 'Basics',
+    body: 'Product, brand, and the core brief.',
+  },
+  {
+    id: 'sources',
+    title: 'Sources',
+    body: 'Links and messy inputs the AI should learn from.',
+  },
+  {
+    id: 'assets',
+    title: 'Assets',
+    body: 'Drop product images and let AI decide how to use them.',
+  },
+  {
+    id: 'review',
+    title: 'Review',
+    body: 'Generate the actual A+ package and build sheet.',
+  },
+];
+
+const FIELD_CLASSNAME =
+  'border-border/80 bg-card shadow-sm transition-colors focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20';
+const SELECT_CLASSNAME = cn(
+  'h-10 w-full rounded-md border px-3 text-sm',
+  FIELD_CLASSNAME
+);
+const COMPACT_SELECT_CLASSNAME = cn(
+  'h-10 min-w-0 rounded-md border px-3 text-sm',
+  FIELD_CLASSNAME
+);
+const TEXTAREA_CLASSNAME = cn(
+  'border-border/80 bg-card shadow-sm transition-colors focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20'
+);
 
 function extractFirstUrl(text: string): string | null {
   const match = text.match(/https?:\/\/[^\s"'<>]+/i);
@@ -848,19 +1161,63 @@ function sourceStatusClass(status: SourceCheck['status']) {
   return 'border-border bg-muted text-muted-foreground';
 }
 
-function uploadedAssetsForPrompt(modules: APlusModule[]) {
-  return modules.flatMap((module) =>
+function sourceExtractionStatusClass(status: SourceExtraction['status']) {
+  if (status === 'extracted') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  }
+  if (status === 'error') {
+    return 'border-red-200 bg-red-50 text-red-800';
+  }
+  if (status === 'warning') {
+    return 'border-amber-200 bg-amber-50 text-amber-800';
+  }
+  return 'border-border bg-muted text-muted-foreground';
+}
+
+function appendUniqueText(current: string, heading: string, lines: string[]) {
+  const cleanedLines = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (!cleanedLines.length) return current;
+
+  const block = [heading, ...cleanedLines.map((line) => `- ${line}`)].join(
+    '\n'
+  );
+  if (current.includes(heading)) return current;
+  return current.trim() ? `${current.trim()}\n\n${block}` : block;
+}
+
+function uploadedAssetsForPrompt(
+  modules: APlusModule[],
+  assetLibrary: AssetLibraryItem[]
+) {
+  const libraryAssets = assetLibrary
+    .filter((item) => item.asset)
+    .map((item) => ({
+      source: 'Asset library',
+      fileName: item.fileName,
+      description: item.description,
+      assetId: item.asset?.assetId,
+      sha256: item.asset?.hashes.sha256,
+      storageKey: item.asset?.storage.key,
+    }));
+
+  const slotAssets = modules.flatMap((module) =>
     module.imageSlots
       .filter((slot) => slot.asset)
       .map((slot) => ({
+        source: `${module.title} / ${slot.label}`,
         module: module.title,
         slot: slot.label,
         fileName: slot.fileName,
+        description: slot.detail,
         assetId: slot.asset?.assetId,
         sha256: slot.asset?.hashes.sha256,
         storageKey: slot.asset?.storage.key,
       }))
   );
+
+  return [...libraryAssets, ...slotAssets];
 }
 
 function buildAPlusPrompt({
@@ -868,6 +1225,7 @@ function buildAPlusPrompt({
   asin,
   contentTier,
   brandVoice,
+  brandFontNotes,
   rawNotes,
   productOneLiner,
   targetCustomer,
@@ -877,15 +1235,19 @@ function buildAPlusPrompt({
   objections,
   brandColors,
   logoNotes,
+  brandLogoAssetId,
+  selectedBrandGuide,
   activeStrategy,
   sources,
   sourceChecks,
+  assets,
   modules,
 }: {
   productName: string;
   asin: string;
   contentTier: ContentTier;
   brandVoice: string;
+  brandFontNotes: string;
   rawNotes: string;
   productOneLiner: string;
   targetCustomer: string;
@@ -895,15 +1257,18 @@ function buildAPlusPrompt({
   objections: string;
   brandColors: string;
   logoNotes: string;
+  brandLogoAssetId: string;
+  selectedBrandGuide: BrandGuide | null;
   activeStrategy: (typeof MODULE_STRATEGIES)[number];
   sources: SourceLink[];
   sourceChecks: Record<number, SourceCheck>;
+  assets: AssetLibraryItem[];
   modules: APlusModule[];
 }) {
   const moduleLimit =
     contentTier === 'Basic A+' ? BASIC_MODULE_LIMIT : PREMIUM_MODULE_LIMIT;
   const filledSources = sources.filter((source) => source.url.trim());
-  const uploadedAssets = uploadedAssetsForPrompt(modules);
+  const uploadedAssets = uploadedAssetsForPrompt(modules, assets);
 
   return [
     'You are SellAvant, an expert Amazon A+ content strategist and production designer.',
@@ -916,34 +1281,49 @@ function buildAPlusPrompt({
       : 'Use the Basic A+ module pool: company logo, image/text modules, comparison chart, text modules, and technical specifications.',
     '',
     'PRODUCT',
-    `Name: ${productName || '[unknown]'}`,
-    `ASIN: ${asin || '[not provided]'}`,
+    `Name: ${productName || 'Not provided. Infer cautiously from sources.'}`,
+    `ASIN: ${asin || 'Not provided.'}`,
     `One-sentence product description: ${
-      productOneLiner || '[infer from sources or ask]'
+      productOneLiner || 'Infer from sources when enough evidence exists.'
     }`,
-    `Price point: ${pricePoint || '[unknown]'}`,
-    `Target customer: ${targetCustomer || '[infer from sources or ask]'}`,
+    `Price point: ${pricePoint || 'Not provided.'}`,
+    `Target customer: ${
+      targetCustomer || 'Infer from sources when enough evidence exists.'
+    }`,
     '',
     'BRAND KIT',
+    `Guide: ${
+      selectedBrandGuide
+        ? `${selectedBrandGuide.name}${
+            selectedBrandGuide.brandName
+              ? ` (${selectedBrandGuide.brandName})`
+              : ''
+          }`
+        : 'No saved guide selected.'
+    }`,
     `Voice: ${brandVoice || 'Clear, specific, conversion-focused, no hype.'}`,
     `Colors: ${
       brandColors ||
-      '[ask for brand colors or infer cautiously from provided assets]'
+      'No saved colors. Infer cautiously from provided brand assets only.'
+    }`,
+    `Fonts: ${
+      brandFontNotes || 'No saved brand fonts. Use clean Amazon-safe defaults.'
     }`,
     `Logo notes: ${
       logoNotes ||
       'Leave logo dropzones/placeholders. Do not recreate or stylize the logo.'
     }`,
+    `Logo asset id: ${brandLogoAssetId || 'No uploaded logo asset attached.'}`,
     '',
     'RAW INPUTS',
     `Features and benefits: ${
-      keyFeatures || '[extract from links/photos/notes]'
+      keyFeatures || 'Extract from links, photos, notes, and listing data.'
     }`,
     `Differentiators: ${
-      differentiators || '[extract from sources and competitors]'
+      differentiators || 'Extract from sources and competitor references.'
     }`,
-    `Buyer objections: ${objections || '[identify likely objections]'}`,
-    `Other notes: ${rawNotes || '[none]'}`,
+    `Buyer objections: ${objections || 'Identify likely objections.'}`,
+    `Other notes: ${rawNotes || 'None provided.'}`,
     '',
     'SOURCES',
     filledSources.length
@@ -965,13 +1345,17 @@ function buildAPlusPrompt({
       ? uploadedAssets
           .map(
             (asset) =>
-              `- ${asset.fileName} for ${asset.module} / ${asset.slot}; assetId=${asset.assetId}; sha256=${asset.sha256}; storageKey=${asset.storageKey}`
+              `- ${asset.fileName}; source=${asset.source}; description=${
+                asset.description || 'None provided.'
+              }; assetId=${asset.assetId}; sha256=${asset.sha256}; storageKey=${
+                asset.storageKey
+              }`
           )
           .join('\n')
-      : '- No uploaded product/logo images yet. Request raw product photos, polished product photos, lifestyle photos, and transparent logo files.',
+      : '- No uploaded product/logo images yet. Request raw product photos, polished product photos, lifestyle photos, packaging shots, screenshots, and transparent logo files.',
     '',
     'STARTING MODULE STRATEGY',
-    `${activeStrategy.name}: ${activeStrategy.description}`,
+    `${activeStrategy.name}: ${activeStrategy.description}. Treat this as a recommendation, not a user-selected design decision. Choose the best Amazon modules from the product facts and available assets.`,
     modules
       .slice(0, moduleLimit)
       .map(
@@ -993,70 +1377,139 @@ function buildAPlusPrompt({
   ].join('\n');
 }
 
-function DropSlot({
-  slot,
-  onFile,
+function looksLikeMarkdown(text: string): boolean {
+  return /(^|\n)\s*\|.*\|/.test(text) || /(^|\n)\s*[-*+#]\s/.test(text);
+}
+
+function buildCompositePrompt(composite: {
+  prompt: string;
+  textElements: Array<{
+    role: string;
+    text: string;
+    position: string;
+    typography: string;
+  }>;
+}): string {
+  const elementLines = composite.textElements.map(
+    (el, i) =>
+      `${i + 1}. ${el.role}: "${el.text}" — position: ${
+        el.position
+      }; typography: ${el.typography}`
+  );
+  return [
+    composite.prompt,
+    '',
+    'Render the following text elements directly into the image. Use exact strings — no paraphrasing:',
+    ...elementLines,
+    '',
+    'Do not render any text not listed above. Maintain visual hierarchy and balance with the photographic content. Match brand palette and tone.',
+  ].join('\n');
+}
+
+function MarkdownText({
+  text,
+  className,
+  fallbackTag = 'p',
 }: {
-  slot: AssetSlot;
-  onFile: (file: File) => void;
+  text: string;
+  className?: string;
+  fallbackTag?: 'p' | 'div';
 }) {
+  if (!text) return null;
+
+  if (!looksLikeMarkdown(text)) {
+    if (fallbackTag === 'div') {
+      return <div className={className}>{text}</div>;
+    }
+    return <p className={className}>{text}</p>;
+  }
+
   return (
-    <label
-      className="group flex cursor-pointer flex-col gap-3 rounded-md border border-dashed bg-background p-4 transition-colors hover:border-primary/60 hover:bg-primary/5"
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => {
-        event.preventDefault();
-        const file = [...event.dataTransfer.files].find((item) =>
-          item.type.startsWith('image/')
-        );
-        if (file) onFile(file);
-      }}
-    >
-      <input
-        type="file"
-        accept="image/*"
-        className="sr-only"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) onFile(file);
+    <div className={className}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: ({ node: _node, ...props }) => (
+            <div className="my-2 overflow-x-auto">
+              <table className="w-full border-collapse text-xs" {...props} />
+            </div>
+          ),
+          thead: ({ node: _node, ...props }) => (
+            <thead className="bg-muted" {...props} />
+          ),
+          th: ({ node: _node, ...props }) => (
+            <th
+              className="border border-border px-2 py-1.5 text-left font-medium"
+              {...props}
+            />
+          ),
+          td: ({ node: _node, ...props }) => (
+            <td
+              className="border border-border px-2 py-1.5 align-top"
+              {...props}
+            />
+          ),
+          p: ({ node: _node, ...props }) => (
+            <p
+              className="my-1.5 leading-relaxed last:mb-0 first:mt-0"
+              {...props}
+            />
+          ),
+          ul: ({ node: _node, ...props }) => (
+            <ul className="my-1.5 list-disc space-y-1 pl-5" {...props} />
+          ),
+          ol: ({ node: _node, ...props }) => (
+            <ol className="my-1.5 list-decimal space-y-1 pl-5" {...props} />
+          ),
+          h1: ({ node: _node, ...props }) => (
+            <h4 className="mt-2 mb-1 text-sm font-semibold" {...props} />
+          ),
+          h2: ({ node: _node, ...props }) => (
+            <h4 className="mt-2 mb-1 text-sm font-semibold" {...props} />
+          ),
+          h3: ({ node: _node, ...props }) => (
+            <h4 className="mt-2 mb-1 text-sm font-semibold" {...props} />
+          ),
+          code: ({ node: _node, ...props }) => (
+            <code
+              className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]"
+              {...props}
+            />
+          ),
+          strong: ({ node: _node, ...props }) => (
+            <strong className="font-semibold" {...props} />
+          ),
         }}
-      />
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <ImagePlus className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium">{slot.label}</span>
-        </div>
-        <Badge variant="outline" className="shrink-0 text-[11px]">
-          {slot.minSize}
-        </Badge>
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function ModuleCopy({ lines }: { lines: string[] }) {
+  if (lines.length === 0) return null;
+
+  const text = lines.join('\n');
+
+  if (!looksLikeMarkdown(text)) {
+    return (
+      <div className="space-y-2">
+        {lines.map((line) => (
+          <p key={line} className="rounded-md border bg-card px-3 py-2 text-sm">
+            {line}
+          </p>
+        ))}
       </div>
-      <p className="text-xs leading-5 text-muted-foreground">{slot.detail}</p>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {slot.uploadStatus === 'hashing' ||
-        slot.uploadStatus === 'uploading' ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <Upload className="h-3.5 w-3.5" />
-        )}
-        <span className="truncate">
-          {slot.fileName || slot.uploadMessage || 'Choose image'}
-        </span>
-      </div>
-      {slot.uploadMessage && (
-        <p
-          className={cn(
-            'rounded-md border px-2 py-1.5 text-xs leading-5',
-            slot.uploadStatus === 'error'
-              ? 'border-red-200 bg-red-50 text-red-800'
-              : slot.uploadStatus === 'duplicate'
-              ? 'border-sky-200 bg-sky-50 text-sky-800'
-              : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-          )}
-        >
-          {slot.uploadMessage}
-        </p>
-      )}
-    </label>
+    );
+  }
+
+  return (
+    <MarkdownText
+      text={text}
+      className="rounded-md border bg-card px-3 py-2 text-sm"
+      fallbackTag="div"
+    />
   );
 }
 
@@ -1146,36 +1599,42 @@ function ModulePreview({
             </div>
             <p className="text-sm text-muted-foreground">{module.mobile}</p>
           </div>
-          <div className="space-y-2">
-            {module.copy.map((line) => (
-              <p
-                key={line}
-                className="rounded-md border bg-card px-3 py-2 text-sm"
-              >
-                {line}
-              </p>
-            ))}
-          </div>
+          <ModuleCopy lines={module.copy} />
         </div>
         <div className="space-y-3">
           {hasSlots ? (
-            module.imageSlots.map((slot) => (
-              <div key={slot.id} className="rounded-md border bg-card p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <FileImage className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">{slot.label}</span>
+            module.imageSlots.map((slot) => {
+              const previewable =
+                slot.asset?.status === 'uploaded' &&
+                (slot.asset.mimeType?.startsWith('image/') ?? true);
+              return (
+                <div key={slot.id} className="rounded-md border bg-card p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <FileImage className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{slot.label}</span>
+                    </div>
+                    <Badge variant="secondary" className="text-[11px]">
+                      {slot.fileName ? 'Attached' : 'Open'}
+                    </Badge>
                   </div>
-                  <Badge variant="secondary" className="text-[11px]">
-                    {slot.fileName ? 'Attached' : 'Open'}
-                  </Badge>
+                  {previewable && slot.asset ? (
+                    <div className="mt-3 overflow-hidden rounded-md border bg-muted">
+                      <img
+                        src={`/api/a-plus/assets/${slot.asset.assetId}`}
+                        alt={slot.fileName || slot.label}
+                        className="block max-h-48 w-full object-contain"
+                        loading="lazy"
+                      />
+                    </div>
+                  ) : null}
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    {slot.fileName ||
+                      'Reserved image slot for final Amazon upload.'}
+                  </p>
                 </div>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  {slot.fileName ||
-                    'Reserved image slot for final Amazon upload.'}
-                </p>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="rounded-md border bg-card p-4">
               <div className="flex items-center gap-2 text-sm font-medium">
@@ -1195,6 +1654,8 @@ function ModulePreview({
 }
 
 export default function APlusBuilderPage() {
+  const [builderMode, setBuilderMode] = useState<BuilderMode>('simple');
+  const [wizardStep, setWizardStep] = useState<WizardStep>('basics');
   const [productName, setProductName] = useState('');
   const [asin, setAsin] = useState('');
   const [contentTier, setContentTier] = useState<ContentTier>('Basic A+');
@@ -1207,16 +1668,15 @@ export default function APlusBuilderPage() {
   const [brandColors, setBrandColors] = useState('');
   const [logoNotes, setLogoNotes] = useState('');
   const [brandVoice, setBrandVoice] = useState('');
+  const [brandFontNotes, setBrandFontNotes] = useState('');
+  const [brandLogoAssetId, setBrandLogoAssetId] = useState('');
   const [rawNotes, setRawNotes] = useState('');
+  const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('Untitled A+ draft');
   const [brandGuideId, setBrandGuideId] = useState<string | null>(null);
-  const [brandGuideName, setBrandGuideName] = useState('Default brand guide');
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [brandGuides, setBrandGuides] = useState<BrandGuide[]>([]);
-  const [amazonBrands, setAmazonBrands] = useState<AmazonBrand[]>([]);
-  const [amazonBrandsConnected, setAmazonBrandsConnected] = useState(false);
-  const [amazonBrandMessage, setAmazonBrandMessage] = useState('');
   const [saveStatus, setSaveStatus] = useState<
     'idle' | 'loading' | 'saving' | 'saved' | 'error'
   >('idle');
@@ -1227,11 +1687,74 @@ export default function APlusBuilderPage() {
   const [sourceChecks, setSourceChecks] = useState<Record<number, SourceCheck>>(
     {}
   );
+  const [sourceExtractions, setSourceExtractions] = useState<
+    Record<number, SourceExtraction>
+  >({});
   const [modules, setModules] = useState<APlusModule[]>(() =>
     createStrategyModules(defaultStrategyId('Basic A+'), 'Basic A+')
   );
   const [copied, setCopied] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
+  const [generateStatus, setGenerateStatus] = useState<
+    'idle' | 'generating' | 'generated' | 'error'
+  >('idle');
+  const [generateError, setGenerateError] = useState('');
+  const [generationProgress, setGenerationProgress] = useState<{
+    phase?:
+      | 'strategy'
+      | 'package-outer'
+      | 'package-modules'
+      | 'images'
+      | 'finalizing';
+    moduleSpecs?: Array<{
+      order: number;
+      amazonModuleType: string;
+      title: string;
+    }>;
+    moduleStatus?: Record<number, 'pending' | 'done' | 'failed'>;
+    startedAt?: number;
+    elapsedMs?: number;
+  }>({});
+  const [generatedPackage, setGeneratedPackage] =
+    useState<GeneratedAPlusResponse | null>(null);
+  const [imageJobResults, setImageJobResults] = useState<
+    Record<
+      string,
+      | { status: 'generating' }
+      | {
+          status: 'done';
+          url: string;
+          revisedPrompt?: string;
+          assetId?: string;
+          persistError?: string;
+        }
+      | { status: 'error'; message: string }
+    >
+  >({});
+  const [copiedLayersFor, setCopiedLayersFor] = useState<number | null>(null);
+  const [loadedFonts, setLoadedFonts] = useState<Record<string, boolean>>({});
+  const selectedBrandGuide =
+    brandGuides.find((guide) => guide.brandGuideId === brandGuideId) || null;
+
+  const brandGuideFontsToPreview = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            selectedBrandGuide?.fonts?.primary,
+            selectedBrandGuide?.fonts?.secondary,
+            selectedBrandGuide?.fonts?.accent,
+          ]
+            .map((font) => normalizeFontName(font))
+            .filter(Boolean)
+        )
+      ),
+    [
+      selectedBrandGuide?.fonts?.accent,
+      selectedBrandGuide?.fonts?.primary,
+      selectedBrandGuide?.fonts?.secondary,
+    ]
+  );
 
   const activeStrategy =
     strategiesForTier(contentTier).find(
@@ -1242,18 +1765,20 @@ export default function APlusBuilderPage() {
   const availableStrategies = strategiesForTier(contentTier);
   const availableModules = modulesForTier(contentTier);
 
-  const assetCount = modules.reduce(
-    (count, module) =>
-      count + module.imageSlots.filter((slot) => slot.fileName).length,
-    0
-  );
-  const slotCount = modules.reduce(
-    (count, module) => count + module.imageSlots.length,
-    0
-  );
+  const libraryAssetCount = assetLibrary.filter(
+    (item) =>
+      item.uploadStatus === 'uploaded' || item.uploadStatus === 'duplicate'
+  ).length;
+  const productListingSource =
+    sources.find((source) => source.kind === 'Product listing') || sources[0];
+  const productListingExtraction = productListingSource
+    ? sourceExtractions[productListingSource.id]
+    : undefined;
 
   const currentDraftPayload = useMemo<DraftPayload>(
     () => ({
+      builderMode,
+      wizardStep,
       productName,
       asin,
       contentTier,
@@ -1266,19 +1791,26 @@ export default function APlusBuilderPage() {
       brandColors,
       logoNotes,
       brandVoice,
+      brandFontNotes,
+      brandLogoAssetId,
       rawNotes,
       strategyId,
       sources,
+      assets: assetLibrary,
       modules,
     }),
     [
       asin,
       brandColors,
+      brandFontNotes,
       brandVoice,
+      builderMode,
       contentTier,
       differentiators,
       keyFeatures,
       logoNotes,
+      brandLogoAssetId,
+      assetLibrary,
       modules,
       objections,
       pricePoint,
@@ -1288,6 +1820,7 @@ export default function APlusBuilderPage() {
       sources,
       strategyId,
       targetCustomer,
+      wizardStep,
     ]
   );
 
@@ -1306,21 +1839,28 @@ export default function APlusBuilderPage() {
         differentiators,
         objections,
         brandColors,
+        brandFontNotes,
         logoNotes,
+        brandLogoAssetId,
+        selectedBrandGuide,
         activeStrategy,
         sources,
         sourceChecks,
+        assets: assetLibrary,
         modules,
       }),
     [
       activeStrategy,
       asin,
       brandColors,
+      brandFontNotes,
       brandVoice,
       contentTier,
       differentiators,
       keyFeatures,
       logoNotes,
+      brandLogoAssetId,
+      assetLibrary,
       modules,
       objections,
       pricePoint,
@@ -1345,6 +1885,15 @@ export default function APlusBuilderPage() {
         sourceLinks: sources.filter((source) => source.url.trim()),
         brandVoice,
         rawNotes,
+        uploadedAssets: assetLibrary.map((item) => ({
+          id: item.id,
+          fileName: item.fileName,
+          description: item.description,
+          assetId: item.asset?.assetId || null,
+          sha256: item.asset?.hashes.sha256 || null,
+          storage: item.asset?.storage || null,
+          status: item.uploadStatus,
+        })),
         contentModuleList: modules.map((module) => ({
           id: module.id,
           tier: module.tier,
@@ -1368,6 +1917,25 @@ export default function APlusBuilderPage() {
         apiPossible: true,
         aiPrompt,
         promptRules: APLUS_PROMPT_RULES,
+        brandGuide: selectedBrandGuide
+          ? {
+              brandGuideId: selectedBrandGuide.brandGuideId,
+              name: selectedBrandGuide.name,
+              brandName: selectedBrandGuide.brandName || null,
+              palette: selectedBrandGuide.palette || null,
+              fonts: selectedBrandGuide.fonts || null,
+              voice: selectedBrandGuide.voice || null,
+              logoAsset: selectedBrandGuide.logoAsset
+                ? {
+                    assetId: selectedBrandGuide.logoAsset.assetId,
+                    fileName: selectedBrandGuide.logoAsset.originalFileName,
+                    mimeType: selectedBrandGuide.logoAsset.mimeType,
+                    storage: selectedBrandGuide.logoAsset.storage,
+                  }
+                : null,
+              logoNotes: selectedBrandGuide.logoNotes || null,
+            }
+          : null,
         discoveryInputs: {
           productOneLiner,
           targetCustomer,
@@ -1376,7 +1944,9 @@ export default function APlusBuilderPage() {
           differentiators,
           objections,
           brandColors,
+          brandFontNotes,
           logoNotes,
+          brandLogoAssetId,
         },
         nextApiSteps: [
           'Create upload destinations for final images with the Uploads API.',
@@ -1392,17 +1962,21 @@ export default function APlusBuilderPage() {
       asin,
       aiPrompt,
       brandColors,
+      brandFontNotes,
       brandVoice,
       contentTier,
       differentiators,
       keyFeatures,
       logoNotes,
+      brandLogoAssetId,
+      assetLibrary,
       modules,
       objections,
       pricePoint,
       productName,
       productOneLiner,
       rawNotes,
+      selectedBrandGuide,
       sources,
       targetCustomer,
     ]
@@ -1447,77 +2021,89 @@ export default function APlusBuilderPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    if (generateStatus !== 'generating' || !generationProgress.startedAt) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setGenerationProgress((p) =>
+        p.startedAt ? { ...p, elapsedMs: Date.now() - p.startedAt } : p
+      );
+    }, 500);
+    return () => clearInterval(interval);
+  }, [generateStatus, generationProgress.startedAt]);
 
-    async function loadAmazonBrands() {
-      try {
-        const response = await fetch('/api/a-plus/amazon-brands');
-        const body = (await response.json()) as {
-          connected?: boolean;
-          brands?: AmazonBrand[];
-          message?: string;
-          error?: string;
-        };
-        if (cancelled) return;
-        setAmazonBrandsConnected(Boolean(body.connected));
-        setAmazonBrands(body.brands || []);
-        setAmazonBrandMessage(body.error || body.message || '');
-      } catch {
-        if (!cancelled) {
-          setAmazonBrandsConnected(false);
-          setAmazonBrands([]);
-          setAmazonBrandMessage('Could not query Amazon brands.');
-        }
-      }
+  useEffect(() => {
+    if (typeof document === 'undefined' || !brandGuideFontsToPreview.length) {
+      return;
     }
 
-    void loadAmazonBrands();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    brandGuideFontsToPreview.forEach((fontName) => {
+      if (fontName in loadedFonts) return;
 
-  function updateSlot(
-    moduleId: string,
-    slotId: string,
-    patch: Partial<AssetSlot>
+      const href = googleFontHref(fontName);
+      if (!href) return;
+
+      const existing = document.querySelector<HTMLLinkElement>(
+        `link[data-sellavant-a-plus-font="${fontName}"]`
+      );
+
+      if (!existing) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.dataset.sellavantAPlusFont = fontName;
+        document.head.appendChild(link);
+      }
+
+      void document.fonts
+        .load(`16px "${fontName}"`)
+        .then(() => {
+          setLoadedFonts((current) => ({ ...current, [fontName]: true }));
+        })
+        .catch(() => {
+          setLoadedFonts((current) => ({ ...current, [fontName]: false }));
+        });
+    });
+  }, [brandGuideFontsToPreview, loadedFonts]);
+
+  function updateAssetLibraryItem(
+    itemId: string,
+    patch: Partial<AssetLibraryItem>
   ) {
-    setModules((current) =>
-      current.map((module) =>
-        module.id === moduleId
-          ? {
-              ...module,
-              status: module.imageSlots.every(
-                (slot) =>
-                  slot.id === slotId ||
-                  slot.asset ||
-                  slot.uploadStatus === 'uploaded' ||
-                  slot.uploadStatus === 'duplicate'
-              )
-                ? 'needs-review'
-                : module.status,
-              imageSlots: module.imageSlots.map((slot) =>
-                slot.id === slotId ? { ...slot, ...patch } : slot
-              ),
-            }
-          : module
-      )
+    setAssetLibrary((current) =>
+      current.map((item) => (item.id === itemId ? { ...item, ...patch } : item))
     );
   }
 
-  async function uploadSlotAsset(moduleId: string, slotId: string, file: File) {
-    try {
-      updateSlot(moduleId, slotId, {
+  function removeAssetLibraryItem(itemId: string) {
+    setAssetLibrary((current) => current.filter((item) => item.id !== itemId));
+  }
+
+  async function uploadLibraryAsset(file: File) {
+    const itemId = `${Date.now()}-${file.name}`;
+    setAssetLibrary((current) => [
+      ...current,
+      {
+        id: itemId,
         fileName: file.name,
+        description: '',
+        file,
         uploadStatus: 'hashing',
         uploadMessage: 'Fingerprinting image...',
-      });
+      },
+    ]);
 
+    await uploadLibraryAssetById(itemId, file);
+  }
+
+  async function uploadLibraryAssetById(itemId: string, file: File) {
+    try {
       const sha256 = await sha256File(file);
-
-      updateSlot(moduleId, slotId, {
+      updateAssetLibraryItem(itemId, {
         uploadStatus: 'uploading',
         uploadMessage: 'Checking for duplicates...',
+        uploadAction: undefined,
+        uploadErrorCode: undefined,
       });
 
       const preflightResponse = await fetch('/api/a-plus/assets/preflight', {
@@ -1533,6 +2119,8 @@ export default function APlusBuilderPage() {
 
       const preflight = (await preflightResponse.json()) as {
         error?: string;
+        action?: string;
+        code?: string;
         duplicate?: boolean;
         asset?: UploadedAsset;
         upload?: {
@@ -1543,14 +2131,24 @@ export default function APlusBuilderPage() {
       };
 
       if (!preflightResponse.ok || preflight.error || !preflight.asset) {
-        throw new Error(preflight.error || 'Asset preflight failed.');
+        throw new Error(
+          [
+            preflight.error || 'Asset preflight failed.',
+            preflight.action || '',
+            preflight.code ? `code:${preflight.code}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        );
       }
 
       if (preflight.duplicate) {
-        updateSlot(moduleId, slotId, {
+        updateAssetLibraryItem(itemId, {
           asset: preflight.asset,
           uploadStatus: 'duplicate',
           uploadMessage: 'Duplicate found. Reusing existing uploaded asset.',
+          uploadAction: undefined,
+          uploadErrorCode: undefined,
         });
         return;
       }
@@ -1559,9 +2157,11 @@ export default function APlusBuilderPage() {
         throw new Error('Upload instructions were not returned.');
       }
 
-      updateSlot(moduleId, slotId, {
+      updateAssetLibraryItem(itemId, {
         uploadStatus: 'uploading',
         uploadMessage: 'Uploading image to S3...',
+        uploadAction: undefined,
+        uploadErrorCode: undefined,
       });
 
       const uploadResponse = await fetch(preflight.upload.url, {
@@ -1588,18 +2188,32 @@ export default function APlusBuilderPage() {
         throw new Error(confirmed.error || 'Asset confirmation failed.');
       }
 
-      updateSlot(moduleId, slotId, {
+      updateAssetLibraryItem(itemId, {
         asset: confirmed.asset,
         uploadStatus: 'uploaded',
         uploadMessage: 'Uploaded and fingerprinted.',
+        uploadAction: undefined,
+        uploadErrorCode: undefined,
       });
     } catch (error) {
-      updateSlot(moduleId, slotId, {
+      const rawMessage =
+        error instanceof Error ? error.message : 'Image upload failed.';
+      const [message, action, codeLine] = rawMessage.split('\n');
+      updateAssetLibraryItem(itemId, {
         uploadStatus: 'error',
-        uploadMessage:
-          error instanceof Error ? error.message : 'Image upload failed.',
+        uploadMessage: message || 'Image upload failed.',
+        uploadAction: action || undefined,
+        uploadErrorCode: codeLine?.startsWith('code:')
+          ? codeLine.replace('code:', '')
+          : undefined,
       });
     }
+  }
+
+  function uploadLibraryFiles(fileList: FileList | File[]) {
+    [...fileList]
+      .filter((file) => file.type.startsWith('image/'))
+      .forEach((file) => void uploadLibraryAsset(file));
   }
 
   function applyStrategy(nextStrategyId: string) {
@@ -1688,12 +2302,174 @@ export default function APlusBuilderPage() {
     }
   }
 
+  function mergeSourceFacts(
+    source: SourceLink,
+    facts: SourceExtraction['facts'],
+    options: { overwrite?: boolean } = {}
+  ) {
+    if (!facts) return;
+    const overwrite = options.overwrite === true;
+
+    const isProductListing = source.kind === 'Product listing';
+    if (isProductListing) {
+      if ((!productName.trim() || overwrite) && facts.productName) {
+        setProductName(facts.productName);
+      }
+      if ((!asin.trim() || overwrite) && facts.asin) {
+        setAsin(facts.asin);
+      }
+    }
+
+    if ((!productOneLiner.trim() || overwrite) && facts.oneLiner) {
+      setProductOneLiner(facts.oneLiner);
+    }
+    if ((!pricePoint.trim() || overwrite) && facts.pricePoint) {
+      setPricePoint(facts.pricePoint);
+    }
+    if ((!keyFeatures.trim() || overwrite) && facts.features.length) {
+      setKeyFeatures(facts.features.join('\n'));
+    }
+    if (
+      (!differentiators.trim() || overwrite) &&
+      facts.differentiators.length
+    ) {
+      setDifferentiators(facts.differentiators.join('\n'));
+    }
+
+    const evidence = facts.evidence.length
+      ? facts.evidence
+      : ([
+          facts.productName ? `Product: ${facts.productName}` : null,
+          facts.oneLiner ? `Summary: ${facts.oneLiner}` : null,
+          ...facts.features.map((feature) => `Feature: ${feature}`),
+        ].filter(Boolean) as string[]);
+
+    const displayUrl = facts.finalUrl || source.url;
+    setRawNotes((current) =>
+      appendUniqueText(
+        current,
+        `Source facts from ${source.kind}: ${displayUrl}`,
+        evidence
+      )
+    );
+  }
+
+  function sourceOverwriteCandidateCount(
+    source: SourceLink,
+    facts: SourceExtraction['facts']
+  ) {
+    if (!facts) return 0;
+    let count = 0;
+    const isProductListing = source.kind === 'Product listing';
+
+    if (isProductListing && productName.trim() && facts.productName) count += 1;
+    if (isProductListing && asin.trim() && facts.asin) count += 1;
+    if (productOneLiner.trim() && facts.oneLiner) count += 1;
+    if (pricePoint.trim() && facts.pricePoint) count += 1;
+    if (keyFeatures.trim() && facts.features.length) count += 1;
+    if (differentiators.trim() && facts.differentiators.length) count += 1;
+
+    return count;
+  }
+
+  function applyExtractedSourceFacts(source: SourceLink, overwrite = false) {
+    const facts = sourceExtractions[source.id]?.facts;
+    if (!facts) return;
+    mergeSourceFacts(source, facts, { overwrite });
+    setSourceExtractions((current) => ({
+      ...current,
+      [source.id]: {
+        ...current[source.id],
+        status: facts.warnings.length ? 'warning' : 'extracted',
+        message: overwrite
+          ? 'Extracted facts applied, including filled fields.'
+          : 'Extracted facts applied to blank fields.',
+        facts,
+      },
+    }));
+  }
+
+  async function extractSource(source: SourceLink) {
+    const trimmedUrl = source.url.trim();
+    if (!trimmedUrl) return;
+
+    setSourceExtractions((current) => ({
+      ...current,
+      [source.id]: {
+        status: 'extracting',
+        message: 'Reading page and extracting product facts...',
+      },
+    }));
+
+    try {
+      const response = await fetch('/api/a-plus/source-extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmedUrl }),
+      });
+      const body = (await response.json()) as {
+        facts?: SourceExtraction['facts'];
+        error?: string;
+        httpStatus?: number;
+        cacheHit?: boolean;
+      };
+
+      if (!response.ok || body.error || !body.facts) {
+        setSourceExtractions((current) => ({
+          ...current,
+          [source.id]: {
+            status:
+              body.httpStatus === 401 || body.httpStatus === 403
+                ? 'warning'
+                : 'error',
+            message: body.error || 'Could not extract product facts.',
+          },
+        }));
+        return;
+      }
+
+      mergeSourceFacts(source, body.facts);
+      const overwriteCount = sourceOverwriteCandidateCount(source, body.facts);
+      setSourceExtractions((current) => ({
+        ...current,
+        [source.id]: {
+          status: body.facts?.warnings.length ? 'warning' : 'extracted',
+          message:
+            overwriteCount > 0
+              ? `Product facts extracted. ${overwriteCount} filled field${
+                  overwriteCount === 1 ? '' : 's'
+                } can be overwritten if you approve.`
+              : body.facts?.warnings.length
+              ? body.facts.warnings.join(' ')
+              : body.cacheHit
+              ? 'Product facts loaded from cache.'
+              : 'Product facts extracted and merged into blank fields.',
+          cacheHit: body.cacheHit,
+          facts: body.facts,
+        },
+      }));
+    } catch {
+      setSourceExtractions((current) => ({
+        ...current,
+        [source.id]: {
+          status: 'error',
+          message: 'Could not extract product facts from this source.',
+        },
+      }));
+    }
+  }
+
+  function inspectSource(source: SourceLink) {
+    void checkSource(source);
+    void extractSource(source);
+  }
+
   function addDroppedSource(url: string) {
     const emptySource = sources.find((source) => !source.url.trim());
     if (emptySource) {
       const nextSource = { ...emptySource, url };
       updateSource(emptySource.id, { url });
-      void checkSource(nextSource);
+      inspectSource(nextSource);
       return;
     }
 
@@ -1703,7 +2479,7 @@ export default function APlusBuilderPage() {
       url,
     };
     setSources((current) => [...current, nextSource]);
-    void checkSource(nextSource);
+    inspectSource(nextSource);
   }
 
   async function copyPackage() {
@@ -1718,7 +2494,281 @@ export default function APlusBuilderPage() {
     setTimeout(() => setPromptCopied(false), 2000);
   }
 
+  function findUploadedAssetByFilename(fileName: string) {
+    const normalized = fileName.trim().toLowerCase();
+    if (!normalized) return null;
+    const match = assetLibrary.find((item) => {
+      const candidates = [
+        item.fileName?.toLowerCase(),
+        item.asset?.originalFileName?.toLowerCase(),
+      ].filter(Boolean) as string[];
+      return candidates.includes(normalized);
+    });
+    if (!match || match.asset?.status !== 'uploaded') return null;
+    if (!match.asset.mimeType.startsWith('image/')) return null;
+    return match.asset;
+  }
+
+  async function copyModuleLayers(
+    moduleOrder: number,
+    layers: Array<{ layer: string; content: string; notes?: string }>
+  ) {
+    const text = layers
+      .map((layer) =>
+        layer.notes
+          ? `${layer.layer}\n${layer.content}\n(${layer.notes})`
+          : `${layer.layer}\n${layer.content}`
+      )
+      .join('\n\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedLayersFor(moduleOrder);
+      setTimeout(
+        () =>
+          setCopiedLayersFor((current) =>
+            current === moduleOrder ? null : current
+          ),
+        2000
+      );
+    } catch {
+      // Clipboard write may be blocked; ignore silently.
+    }
+  }
+
+  async function generateImageForJob(
+    jobId: string,
+    prompt: string,
+    size: string
+  ) {
+    setImageJobResults((current) => ({
+      ...current,
+      [jobId]: { status: 'generating' },
+    }));
+    try {
+      const response = await fetch('/api/a-plus/image-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, size }),
+      });
+      const body = (await response.json()) as {
+        url?: string;
+        revisedPrompt?: string;
+        error?: string;
+        persistError?: string;
+        asset?: {
+          assetId: string;
+          originalFileName: string;
+          mimeType: string;
+          sizeBytes: number;
+          status: 'pending_upload' | 'uploaded' | 'duplicate';
+          storage: { provider: 's3'; bucket: string; key: string };
+        };
+      };
+      if (!response.ok || !body.url) {
+        setImageJobResults((current) => ({
+          ...current,
+          [jobId]: {
+            status: 'error',
+            message: body.error || 'Image generation failed.',
+          },
+        }));
+        return;
+      }
+      setImageJobResults((current) => ({
+        ...current,
+        [jobId]: {
+          status: 'done',
+          url: body.url!,
+          revisedPrompt: body.revisedPrompt,
+          assetId: body.asset?.assetId,
+          persistError: body.persistError,
+        },
+      }));
+      if (body.asset) {
+        const newItem: AssetLibraryItem = {
+          id: body.asset.assetId,
+          fileName: body.asset.originalFileName,
+          description: `Generated for image brief ${jobId}`,
+          asset: {
+            assetId: body.asset.assetId,
+            createdForFeature: 'a-plus',
+            originalFileName: body.asset.originalFileName,
+            mimeType: body.asset.mimeType,
+            sizeBytes: body.asset.sizeBytes,
+            hashes: { sha256: '' },
+            status: body.asset.status,
+            storage: body.asset.storage,
+          },
+          uploadStatus:
+            body.asset.status === 'duplicate' ? 'duplicate' : 'uploaded',
+        };
+        setAssetLibrary((current) =>
+          current.some((entry) => entry.asset?.assetId === body.asset!.assetId)
+            ? current
+            : [...current, newItem]
+        );
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Image generation failed.';
+      setImageJobResults((current) => ({
+        ...current,
+        [jobId]: { status: 'error', message },
+      }));
+    }
+  }
+
+  async function generateAPlusPackage() {
+    setGenerateStatus('generating');
+    setGenerateError('');
+    setGenerationProgress({ startedAt: Date.now(), phase: 'strategy' });
+
+    try {
+      const response = await fetch('/api/a-plus/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productName,
+          asin,
+          contentTier,
+          rawNotes,
+          productOneLiner,
+          targetCustomer,
+          pricePoint,
+          keyFeatures,
+          differentiators,
+          objections,
+          brand: {
+            name: selectedBrandGuide?.name,
+            brandName: selectedBrandGuide?.brandName,
+            colors: brandColors,
+            fonts: brandFontNotes,
+            voice: brandVoice,
+            logoNotes,
+            logoAssetId: brandLogoAssetId,
+          },
+          sources,
+          assets: assetLibrary,
+        }),
+      });
+
+      if (
+        !response.ok &&
+        response.headers.get('content-type')?.includes('application/json')
+      ) {
+        const body = (await response.json()) as { error?: string };
+        throw new Error(body.error || 'Could not generate the A+ package.');
+      }
+      if (!response.body) {
+        throw new Error('No response stream received.');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalPayload: GeneratedAPlusResponse | null = null;
+      let serverError: string | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          switch (event['type']) {
+            case 'phase':
+              setGenerationProgress((p) => ({
+                ...p,
+                phase: event['phase'] as typeof p.phase,
+                ...(event['phase'] === 'package-modules'
+                  ? { moduleStatus: p.moduleStatus ?? {} }
+                  : {}),
+              }));
+              break;
+            case 'phase-done':
+              if (event['phase'] === 'package-outer') {
+                const specs = event['moduleSpecs'] as Array<{
+                  order: number;
+                  amazonModuleType: string;
+                  title: string;
+                }>;
+                const initialStatus: Record<
+                  number,
+                  'pending' | 'done' | 'failed'
+                > = {};
+                for (const s of specs) initialStatus[s.order] = 'pending';
+                setGenerationProgress((p) => ({
+                  ...p,
+                  moduleSpecs: specs,
+                  moduleStatus: initialStatus,
+                }));
+              }
+              break;
+            case 'module-done':
+              setGenerationProgress((p) => ({
+                ...p,
+                moduleStatus: {
+                  ...(p.moduleStatus ?? {}),
+                  [event['order'] as number]: 'done',
+                },
+              }));
+              break;
+            case 'module-failed':
+              setGenerationProgress((p) => ({
+                ...p,
+                moduleStatus: {
+                  ...(p.moduleStatus ?? {}),
+                  [event['order'] as number]: 'failed',
+                },
+              }));
+              break;
+            case 'final':
+              setGenerationProgress((p) => ({ ...p, phase: 'finalizing' }));
+              finalPayload = event['payload'] as GeneratedAPlusResponse;
+              break;
+            case 'error':
+              serverError =
+                (event['message'] as string) || 'Generation failed.';
+              break;
+          }
+        }
+      }
+
+      if (serverError) {
+        throw new Error(serverError);
+      }
+      if (!finalPayload) {
+        throw new Error('Generation finished without producing a package.');
+      }
+
+      setGeneratedPackage(finalPayload);
+      setGenerateStatus('generated');
+      setGenerationProgress({});
+    } catch (error) {
+      setGenerateStatus('error');
+      setGenerateError(
+        error instanceof Error
+          ? error.message
+          : 'Could not generate the A+ package.'
+      );
+      setGenerationProgress({});
+    }
+  }
+
   function hydrateDraft(payload: DraftPayload) {
+    if (payload.builderMode) setBuilderMode(payload.builderMode);
+    if (payload.wizardStep) setWizardStep(payload.wizardStep);
     if (payload.productName !== undefined) setProductName(payload.productName);
     if (payload.asin !== undefined) setAsin(payload.asin);
     if (payload.contentTier) setContentTier(payload.contentTier);
@@ -1734,7 +2784,12 @@ export default function APlusBuilderPage() {
     if (payload.brandColors !== undefined) setBrandColors(payload.brandColors);
     if (payload.logoNotes !== undefined) setLogoNotes(payload.logoNotes);
     if (payload.brandVoice !== undefined) setBrandVoice(payload.brandVoice);
+    if (payload.brandFontNotes !== undefined)
+      setBrandFontNotes(payload.brandFontNotes);
+    if (payload.brandLogoAssetId !== undefined)
+      setBrandLogoAssetId(payload.brandLogoAssetId);
     if (payload.rawNotes !== undefined) setRawNotes(payload.rawNotes);
+    if (payload.assets?.length) setAssetLibrary(payload.assets);
     if (payload.strategyId) setStrategyId(payload.strategyId);
     if (payload.sources?.length) setSources(payload.sources);
     if (payload.modules?.length) setModules(payload.modules);
@@ -1758,7 +2813,11 @@ export default function APlusBuilderPage() {
       setDraftId(body.draft.draftId);
       setDraftName(body.draft.name);
       setBrandGuideId(body.draft.brandGuideId || null);
-      hydrateDraft(body.draft.payload || {});
+      const guide =
+        brandGuides.find(
+          (item) => item.brandGuideId === body.draft?.brandGuideId
+        ) || null;
+      hydrateDraft(mergeGuideIntoDraftPayload(body.draft.payload || {}, guide));
       setSaveStatus('idle');
     } catch {
       setSaveStatus('error');
@@ -1770,6 +2829,8 @@ export default function APlusBuilderPage() {
     const nextStrategyId = defaultStrategyId(nextTier);
     setDraftId(null);
     setDraftName('Untitled A+ draft');
+    setBuilderMode('simple');
+    setWizardStep('basics');
     setProductName('');
     setAsin('');
     setContentTier(nextTier);
@@ -1779,54 +2840,29 @@ export default function APlusBuilderPage() {
     setKeyFeatures('');
     setDifferentiators('');
     setObjections('');
+    setBrandColors('');
+    setLogoNotes('');
+    setBrandVoice('');
+    setBrandFontNotes('');
+    setBrandLogoAssetId('');
+    setBrandGuideId(null);
     setRawNotes('');
+    setAssetLibrary([]);
     setStrategyId(nextStrategyId);
     setSources(DEFAULT_SOURCES);
     setSourceChecks({});
     setModules(createStrategyModules(nextStrategyId, nextTier));
   }
 
-  async function saveBrandGuide() {
-    const response = await fetch('/api/a-plus/brand-guides', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        brandGuideId,
-        name: brandGuideName,
-        brandName: brandGuideName,
-        colors: brandColors,
-        voice: brandVoice,
-        logoNotes,
-      }),
-    });
-    const body = (await response.json()) as {
-      brandGuide?: BrandGuide;
-      error?: string;
-    };
-    if (!response.ok || body.error || !body.brandGuide) {
-      throw new Error(body.error || 'Could not save brand guide.');
-    }
-    setBrandGuideId(body.brandGuide.brandGuideId);
-    setBrandGuideName(body.brandGuide.name);
-    setBrandGuides((current) => [
-      body.brandGuide as BrandGuide,
-      ...current.filter(
-        (guide) => guide.brandGuideId !== body.brandGuide?.brandGuideId
-      ),
-    ]);
-    return body.brandGuide;
-  }
-
   async function saveDraft() {
     setSaveStatus('saving');
     try {
-      const guide = await saveBrandGuide();
       const response = await fetch('/api/a-plus/drafts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           draftId,
-          brandGuideId: guide.brandGuideId,
+          brandGuideId,
           name: draftName,
           productName,
           asin,
@@ -1856,47 +2892,1870 @@ export default function APlusBuilderPage() {
   }
 
   function applyBrandGuide(nextBrandGuideId: string) {
+    if (!nextBrandGuideId) {
+      setBrandGuideId(null);
+      return;
+    }
+
     const guide = brandGuides.find(
       (item) => item.brandGuideId === nextBrandGuideId
     );
     if (!guide) return;
     setBrandGuideId(guide.brandGuideId);
-    setBrandGuideName(guide.name);
-    setBrandColors(guide.colors || '');
+    setBrandColors(summarizeBrandGuideColors(guide));
     setBrandVoice(guide.voice || '');
-    setLogoNotes(guide.logoNotes || '');
+    setLogoNotes(summarizeBrandGuideLogoNotes(guide));
+    setBrandFontNotes(summarizeBrandGuideFonts(guide));
+    setBrandLogoAssetId(guide.logoAsset?.assetId || '');
   }
 
-  function amazonBrandKey(brand: AmazonBrand) {
-    const profile = brand.profiles[0];
-    return `${brand.name}::${profile?.profileName || ''}::${
-      profile?.marketplaceId || ''
-    }`;
+  const activeWizardIndex = SIMPLE_WIZARD_STEPS.findIndex(
+    (step) => step.id === wizardStep
+  );
+  const currentWizardStep =
+    SIMPLE_WIZARD_STEPS[activeWizardIndex] || SIMPLE_WIZARD_STEPS[0];
+  function goToWizardStep(step: WizardStep) {
+    setWizardStep(step);
   }
 
-  function amazonBrandLabel(brand: AmazonBrand) {
-    const profile = brand.profiles[0];
-    const context = [
-      brand.source === 'ads' ? 'Ads' : 'SP',
-      profile?.profileName,
-      profile?.marketplaceId,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-    return `${brand.name}${context ? ` · ${context}` : ''}`;
-  }
-
-  function applyAmazonBrand(brandKey: string) {
-    const brand = amazonBrands.find(
-      (item) => amazonBrandKey(item) === brandKey
+  function moveWizardStep(direction: -1 | 1) {
+    const nextIndex = Math.min(
+      SIMPLE_WIZARD_STEPS.length - 1,
+      Math.max(0, activeWizardIndex + direction)
     );
-    if (!brand) return;
-    setBrandGuideId(null);
-    setBrandGuideName(brand.name);
-    if (!productName && brand.sampleProducts[0]) {
-      setProductName(brand.sampleProducts[0]);
-    }
+    setWizardStep(SIMPLE_WIZARD_STEPS[nextIndex]?.id || 'basics');
   }
+
+  const draftWorkspaceCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FileText className="h-4 w-4 text-primary" />
+          Draft
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <select
+            value={draftId || ''}
+            onChange={(event) => void loadDraft(event.target.value)}
+            className={COMPACT_SELECT_CLASSNAME}
+          >
+            <option value="">Current unsaved draft</option>
+            {drafts.map((draft) => (
+              <option key={draft.draftId} value={draft.draftId}>
+                {draft.name}
+              </option>
+            ))}
+          </select>
+          <Button type="button" variant="outline" onClick={newDraft}>
+            New
+          </Button>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="draft-name">Draft name</Label>
+          <Input
+            id="draft-name"
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            placeholder="Spring launch A+"
+            className={FIELD_CLASSNAME}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="brand-guide">Brand guide</Label>
+          <select
+            id="brand-guide"
+            value={brandGuideId || ''}
+            onChange={(event) => applyBrandGuide(event.target.value)}
+            className={SELECT_CLASSNAME}
+          >
+            <option value="">No guide selected</option>
+            {brandGuides.map((guide) => (
+              <option key={guide.brandGuideId} value={guide.brandGuideId}>
+                {guide.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs leading-5 text-muted-foreground">
+            Advanced workspace control for reusing a saved brand style.
+          </p>
+        </div>
+        <Button asChild type="button" variant="outline" className="w-full">
+          <Link href="/brand-guides">Manage brand guides</Link>
+        </Button>
+        <Button
+          type="button"
+          className="w-full"
+          disabled={saveStatus === 'saving' || saveStatus === 'loading'}
+          onClick={() => void saveDraft()}
+        >
+          {saveStatus === 'saving' || saveStatus === 'loading' ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <Clipboard className="mr-2 h-4 w-4" />
+          )}
+          {saveStatus === 'saved'
+            ? 'Saved'
+            : saveStatus === 'error'
+            ? 'Retry save'
+            : 'Save draft'}
+        </Button>
+        <p className="text-xs leading-5 text-muted-foreground">
+          Drafts are saved per user and can share reusable brand guides across
+          multiple products.
+        </p>
+      </CardContent>
+    </Card>
+  );
+
+  const brandGuideWizardCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FileText className="h-4 w-4 text-primary" />
+          Brand style
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="wizard-brand-guide">Brand guide</Label>
+          <select
+            id="wizard-brand-guide"
+            value={brandGuideId || ''}
+            onChange={(event) => applyBrandGuide(event.target.value)}
+            className={SELECT_CLASSNAME}
+          >
+            <option value="">Create or choose a brand guide</option>
+            {brandGuides.map((guide) => (
+              <option key={guide.brandGuideId} value={guide.brandGuideId}>
+                {guide.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {selectedBrandGuide ? (
+          <div className="rounded-md border bg-muted/40 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">{selectedBrandGuide.name}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  This guide is actively filling the draft brief and generation
+                  prompt with saved brand defaults.
+                </p>
+              </div>
+              <Badge variant="outline" className="shrink-0">
+                Applied
+              </Badge>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-md border bg-background p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Colors
+                </p>
+                <div className="mt-3 grid gap-2">
+                  {getBrandGuidePaletteEntries(selectedBrandGuide).length ? (
+                    getBrandGuidePaletteEntries(selectedBrandGuide).map(
+                      (entry) => (
+                        <div
+                          key={entry.label}
+                          className="rounded-md border p-2"
+                          style={{ backgroundColor: entry.color }}
+                        >
+                          <p
+                            className="text-xs font-medium"
+                            style={{ color: entry.textColor }}
+                          >
+                            {entry.label}
+                          </p>
+                        </div>
+                      )
+                    )
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No saved colors yet
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-md border bg-background p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Fonts
+                </p>
+                <div className="mt-3 space-y-2">
+                  {getBrandGuideFontEntries(selectedBrandGuide).length ? (
+                    getBrandGuideFontEntries(selectedBrandGuide).map(
+                      (entry) => (
+                        <div
+                          key={entry.label}
+                          className="rounded-md border bg-muted/20 p-2"
+                        >
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            {entry.label}
+                          </p>
+                          <p
+                            className="mt-1 text-base"
+                            style={fontPreviewStyle(entry.name)}
+                          >
+                            {entry.sample}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {entry.name}
+                          </p>
+                        </div>
+                      )
+                    )
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No saved fonts yet
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-md border bg-background p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Voice
+                </p>
+                <p className="mt-2 text-sm">
+                  {selectedBrandGuide.voice || 'No saved voice notes yet'}
+                </p>
+              </div>
+              <div className="rounded-md border bg-background p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Logo
+                </p>
+                <p className="mt-2 text-sm">
+                  {selectedBrandGuide.logoAsset?.originalFileName ||
+                    selectedBrandGuide.logoNotes ||
+                    'No saved logo asset yet'}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed bg-muted/40 p-4">
+            <p className="text-sm font-medium">No brand guide selected yet</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Create one now if you want the AI to stay aligned on colors, logo
+              handling, and tone. You can also keep going and fill this in
+              later.
+            </p>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button asChild type="button" variant="outline">
+            <Link href="/brand-guides">Create or edit brand guides</Link>
+          </Button>
+          <p className="text-xs leading-5 text-muted-foreground">
+            Choose one here when it exists, or create it in a separate flow and
+            come back.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  const strategyCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Layers3 className="h-4 w-4 text-primary" />
+          Module Strategy
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="module-strategy">Starting layout</Label>
+          <select
+            id="module-strategy"
+            value={strategyId}
+            onChange={(event) => applyStrategy(event.target.value)}
+            className={SELECT_CLASSNAME}
+          >
+            {availableStrategies.map((strategy) => (
+              <option key={strategy.id} value={strategy.id}>
+                {strategy.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {activeStrategy.description}
+          </p>
+        </div>
+
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full justify-between"
+            >
+              Advanced module controls
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-4 space-y-4">
+            <div className="space-y-2">
+              <Label>Current module order</Label>
+              <div className="space-y-1.5">
+                {modules.map((module, index) => (
+                  <div
+                    key={module.id}
+                    className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs"
+                  >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-muted font-mono">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {module.title}
+                    </span>
+                    <Badge variant="outline" className="text-[10px]">
+                      {module.imageSlots.length
+                        ? `${module.imageSlots.length} img`
+                        : 'text'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Add module</Label>
+              <div className="grid gap-2">
+                {availableModules.map((module) => (
+                  <Button
+                    key={module.id}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-auto justify-start whitespace-normal py-2 text-left"
+                    onClick={() => addModule(module.id)}
+                  >
+                    <Plus className="mr-2 h-4 w-4 shrink-0" />
+                    <span className="min-w-0">
+                      <span className="block text-sm">{module.title}</span>
+                      <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                        {module.amazonType}
+                      </span>
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </CardContent>
+    </Card>
+  );
+
+  const intakeCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Bot className="h-4 w-4 text-primary" />
+          Product details
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="product-name">Product name</Label>
+          <Input
+            id="product-name"
+            value={productName}
+            onChange={(event) => setProductName(event.target.value)}
+            placeholder="Stainless tea infuser"
+            className={FIELD_CLASSNAME}
+          />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="asin">ASIN</Label>
+            <Input
+              id="asin"
+              value={asin}
+              onChange={(event) => setAsin(event.target.value.toUpperCase())}
+              placeholder="B0..."
+              className={FIELD_CLASSNAME}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Package type</Label>
+            <ToggleGroup
+              type="single"
+              value={contentTier}
+              onValueChange={(value) => {
+                if (value) applyContentTier(value as ContentTier);
+              }}
+              variant="outline"
+              className="grid w-full grid-cols-2"
+              aria-label="A+ package type"
+            >
+              <ToggleGroupItem
+                value="Basic A+"
+                className="h-auto min-h-14 flex-col items-start px-3 py-2 text-left"
+                aria-label="Basic A plus package"
+              >
+                <span className="text-sm font-medium">Basic A+</span>
+                <span className="text-xs text-muted-foreground">
+                  Up to 5 modules
+                </span>
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="Premium A+"
+                className="h-auto min-h-14 flex-col items-start px-3 py-2 text-left"
+                aria-label="Premium A plus package"
+              >
+                <span className="text-sm font-medium">Premium A+</span>
+                <span className="text-xs text-muted-foreground">
+                  Up to 6-7 modules
+                </span>
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="product-listing-url">Product listing link</Label>
+          <div
+            className="relative"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const url =
+                event.dataTransfer.getData('text/uri-list') ||
+                extractFirstUrl(event.dataTransfer.getData('text/plain'));
+              if (url) {
+                const productSource =
+                  sources.find((source) => source.kind === 'Product listing') ||
+                  sources[0];
+                if (productSource) {
+                  const nextSource = { ...productSource, url };
+                  updateSource(productSource.id, { url });
+                  inspectSource(nextSource);
+                } else {
+                  const nextSource = {
+                    id: Date.now(),
+                    kind: 'Product listing' as const,
+                    url,
+                  };
+                  setSources((current) => [nextSource, ...current]);
+                  inspectSource(nextSource);
+                }
+              }
+            }}
+          >
+            <LinkIcon className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              id="product-listing-url"
+              value={
+                sources.find((source) => source.kind === 'Product listing')
+                  ?.url || ''
+              }
+              onChange={(event) => {
+                const url = event.target.value;
+                const productSource =
+                  sources.find((source) => source.kind === 'Product listing') ||
+                  sources[0];
+                if (productSource) {
+                  updateSource(productSource.id, { url });
+                }
+              }}
+              onPaste={(event) => {
+                const url = extractFirstUrl(
+                  event.clipboardData.getData('text')
+                );
+                if (!url) return;
+                event.preventDefault();
+                const productSource =
+                  sources.find((source) => source.kind === 'Product listing') ||
+                  sources[0];
+                if (productSource) {
+                  const nextSource = { ...productSource, url };
+                  updateSource(productSource.id, { url });
+                  inspectSource(nextSource);
+                }
+              }}
+              onBlur={() => {
+                const productSource = sources.find(
+                  (source) => source.kind === 'Product listing'
+                );
+                if (productSource) inspectSource(productSource);
+              }}
+              placeholder="Drag or paste product listing URL"
+              className={cn('pl-7 text-sm', FIELD_CLASSNAME)}
+            />
+          </div>
+          {productListingExtraction?.status &&
+          productListingExtraction.status !== 'idle' ? (
+            <div className="rounded-md border px-3 py-2 text-xs">
+              <div className="flex items-start gap-2">
+                {productListingExtraction.status === 'extracting' ? (
+                  <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                ) : productListingExtraction.status === 'extracted' ? (
+                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-emerald-600" />
+                ) : (
+                  <ShieldAlert className="mt-0.5 h-3.5 w-3.5 text-amber-600" />
+                )}
+                <span
+                  className={cn(
+                    'rounded-sm border px-1.5 py-0.5 font-medium',
+                    sourceExtractionStatusClass(productListingExtraction.status)
+                  )}
+                >
+                  {productListingExtraction.status === 'extracting'
+                    ? 'reading'
+                    : productListingExtraction.status}
+                </span>
+                <span className="leading-5 text-muted-foreground">
+                  {productListingExtraction.message}
+                </span>
+              </div>
+              {productListingSource && productListingExtraction.facts ? (
+                <div className="mt-2 flex flex-wrap gap-2 pl-5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() =>
+                      applyExtractedSourceFacts(productListingSource, false)
+                    }
+                  >
+                    Fill blanks
+                  </Button>
+                  {sourceOverwriteCandidateCount(
+                    productListingSource,
+                    productListingExtraction.facts
+                  ) > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() =>
+                        applyExtractedSourceFacts(productListingSource, true)
+                      }
+                    >
+                      Overwrite filled fields
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+              {productListingExtraction.facts?.evidence.length ? (
+                <div className="mt-2 space-y-1 pl-5 text-muted-foreground">
+                  {productListingExtraction.facts.evidence
+                    .slice(0, 4)
+                    .map((item) => (
+                      <p key={item} className="leading-5">
+                        {item}
+                      </p>
+                    ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <p className="text-xs leading-5 text-muted-foreground">
+            Drop the Amazon, Shopify, Alibaba, or landing page link here to make
+            it the primary product source. SellAvant will read public pages and
+            fill blank product fields from the page.
+          </p>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="notes">What you know so far</Label>
+          <Textarea
+            id="notes"
+            value={rawNotes}
+            onChange={(event) => setRawNotes(event.target.value)}
+            placeholder="Paste rough notes, bullets, customer reviews, supplier claims, dimensions, or anything the AI should learn from."
+            className={cn('min-h-24', TEXTAREA_CLASSNAME)}
+          />
+          <p className="text-xs leading-5 text-muted-foreground">
+            The AI should fill the structured fields below as it extracts facts
+            from links, photos, notes, and listing data.
+          </p>
+        </div>
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full justify-between"
+            >
+              More product context (optional)
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-4 space-y-4">
+            <div className="rounded-md border bg-muted/30 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm font-medium">
+                      Brand instructions for AI
+                    </Label>
+                    {selectedBrandGuide ? (
+                      <Badge variant="outline" className="text-[11px]">
+                        Pulled from {selectedBrandGuide.name}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    Use this only when you want to add or override what the
+                    selected brand guide already tells the AI.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="brand-voice">Brand voice</Label>
+                    {selectedBrandGuide?.voice ? (
+                      <Badge variant="secondary" className="text-[11px]">
+                        Guide default
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <Textarea
+                    id="brand-voice"
+                    value={brandVoice}
+                    onChange={(event) => setBrandVoice(event.target.value)}
+                    placeholder="Tone, writing style, words to lean into or avoid..."
+                    className={cn('min-h-20', TEXTAREA_CLASSNAME)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="brand-colors">Brand colors</Label>
+                    {selectedBrandGuide?.palette ? (
+                      <Badge variant="secondary" className="text-[11px]">
+                        Guide default
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <Textarea
+                    id="brand-colors"
+                    value={brandColors}
+                    onChange={(event) => setBrandColors(event.target.value)}
+                    placeholder="Primary foreground #..., Secondary foreground #..., Background #..."
+                    className={cn('min-h-16', TEXTAREA_CLASSNAME)}
+                  />
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="brand-fonts">Brand fonts</Label>
+                      {selectedBrandGuide?.fonts ? (
+                        <Badge variant="secondary" className="text-[11px]">
+                          Guide default
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <Textarea
+                      id="brand-fonts"
+                      value={brandFontNotes}
+                      onChange={(event) =>
+                        setBrandFontNotes(event.target.value)
+                      }
+                      placeholder="Primary ..., Secondary ..., Accent ..."
+                      className={cn('min-h-16', TEXTAREA_CLASSNAME)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="logo-notes">Logo handling</Label>
+                      {selectedBrandGuide?.logoAsset ||
+                      selectedBrandGuide?.logoNotes ? (
+                        <Badge variant="secondary" className="text-[11px]">
+                          Guide default
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <Textarea
+                      id="logo-notes"
+                      value={logoNotes}
+                      onChange={(event) => setLogoNotes(event.target.value)}
+                      placeholder="Safe area, placement, reversed logo rules, do not redraw..."
+                      className={cn('min-h-16', TEXTAREA_CLASSNAME)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="one-liner">What it does</Label>
+              <Textarea
+                id="one-liner"
+                value={productOneLiner}
+                onChange={(event) => setProductOneLiner(event.target.value)}
+                placeholder="One sentence. Usually AI-filled from sources."
+                className={cn('min-h-16', TEXTAREA_CLASSNAME)}
+              />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="target-customer">Target customer</Label>
+                <Textarea
+                  id="target-customer"
+                  value={targetCustomer}
+                  onChange={(event) => setTargetCustomer(event.target.value)}
+                  placeholder="Who buys it, why now, what they care about."
+                  className={cn('min-h-20', TEXTAREA_CLASSNAME)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="price-point">Price point</Label>
+                <Input
+                  id="price-point"
+                  value={pricePoint}
+                  onChange={(event) => setPricePoint(event.target.value)}
+                  placeholder="Budget, mid-market, premium..."
+                  className={FIELD_CLASSNAME}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="features">Features and benefits</Label>
+              <Textarea
+                id="features"
+                value={keyFeatures}
+                onChange={(event) => setKeyFeatures(event.target.value)}
+                placeholder="Top features with buyer benefit for each."
+                className={cn('min-h-24', TEXTAREA_CLASSNAME)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="differentiators">Differentiators</Label>
+              <Textarea
+                id="differentiators"
+                value={differentiators}
+                onChange={(event) => setDifferentiators(event.target.value)}
+                placeholder="Materials, bundle, proof, compatibility, patents, certifications..."
+                className={cn('min-h-20', TEXTAREA_CLASSNAME)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="objections">Buyer objections</Label>
+              <Textarea
+                id="objections"
+                value={objections}
+                onChange={(event) => setObjections(event.target.value)}
+                placeholder="What might stop a buyer from purchasing?"
+                className={cn('min-h-20', TEXTAREA_CLASSNAME)}
+              />
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </CardContent>
+    </Card>
+  );
+
+  const sourcesCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Source Links</CardTitle>
+      </CardHeader>
+      <CardContent
+        className="space-y-3"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          const url =
+            event.dataTransfer.getData('text/uri-list') ||
+            extractFirstUrl(event.dataTransfer.getData('text/plain'));
+          if (url) {
+            addDroppedSource(url);
+          }
+        }}
+      >
+        <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
+          Drag product, supplier, Alibaba, Amazon, Shopify, or competitor links
+          here. SellAvant will flag sources that look gated, paywalled, or
+          blocked.
+        </div>
+        {sources.map((source) => (
+          <div key={source.id} className="grid grid-cols-[116px_1fr] gap-2">
+            <select
+              value={source.kind}
+              onChange={(event) => {
+                const kind = event.target.value as SourceKind;
+                updateSource(source.id, { kind });
+              }}
+              className={cn('rounded-md border px-2 text-xs', FIELD_CLASSNAME)}
+            >
+              {SOURCE_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kind}
+                </option>
+              ))}
+            </select>
+            <div className="relative">
+              <LinkIcon className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={source.url}
+                onChange={(event) => {
+                  const url = event.target.value;
+                  updateSource(source.id, { url });
+                }}
+                onBlur={() => checkSource(source)}
+                onPaste={(event) => {
+                  const url = extractFirstUrl(
+                    event.clipboardData.getData('text')
+                  );
+                  if (!url) return;
+                  event.preventDefault();
+                  const nextSource = { ...source, url };
+                  updateSource(source.id, { url });
+                  inspectSource(nextSource);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const url =
+                    event.dataTransfer.getData('text/uri-list') ||
+                    extractFirstUrl(event.dataTransfer.getData('text/plain'));
+                  if (url) {
+                    const nextSource = { ...source, url };
+                    updateSource(source.id, { url });
+                    inspectSource(nextSource);
+                  }
+                }}
+                placeholder="https://..."
+                className={cn('pl-7 text-sm', FIELD_CLASSNAME)}
+              />
+            </div>
+            {sourceChecks[source.id]?.status &&
+              sourceChecks[source.id]?.status !== 'idle' && (
+                <div className="col-span-2 -mt-1 flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
+                  {sourceChecks[source.id].status === 'checking' ? (
+                    <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                  ) : sourceChecks[source.id].status === 'accessible' ? (
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-emerald-600" />
+                  ) : (
+                    <ShieldAlert className="mt-0.5 h-3.5 w-3.5 text-amber-600" />
+                  )}
+                  <span
+                    className={cn(
+                      'rounded-sm border px-1.5 py-0.5 font-medium',
+                      sourceStatusClass(sourceChecks[source.id].status)
+                    )}
+                  >
+                    {sourceChecks[source.id].status}
+                  </span>
+                  <span className="leading-5 text-muted-foreground">
+                    {sourceChecks[source.id].message}
+                    {sourceChecks[source.id].httpStatus
+                      ? ` HTTP ${sourceChecks[source.id].httpStatus}.`
+                      : ''}
+                  </span>
+                </div>
+              )}
+            {sourceExtractions[source.id]?.status &&
+              sourceExtractions[source.id]?.status !== 'idle' && (
+                <div className="col-span-2 -mt-1 rounded-md border px-3 py-2 text-xs">
+                  <div className="flex items-start gap-2">
+                    {sourceExtractions[source.id].status === 'extracting' ? (
+                      <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                    ) : sourceExtractions[source.id].status === 'extracted' ? (
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-emerald-600" />
+                    ) : (
+                      <ShieldAlert className="mt-0.5 h-3.5 w-3.5 text-amber-600" />
+                    )}
+                    <span
+                      className={cn(
+                        'rounded-sm border px-1.5 py-0.5 font-medium',
+                        sourceExtractionStatusClass(
+                          sourceExtractions[source.id].status
+                        )
+                      )}
+                    >
+                      {sourceExtractions[source.id].status === 'extracting'
+                        ? 'reading'
+                        : sourceExtractions[source.id].status}
+                    </span>
+                    {sourceExtractions[source.id].cacheHit ? (
+                      <span className="rounded-sm border border-sky-300 bg-sky-50 px-1.5 py-0.5 font-medium text-sky-700">
+                        cached
+                      </span>
+                    ) : null}
+                    <span className="leading-5 text-muted-foreground">
+                      {sourceExtractions[source.id].message}
+                    </span>
+                  </div>
+                  {sourceExtractions[source.id].facts ? (
+                    <div className="mt-2 flex flex-wrap gap-2 pl-5">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => applyExtractedSourceFacts(source, false)}
+                      >
+                        Fill blanks
+                      </Button>
+                      {sourceOverwriteCandidateCount(
+                        source,
+                        sourceExtractions[source.id].facts
+                      ) > 0 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() =>
+                            applyExtractedSourceFacts(source, true)
+                          }
+                        >
+                          Overwrite filled fields
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {sourceExtractions[source.id].facts?.evidence.length ? (
+                    <div className="mt-2 space-y-1 pl-5 text-muted-foreground">
+                      {sourceExtractions[source.id].facts?.evidence
+                        .slice(0, 4)
+                        .map((item) => (
+                          <p key={item} className="leading-5">
+                            {item}
+                          </p>
+                        ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm" onClick={addSource}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add source
+        </Button>
+      </CardContent>
+    </Card>
+  );
+
+  const assetsCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Product Images</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <label
+          className="group flex cursor-pointer flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-muted/30 px-4 py-10 text-center transition-colors hover:border-primary/60 hover:bg-primary/5"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            uploadLibraryFiles(event.dataTransfer.files);
+          }}
+        >
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            className="sr-only"
+            onChange={(event) => {
+              if (event.target.files) uploadLibraryFiles(event.target.files);
+              event.target.value = '';
+            }}
+          />
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <ImagePlus className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-medium">Drop product images here</p>
+            <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+              Raw photos, polished shots, packaging, lifestyle images, and
+              screenshots are all fine. SellAvant will decide where they fit in
+              the A+ package.
+            </p>
+          </div>
+        </label>
+
+        {assetLibrary.length ? (
+          <div className="space-y-3">
+            {assetLibrary.map((item) => (
+              <div
+                key={item.id}
+                className="grid gap-3 rounded-md border bg-background p-3 md:grid-cols-[minmax(0,220px)_1fr_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    {item.uploadStatus === 'hashing' ||
+                    item.uploadStatus === 'uploading' ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : (
+                      <FileImage className="h-4 w-4 shrink-0 text-primary" />
+                    )}
+                    <p className="truncate text-sm font-medium">
+                      {item.fileName}
+                    </p>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge
+                      className={cn(
+                        'border text-[11px]',
+                        item.uploadStatus === 'error'
+                          ? 'border-red-200 bg-red-50 text-red-800'
+                          : item.uploadStatus === 'uploaded' ||
+                            item.uploadStatus === 'duplicate'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                          : 'border-border bg-muted text-muted-foreground'
+                      )}
+                    >
+                      {item.uploadStatus === 'duplicate'
+                        ? 'Reused'
+                        : item.uploadStatus}
+                    </Badge>
+                    {item.uploadStatus !== 'error' && item.uploadMessage ? (
+                      <span className="text-xs text-muted-foreground">
+                        {item.uploadMessage}
+                      </span>
+                    ) : null}
+                  </div>
+                  {item.uploadStatus === 'error' ? (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-900">
+                      <p className="font-medium">
+                        {item.uploadMessage || 'Image upload failed.'}
+                      </p>
+                      {item.uploadAction ? (
+                        <p className="mt-1 text-red-800">{item.uploadAction}</p>
+                      ) : (
+                        <p className="mt-1 text-red-800">
+                          Retry this image, or remove it and upload another
+                          copy.
+                        </p>
+                      )}
+                      {item.uploadErrorCode ? (
+                        <p className="mt-2 font-mono text-[11px] text-red-700">
+                          {item.uploadErrorCode}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor={`asset-description-${item.id}`}>
+                    Description
+                  </Label>
+                  <Input
+                    id={`asset-description-${item.id}`}
+                    value={item.description}
+                    onChange={(event) =>
+                      updateAssetLibraryItem(item.id, {
+                        description: event.target.value,
+                      })
+                    }
+                    placeholder="What should the AI know about this image?"
+                    className={FIELD_CLASSNAME}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 text-muted-foreground hover:text-destructive md:self-end"
+                  aria-label={`Remove ${item.fileName}`}
+                  onClick={() => removeAssetLibraryItem(item.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+                {item.uploadStatus === 'error' && item.file ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="md:col-start-2 md:w-fit"
+                    onClick={() =>
+                      void uploadLibraryAssetById(item.id, item.file as File)
+                    }
+                  >
+                    Retry upload
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+
+  const generationBrief = (
+    <div className="mb-4 rounded-md border bg-card p-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="max-w-3xl">
+          <div className="flex items-center gap-2">
+            <WandSparkles className="h-4 w-4 text-primary" />
+            <h2 className="font-semibold">AI generation brief</h2>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            The AI starts by interviewing only for missing facts, then drafts a
+            module-by-module A+ package with logo dropzones, matched mobile
+            layouts, image prompts, Canva instructions, and compliance checks.
+          </p>
+        </div>
+        <Button type="button" onClick={copyPrompt}>
+          <Clipboard className="mr-2 h-4 w-4" />
+          {promptCopied ? 'Prompt copied' : 'Copy AI prompt'}
+        </Button>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        {[
+          {
+            title: '1. Learn',
+            body: 'Read listing, supplier, competitor, notes, and uploaded images.',
+          },
+          {
+            title: '2. Wireframe',
+            body: 'Choose real Amazon modules with desktop/mobile and logo safe zones.',
+          },
+          {
+            title: '3. Produce',
+            body: 'Write copy, image prompts, alt text, and Seller Central build sheet.',
+          },
+        ].map((step) => (
+          <div key={step.title} className="rounded-md border bg-muted/40 p-3">
+            <p className="text-sm font-medium">{step.title}</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {step.body}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const generatedPackageCard = generatedPackage ? (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <PackageCheck className="h-4 w-4 text-primary" />
+          Generated A+ Package
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div>
+          <h3 className="text-lg font-semibold">
+            {generatedPackage.package.title}
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {generatedPackage.package.executiveSummary}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {generatedPackage.modelRuns.map((run) => (
+            <Badge key={`${run.role}-${run.modelId}`} variant="outline">
+              {run.role === 'strategy' ? 'Strategy model' : 'Package model'}:{' '}
+              {run.provider} / {run.modelId}
+            </Badge>
+          ))}
+          <Badge variant="outline">
+            Images {generatedPackage.imageGeneration.enabled ? 'on' : 'planned'}
+          </Badge>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          {[
+            [
+              'Positioning',
+              generatedPackage.package.creativeDirection.positioning,
+            ],
+            [
+              'Visual System',
+              generatedPackage.package.creativeDirection.visualSystem,
+            ],
+            [
+              'Mobile Principle',
+              generatedPackage.package.creativeDirection.mobilePrinciple,
+            ],
+            [
+              'Image Plan',
+              generatedPackage.package.creativeDirection.imagePlan,
+            ],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-md border bg-muted/30 p-3">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">
+                {label}
+              </p>
+              <p className="mt-2 text-sm leading-6">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {generatedPackage.package.assumptions.length ? (
+          <div className="rounded-md border bg-muted/30 p-3">
+            <p className="text-sm font-medium">Assumptions</p>
+            <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+              {generatedPackage.package.assumptions.map((assumption) => (
+                <li key={assumption}>- {assumption}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        <div className="space-y-4">
+          {generatedPackage.package.modules.map((module) => (
+            <article
+              key={`${module.order}-${module.amazonModuleType}`}
+              className="rounded-md border bg-background p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <Badge variant="secondary">Module {module.order}</Badge>
+                  <h4 className="mt-2 font-semibold">{module.title}</h4>
+                  <p className="mt-1 text-xs font-mono text-muted-foreground">
+                    {module.amazonModuleType}
+                  </p>
+                </div>
+                <Badge variant="outline">
+                  {module.logoDropzone.needed ? 'Logo zone' : 'No logo zone'}
+                </Badge>
+              </div>
+              <MarkdownText
+                text={module.objective}
+                className="mt-3 text-sm text-muted-foreground"
+              />
+              <div className="mt-4 rounded-md border bg-primary/5 p-3">
+                <p className="text-xs font-semibold uppercase text-primary">
+                  Design Brief
+                </p>
+                <MarkdownText
+                  text={module.visualBrief}
+                  className="mt-2 text-sm leading-6"
+                />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="rounded-md border bg-muted/30 p-3">
+                  <p className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+                    <Monitor className="h-3.5 w-3.5" />
+                    Desktop Blueprint
+                  </p>
+                  <MarkdownText
+                    text={module.desktopLayout}
+                    className="mt-2 text-sm"
+                  />
+                  {module.desktopWireframe.length ? (
+                    <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
+                      {module.desktopWireframe.map((item, index) => (
+                        <li key={`${module.order}-desktop-${item}`}>
+                          {index + 1}. {item}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                </div>
+                <div className="rounded-md border bg-muted/30 p-3">
+                  <p className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+                    <Smartphone className="h-3.5 w-3.5" />
+                    Mobile Blueprint
+                  </p>
+                  <MarkdownText
+                    text={module.mobileLayout}
+                    className="mt-2 text-sm"
+                  />
+                  {module.mobileWireframe.length ? (
+                    <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
+                      {module.mobileWireframe.map((item, index) => (
+                        <li key={`${module.order}-mobile-${item}`}>
+                          {index + 1}. {item}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-4 rounded-md border bg-card p-3">
+                <p className="text-sm font-medium">{module.headline}</p>
+                <MarkdownText
+                  text={module.bodyCopy}
+                  className="mt-2 text-sm leading-6 text-muted-foreground"
+                />
+                {module.bullets.length ? (
+                  <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
+                    {module.bullets.map((bullet) => (
+                      <li key={bullet}>- {bullet}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+              {module.canvaLayers.length ? (
+                <div className="mt-4 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium">
+                      Build Layers / Seller Central Fields
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        copyModuleLayers(module.order, module.canvaLayers)
+                      }
+                    >
+                      {copiedLayersFor === module.order ? (
+                        <>
+                          <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Clipboard className="mr-2 h-3.5 w-3.5" />
+                          Copy fields
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {module.canvaLayers.map((layer) => (
+                      <div
+                        key={`${module.order}-${layer.layer}`}
+                        className="rounded-md border bg-muted/20 p-3 text-sm"
+                      >
+                        <p className="font-medium">{layer.layer}</p>
+                        <p className="mt-1 text-muted-foreground">
+                          {layer.content}
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                          {layer.notes}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {module.assetAssignments.length ? (
+                <div className="mt-4 space-y-2">
+                  <p className="text-sm font-medium">Asset use</p>
+                  {module.assetAssignments.map((assignment) => {
+                    const uploadedAsset = findUploadedAssetByFilename(
+                      assignment.assetFileName
+                    );
+                    return (
+                      <div
+                        key={`${assignment.assetFileName}-${assignment.role}`}
+                        className="rounded-md border bg-muted/20 p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-start gap-3">
+                          {uploadedAsset ? (
+                            <div className="shrink-0 overflow-hidden rounded-md border bg-background">
+                              <img
+                                src={`/api/a-plus/assets/${uploadedAsset.assetId}`}
+                                alt={assignment.assetFileName}
+                                className="block h-20 w-20 object-cover"
+                                loading="lazy"
+                              />
+                            </div>
+                          ) : null}
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium break-all">
+                              {assignment.assetFileName}
+                            </p>
+                            <p className="mt-1 text-muted-foreground">
+                              {assignment.role}. {assignment.editNotes}
+                            </p>
+                            {!uploadedAsset ? (
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Not matched to an uploaded asset.
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {module.imageJobs.length ? (
+                <div className="mt-4 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium">Generated Images</p>
+                      <p className="text-xs text-muted-foreground">
+                        Click Generate to create the image, then Download and
+                        upload it to the matching slot in Amazon Seller
+                        Central&apos;s A+ editor.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      disabled={module.imageJobs.some(
+                        (job) =>
+                          imageJobResults[job.jobId]?.status === 'generating'
+                      )}
+                      onClick={() => {
+                        for (const job of module.imageJobs) {
+                          const result = imageJobResults[job.jobId];
+                          if (
+                            result?.status === 'done' ||
+                            result?.status === 'generating'
+                          )
+                            continue;
+                          void generateImageForJob(
+                            job.jobId,
+                            job.prompt,
+                            job.size
+                          );
+                        }
+                      }}
+                    >
+                      <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                      Generate all
+                    </Button>
+                  </div>
+                  {module.imageJobs.map((job) => {
+                    const result = imageJobResults[job.jobId];
+                    const downloadName =
+                      `module-${module.order}-${job.purpose}`
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-+|-+$/g, '')
+                        .slice(0, 80) + '.png';
+                    return (
+                      <div
+                        key={job.jobId}
+                        className="rounded-md border bg-muted/20 p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">{job.size}</Badge>
+                            <p className="font-medium">{job.purpose}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {result?.status === 'done' ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                asChild
+                              >
+                                <a
+                                  href={
+                                    result.assetId
+                                      ? `/api/a-plus/assets/${
+                                          result.assetId
+                                        }?download=1&filename=${encodeURIComponent(
+                                          downloadName
+                                        )}`
+                                      : result.url
+                                  }
+                                  download={downloadName}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  <Clipboard className="mr-2 h-3.5 w-3.5" />
+                                  Download
+                                </a>
+                              </Button>
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={result?.status === 'generating'}
+                              onClick={() =>
+                                generateImageForJob(
+                                  job.jobId,
+                                  job.prompt,
+                                  job.size
+                                )
+                              }
+                            >
+                              {result?.status === 'generating' ? (
+                                <>
+                                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                  Generating
+                                </>
+                              ) : result?.status === 'done' ? (
+                                <>
+                                  <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                                  Regenerate
+                                </>
+                              ) : (
+                                <>
+                                  <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                                  Generate
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                        <p className="mt-2 leading-6 text-muted-foreground">
+                          {job.prompt}
+                        </p>
+                        {result?.status === 'done' ? (
+                          <div className="mt-3 space-y-2">
+                            <div className="overflow-hidden rounded-md border bg-background">
+                              <img
+                                src={result.url}
+                                alt={job.purpose}
+                                className="block max-h-72 w-full object-contain"
+                                loading="lazy"
+                              />
+                            </div>
+                            {result.revisedPrompt ? (
+                              <p className="text-xs leading-5 text-muted-foreground">
+                                Revised prompt: {result.revisedPrompt}
+                              </p>
+                            ) : null}
+                            {result.persistError ? (
+                              <p className="text-xs text-destructive">
+                                Saved to S3 failed: {result.persistError}. Image
+                                URL expires in ~1 hour.
+                              </p>
+                            ) : result.assetId ? (
+                              <p className="text-xs text-muted-foreground">
+                                Saved to your asset library. Use Download to
+                                grab a PNG for upload.
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {result?.status === 'error' ? (
+                          <p className="mt-3 text-xs text-destructive">
+                            {result.message}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {module.compositeMockup
+                ? (() => {
+                    const composite = module.compositeMockup;
+                    const renderVariant = (
+                      target: 'desktop' | 'mobile',
+                      label: string,
+                      Icon: typeof Monitor,
+                      variant: typeof composite.desktop
+                    ) => {
+                      const jobId = `composite-${module.order}-${target}`;
+                      const result = imageJobResults[jobId];
+                      const downloadName =
+                        `module-${module.order}-composite-${target}`
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, '-')
+                          .replace(/^-+|-+$/g, '')
+                          .slice(0, 80) + '.png';
+                      return (
+                        <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <Icon className="h-4 w-4 text-muted-foreground" />
+                              <p className="font-medium">{label}</p>
+                              <Badge variant="outline">{variant.size}</Badge>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {result?.status === 'done' ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  asChild
+                                >
+                                  <a
+                                    href={
+                                      result.assetId
+                                        ? `/api/a-plus/assets/${
+                                            result.assetId
+                                          }?download=1&filename=${encodeURIComponent(
+                                            downloadName
+                                          )}`
+                                        : result.url
+                                    }
+                                    download={downloadName}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    <Clipboard className="mr-2 h-3.5 w-3.5" />
+                                    Download
+                                  </a>
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="default"
+                                size="sm"
+                                disabled={result?.status === 'generating'}
+                                onClick={() =>
+                                  generateImageForJob(
+                                    jobId,
+                                    buildCompositePrompt(variant),
+                                    variant.size
+                                  )
+                                }
+                              >
+                                {result?.status === 'generating' ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                    Generating
+                                  </>
+                                ) : result?.status === 'done' ? (
+                                  <>
+                                    <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                                    Regenerate
+                                  </>
+                                ) : (
+                                  <>
+                                    <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                                    Generate
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <p className="mt-2 leading-6 text-muted-foreground">
+                            {variant.prompt}
+                          </p>
+                          {variant.textElements.length ? (
+                            <div className="mt-3 space-y-1.5">
+                              <p className="text-xs font-medium uppercase text-muted-foreground">
+                                Text elements baked into the image
+                              </p>
+                              {variant.textElements.map((el, i) => (
+                                <div
+                                  key={`${module.order}-composite-${target}-${i}`}
+                                  className="rounded-sm border bg-background px-2 py-1.5 text-xs"
+                                >
+                                  <div className="flex flex-wrap items-baseline gap-2">
+                                    <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                                      {el.role}
+                                    </span>
+                                    <span className="font-medium">
+                                      {el.text}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 text-[11px] text-muted-foreground">
+                                    {el.position} · {el.typography}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          {result?.status === 'done' ? (
+                            <div className="mt-3 space-y-2">
+                              <div className="overflow-hidden rounded-md border bg-background">
+                                <img
+                                  src={result.url}
+                                  alt={`${composite.purpose} (${target})`}
+                                  className="block max-h-96 w-full object-contain"
+                                  loading="lazy"
+                                />
+                              </div>
+                              {result.persistError ? (
+                                <p className="text-xs text-destructive">
+                                  Saved to S3 failed: {result.persistError}.
+                                  Image URL expires in ~1 hour.
+                                </p>
+                              ) : result.assetId ? (
+                                <p className="text-xs text-muted-foreground">
+                                  Saved to your asset library.
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {result?.status === 'error' ? (
+                            <p className="mt-3 text-xs text-destructive">
+                              {result.message}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    };
+
+                    return (
+                      <div className="mt-4 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium">
+                              Composite Mockup — {composite.purpose}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Finished module images with text rendered directly
+                              in. Upload to a full-image module slot in Seller
+                              Central instead of using separate text fields.
+                              Generate both desktop and mobile — Amazon serves
+                              them differently.
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={
+                              imageJobResults[
+                                `composite-${module.order}-desktop`
+                              ]?.status === 'generating' ||
+                              imageJobResults[
+                                `composite-${module.order}-mobile`
+                              ]?.status === 'generating'
+                            }
+                            onClick={() => {
+                              void generateImageForJob(
+                                `composite-${module.order}-desktop`,
+                                buildCompositePrompt(composite.desktop),
+                                composite.desktop.size
+                              );
+                              void generateImageForJob(
+                                `composite-${module.order}-mobile`,
+                                buildCompositePrompt(composite.mobile),
+                                composite.mobile.size
+                              );
+                            }}
+                          >
+                            <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                            Generate both
+                          </Button>
+                        </div>
+                        <div className="grid gap-2 lg:grid-cols-2">
+                          {renderVariant(
+                            'desktop',
+                            'Desktop',
+                            Monitor,
+                            composite.desktop
+                          )}
+                          {renderVariant(
+                            'mobile',
+                            'Mobile',
+                            Smartphone,
+                            composite.mobile
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()
+                : null}
+            </article>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  ) : null;
+
+  const tabsSection = (
+    <Tabs defaultValue="brief" className="space-y-4">
+      <TabsList>
+        <TabsTrigger value="brief">AI Brief</TabsTrigger>
+        <TabsTrigger value="modules">Modules</TabsTrigger>
+        <TabsTrigger value="output">Output</TabsTrigger>
+        <TabsTrigger value="checks">Checks</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="brief" className="space-y-4">
+        <div className="rounded-md border bg-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Prompt contract</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                This is the working prompt assembled from your links, notes,
+                uploaded assets, and module strategy.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={copyPrompt}
+            >
+              <Clipboard className="mr-2 h-4 w-4" />
+              {promptCopied ? 'Copied' : 'Copy prompt'}
+            </Button>
+          </div>
+        </div>
+        <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted p-4 text-xs leading-5">
+          {aiPrompt}
+        </pre>
+      </TabsContent>
+
+      <TabsContent value="modules" className="space-y-4">
+        <div className="rounded-md border bg-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <h2 className="font-semibold">Editable package plan</h2>
+            </div>
+            <Button type="button" size="sm" onClick={copyPrompt}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              Send to AI
+            </Button>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            These modules are the starting layout the AI should refine, replace,
+            or reorder based on the product and source evidence.
+          </p>
+        </div>
+        {modules.map((module, index) => (
+          <ModulePreview
+            key={module.id}
+            module={module}
+            canMoveUp={index > 0}
+            canMoveDown={index < modules.length - 1}
+            canRemove={modules.length > 1}
+            onMoveUp={() => moveModule(module.id, -1)}
+            onMoveDown={() => moveModule(module.id, 1)}
+            onRemove={() => removeModule(module.id)}
+          />
+        ))}
+      </TabsContent>
+
+      <TabsContent value="output" className="space-y-4">
+        <div className="rounded-md border bg-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Amazon Builder Package</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Copy this into the next API/import layer or use it as the Seller
+                Central build sheet.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={copyPackage}
+            >
+              <Clipboard className="mr-2 h-4 w-4" />
+              {copied ? 'Copied' : 'Copy JSON'}
+            </Button>
+          </div>
+        </div>
+        <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted p-4 text-xs leading-5">
+          {JSON.stringify(packageJson, null, 2)}
+        </pre>
+      </TabsContent>
+
+      <TabsContent value="checks" className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          {[
+            'Each visual section maps to a real Amazon module.',
+            'Mobile copy and desktop copy share the same source module.',
+            'Logo is reserved as an upload slot, not regenerated by AI.',
+            'All generated headlines stay under the module character limits.',
+            'Final copy needs spelling and compliance review before approval submission.',
+            'A+ API publishing requires Product Listing or Brand Analytics access.',
+          ].map((check, index) => (
+            <div key={check} className="rounded-md border bg-card p-4">
+              <div className="flex items-start gap-3">
+                {index < 4 ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="mt-0.5 h-4 w-4 text-amber-600" />
+                )}
+                <p className="text-sm leading-6">{check}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </TabsContent>
+    </Tabs>
+  );
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] bg-background">
@@ -1910,13 +4769,34 @@ export default function APlusBuilderPage() {
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
               Drop messy product links, supplier pages, competitor references,
               raw photos, polished assets, and logo rules. SellAvant turns them
-              into an Amazon-editable A+ brief with desktop/mobile module plans.
+              into an Amazon-editable A+ package with desktop/mobile design
+              blueprints.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <div className="inline-flex rounded-md border bg-background p-1">
+              <Button
+                type="button"
+                variant={builderMode === 'simple' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-8"
+                onClick={() => setBuilderMode('simple')}
+              >
+                Simple
+              </Button>
+              <Button
+                type="button"
+                variant={builderMode === 'advanced' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-8"
+                onClick={() => setBuilderMode('advanced')}
+              >
+                Advanced
+              </Button>
+            </div>
             <Badge variant="outline" className="gap-1.5">
               <Bot className="h-3.5 w-3.5" />
-              AI brief
+              AI package
             </Badge>
             <Badge variant="outline" className="gap-1.5">
               <PackageCheck className="h-3.5 w-3.5" />
@@ -1924,7 +4804,7 @@ export default function APlusBuilderPage() {
             </Badge>
             <Badge variant="outline" className="gap-1.5">
               <FileImage className="h-3.5 w-3.5" />
-              {assetCount}/{slotCount} assets
+              {libraryAssetCount} images
             </Badge>
             <Badge variant="outline" className="gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1934,772 +4814,316 @@ export default function APlusBuilderPage() {
         </div>
       </div>
 
-      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[360px_1fr]">
-        <aside className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <FileText className="h-4 w-4 text-primary" />
-                Draft
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-[1fr_auto] gap-2">
-                <select
-                  value={draftId || ''}
-                  onChange={(event) => void loadDraft(event.target.value)}
-                  className="h-10 min-w-0 rounded-md border bg-background px-3 text-sm"
-                >
-                  <option value="">Current unsaved draft</option>
-                  {drafts.map((draft) => (
-                    <option key={draft.draftId} value={draft.draftId}>
-                      {draft.name}
-                    </option>
-                  ))}
-                </select>
-                <Button type="button" variant="outline" onClick={newDraft}>
-                  New
-                </Button>
+      {builderMode === 'advanced' ? (
+        <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[360px_1fr]">
+          <aside className="space-y-4">
+            {draftWorkspaceCard}
+            {strategyCard}
+            {intakeCard}
+            {sourcesCard}
+            {assetsCard}
+          </aside>
+
+          <main className="min-w-0">
+            {generationBrief}
+            {tabsSection}
+          </main>
+        </div>
+      ) : (
+        <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6">
+          <div className="rounded-lg border bg-card p-4 sm:p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-primary">Simple flow</p>
+                <h2 className="mt-1 text-xl font-semibold">
+                  {currentWizardStep.title}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {currentWizardStep.body}
+                </p>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="draft-name">Draft name</Label>
-                <Input
-                  id="draft-name"
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.target.value)}
-                  placeholder="Spring launch A+"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="brand-guide">Brand guide</Label>
-                <select
-                  id="brand-guide"
-                  value={brandGuideId || ''}
-                  onChange={(event) => applyBrandGuide(event.target.value)}
-                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                >
-                  <option value="">New brand guide</option>
-                  {brandGuides.map((guide) => (
-                    <option key={guide.brandGuideId} value={guide.brandGuideId}>
-                      {guide.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="amazon-brand">Amazon brand</Label>
-                <select
-                  id="amazon-brand"
-                  value=""
-                  onChange={(event) => applyAmazonBrand(event.target.value)}
-                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                  disabled={!amazonBrands.length}
-                >
-                  <option value="">
-                    {amazonBrands.length
-                      ? 'Use brand from Amazon'
-                      : amazonBrandsConnected
-                      ? 'No Amazon brands found'
-                      : 'Connect Amazon to query brands'}
-                  </option>
-                  {amazonBrands.map((brand) => (
-                    <option
-                      key={amazonBrandKey(brand)}
-                      value={amazonBrandKey(brand)}
-                    >
-                      {amazonBrandLabel(brand)} · {brand.asinCount} ASIN
-                      {brand.asinCount === 1 ? '' : 's'}
-                    </option>
-                  ))}
-                </select>
-                {amazonBrandMessage && (
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    {amazonBrandMessage}
-                  </p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="brand-guide-name">Brand guide name</Label>
-                <Input
-                  id="brand-guide-name"
-                  value={brandGuideName}
-                  onChange={(event) => setBrandGuideName(event.target.value)}
-                  placeholder="SellAvant default"
-                />
-              </div>
-              <Button
-                type="button"
-                className="w-full"
-                disabled={saveStatus === 'saving' || saveStatus === 'loading'}
-                onClick={() => void saveDraft()}
-              >
-                {saveStatus === 'saving' || saveStatus === 'loading' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Clipboard className="mr-2 h-4 w-4" />
-                )}
-                {saveStatus === 'saved'
-                  ? 'Saved'
-                  : saveStatus === 'error'
-                  ? 'Retry save'
-                  : 'Save draft'}
-              </Button>
-              <p className="text-xs leading-5 text-muted-foreground">
-                Drafts are saved per user and can share reusable brand guides
-                across multiple products.
+              <p className="text-sm text-muted-foreground">
+                {draftId
+                  ? `Working in saved draft: ${draftName}`
+                  : 'We will save the draft from Review once the package is ready.'}
               </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Layers3 className="h-4 w-4 text-primary" />
-                Module Strategy
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="module-strategy">Starting layout</Label>
-                <select
-                  id="module-strategy"
-                  value={strategyId}
-                  onChange={(event) => applyStrategy(event.target.value)}
-                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                >
-                  {availableStrategies.map((strategy) => (
-                    <option key={strategy.id} value={strategy.id}>
-                      {strategy.name}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {activeStrategy.description}
-                </p>
-              </div>
-
-              <Collapsible>
-                <CollapsibleTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full justify-between"
-                  >
-                    Advanced module controls
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-4 space-y-4">
-                  <div className="space-y-2">
-                    <Label>Current module order</Label>
-                    <div className="space-y-1.5">
-                      {modules.map((module, index) => (
-                        <div
-                          key={module.id}
-                          className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs"
-                        >
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-muted font-mono">
-                            {index + 1}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate">
-                            {module.title}
-                          </span>
-                          <Badge variant="outline" className="text-[10px]">
-                            {module.imageSlots.length
-                              ? `${module.imageSlots.length} img`
-                              : 'text'}
-                          </Badge>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Add module</Label>
-                    <div className="grid gap-2">
-                      {availableModules.map((module) => (
-                        <Button
-                          key={module.id}
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-auto justify-start whitespace-normal py-2 text-left"
-                          onClick={() => addModule(module.id)}
-                        >
-                          <Plus className="mr-2 h-4 w-4 shrink-0" />
-                          <span className="min-w-0">
-                            <span className="block text-sm">
-                              {module.title}
-                            </span>
-                            <span className="block truncate font-mono text-[10px] text-muted-foreground">
-                              {module.amazonType}
-                            </span>
-                          </span>
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Bot className="h-4 w-4 text-primary" />
-                AI Intake
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="product-name">Product name</Label>
-                <Input
-                  id="product-name"
-                  value={productName}
-                  onChange={(event) => setProductName(event.target.value)}
-                  placeholder="Stainless tea infuser"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="asin">ASIN</Label>
-                <Input
-                  id="asin"
-                  value={asin}
-                  onChange={(event) =>
-                    setAsin(event.target.value.toUpperCase())
-                  }
-                  placeholder="B0..."
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="content-tier">Content tier</Label>
-                <select
-                  id="content-tier"
-                  value={contentTier}
-                  onChange={(event) =>
-                    applyContentTier(event.target.value as ContentTier)
-                  }
-                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                >
-                  <option value="Basic A+">Basic A+ · max 5 modules</option>
-                  <option value="Premium A+">
-                    Premium A+ · max 6-7 modules
-                  </option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="product-listing-url">
-                  Product listing link
-                </Label>
-                <div
-                  className="relative"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const url =
-                      event.dataTransfer.getData('text/uri-list') ||
-                      extractFirstUrl(event.dataTransfer.getData('text/plain'));
-                    if (url) {
-                      const productSource =
-                        sources.find(
-                          (source) => source.kind === 'Product listing'
-                        ) || sources[0];
-                      if (productSource) {
-                        const nextSource = { ...productSource, url };
-                        updateSource(productSource.id, { url });
-                        void checkSource(nextSource);
-                      } else {
-                        const nextSource = {
-                          id: Date.now(),
-                          kind: 'Product listing' as const,
-                          url,
-                        };
-                        setSources((current) => [nextSource, ...current]);
-                        void checkSource(nextSource);
-                      }
-                    }
-                  }}
-                >
-                  <LinkIcon className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="product-listing-url"
-                    value={
-                      sources.find(
-                        (source) => source.kind === 'Product listing'
-                      )?.url || ''
-                    }
-                    onChange={(event) => {
-                      const url = event.target.value;
-                      const productSource =
-                        sources.find(
-                          (source) => source.kind === 'Product listing'
-                        ) || sources[0];
-                      if (productSource) {
-                        updateSource(productSource.id, { url });
-                      }
-                    }}
-                    onBlur={() => {
-                      const productSource = sources.find(
-                        (source) => source.kind === 'Product listing'
-                      );
-                      if (productSource) void checkSource(productSource);
-                    }}
-                    placeholder="Drag or paste product listing URL"
-                    className="pl-7 text-sm"
-                  />
-                </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Drop the Amazon, Shopify, Alibaba, or landing page link here
-                  to make it the primary product source.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="notes">What you know so far</Label>
-                <Textarea
-                  id="notes"
-                  value={rawNotes}
-                  onChange={(event) => setRawNotes(event.target.value)}
-                  placeholder="Paste rough notes, bullets, customer reviews, supplier claims, dimensions, or anything the AI should learn from."
-                  className="min-h-24"
-                />
-                <p className="text-xs leading-5 text-muted-foreground">
-                  The AI should fill the structured fields below as it extracts
-                  facts from links, photos, notes, and listing data.
-                </p>
-              </div>
-
-              <Collapsible>
-                <CollapsibleTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full justify-between"
-                  >
-                    AI-filled product memory
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-4 space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="one-liner">What it does</Label>
-                    <Textarea
-                      id="one-liner"
-                      value={productOneLiner}
-                      onChange={(event) =>
-                        setProductOneLiner(event.target.value)
-                      }
-                      placeholder="One sentence. Usually AI-filled from sources."
-                      className="min-h-16"
-                    />
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-                    <div className="space-y-2">
-                      <Label htmlFor="target-customer">Target customer</Label>
-                      <Textarea
-                        id="target-customer"
-                        value={targetCustomer}
-                        onChange={(event) =>
-                          setTargetCustomer(event.target.value)
-                        }
-                        placeholder="Who buys it, why now, what they care about."
-                        className="min-h-20"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="price-point">Price point</Label>
-                      <Input
-                        id="price-point"
-                        value={pricePoint}
-                        onChange={(event) => setPricePoint(event.target.value)}
-                        placeholder="Budget, mid-market, premium..."
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="features">Features and benefits</Label>
-                    <Textarea
-                      id="features"
-                      value={keyFeatures}
-                      onChange={(event) => setKeyFeatures(event.target.value)}
-                      placeholder="Top features with buyer benefit for each."
-                      className="min-h-24"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="differentiators">Differentiators</Label>
-                    <Textarea
-                      id="differentiators"
-                      value={differentiators}
-                      onChange={(event) =>
-                        setDifferentiators(event.target.value)
-                      }
-                      placeholder="Materials, bundle, proof, compatibility, patents, certifications..."
-                      className="min-h-20"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="objections">Buyer objections</Label>
-                    <Textarea
-                      id="objections"
-                      value={objections}
-                      onChange={(event) => setObjections(event.target.value)}
-                      placeholder="What might stop a buyer from purchasing?"
-                      className="min-h-20"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="brand-colors">Brand colors</Label>
-                    <Input
-                      id="brand-colors"
-                      value={brandColors}
-                      onChange={(event) => setBrandColors(event.target.value)}
-                      placeholder="#123456, #FFFFFF..."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="logo-notes">Logo rules</Label>
-                    <Textarea
-                      id="logo-notes"
-                      value={logoNotes}
-                      onChange={(event) => setLogoNotes(event.target.value)}
-                      placeholder="Transparent PNG, reversed logo, clear space, preferred placement..."
-                      className="min-h-20"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="voice">Brand voice</Label>
-                    <Textarea
-                      id="voice"
-                      value={brandVoice}
-                      onChange={(event) => setBrandVoice(event.target.value)}
-                      placeholder="Clean, premium, practical, no hype."
-                      className="min-h-20"
-                    />
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Source Links</CardTitle>
-            </CardHeader>
-            <CardContent
-              className="space-y-3"
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                const url =
-                  event.dataTransfer.getData('text/uri-list') ||
-                  extractFirstUrl(event.dataTransfer.getData('text/plain'));
-                if (url) {
-                  addDroppedSource(url);
-                }
-              }}
-            >
-              <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                Drag product, supplier, Alibaba, Amazon, Shopify, or competitor
-                links here. SellAvant will flag sources that look gated,
-                paywalled, or blocked.
-              </div>
-              {sources.map((source) => (
-                <div
-                  key={source.id}
-                  className="grid grid-cols-[116px_1fr] gap-2"
-                >
-                  <select
-                    value={source.kind}
-                    onChange={(event) => {
-                      const kind = event.target.value as SourceKind;
-                      updateSource(source.id, { kind });
-                    }}
-                    className="rounded-md border bg-background px-2 text-xs"
-                  >
-                    {SOURCE_KINDS.map((kind) => (
-                      <option key={kind} value={kind}>
-                        {kind}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="relative">
-                    <LinkIcon className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      value={source.url}
-                      onChange={(event) => {
-                        const url = event.target.value;
-                        updateSource(source.id, { url });
-                      }}
-                      onBlur={() => checkSource(source)}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const url =
-                          event.dataTransfer.getData('text/uri-list') ||
-                          extractFirstUrl(
-                            event.dataTransfer.getData('text/plain')
-                          );
-                        if (url) {
-                          const nextSource = { ...source, url };
-                          updateSource(source.id, { url });
-                          void checkSource(nextSource);
-                        }
-                      }}
-                      placeholder="https://..."
-                      className="pl-7 text-sm"
-                    />
-                  </div>
-                  {sourceChecks[source.id]?.status &&
-                    sourceChecks[source.id]?.status !== 'idle' && (
-                      <div className="col-span-2 -mt-1 flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
-                        {sourceChecks[source.id].status === 'checking' ? (
-                          <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                        ) : sourceChecks[source.id].status === 'accessible' ? (
-                          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 text-emerald-600" />
-                        ) : (
-                          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 text-amber-600" />
-                        )}
-                        <span
-                          className={cn(
-                            'rounded-sm border px-1.5 py-0.5 font-medium',
-                            sourceStatusClass(sourceChecks[source.id].status)
-                          )}
-                        >
-                          {sourceChecks[source.id].status}
-                        </span>
-                        <span className="leading-5 text-muted-foreground">
-                          {sourceChecks[source.id].message}
-                          {sourceChecks[source.id].httpStatus
-                            ? ` HTTP ${sourceChecks[source.id].httpStatus}.`
-                            : ''}
-                        </span>
-                      </div>
-                    )}
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={addSource}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add source
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Assets</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                Drop product photos, logo files, lifestyle images, and polished
-                assets into the module-specific slots when you have them.
-              </div>
-              <Collapsible>
-                <CollapsibleTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full justify-between"
-                  >
-                    {assetCount}/{slotCount} module assets attached
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-3 space-y-3">
-                  {modules
-                    .flatMap((module) =>
-                      module.imageSlots.map((slot) => ({
-                        moduleId: module.id,
-                        slot,
-                      }))
-                    )
-                    .map(({ moduleId, slot }) => (
-                      <DropSlot
-                        key={`${moduleId}-${slot.id}`}
-                        slot={slot}
-                        onFile={(file) =>
-                          void uploadSlotAsset(moduleId, slot.id, file)
-                        }
-                      />
-                    ))}
-                </CollapsibleContent>
-              </Collapsible>
-            </CardContent>
-          </Card>
-        </aside>
-
-        <main className="min-w-0">
-          <div className="mb-4 rounded-md border bg-card p-4">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="max-w-3xl">
-                <div className="flex items-center gap-2">
-                  <WandSparkles className="h-4 w-4 text-primary" />
-                  <h2 className="font-semibold">AI generation brief</h2>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  The AI starts by interviewing only for missing facts, then
-                  drafts a module-by-module A+ package with logo dropzones,
-                  matched mobile layouts, image prompts, Canva instructions, and
-                  compliance checks.
-                </p>
-              </div>
-              <Button type="button" onClick={copyPrompt}>
-                <Clipboard className="mr-2 h-4 w-4" />
-                {promptCopied ? 'Prompt copied' : 'Copy AI prompt'}
-              </Button>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              {[
-                {
-                  title: '1. Learn',
-                  body: 'Read listing, supplier, competitor, notes, and uploaded images.',
-                },
-                {
-                  title: '2. Wireframe',
-                  body: 'Choose real Amazon modules with desktop/mobile and logo safe zones.',
-                },
-                {
-                  title: '3. Produce',
-                  body: 'Write copy, image prompts, alt text, and Seller Central build sheet.',
-                },
-              ].map((step) => (
-                <div
-                  key={step.title}
-                  className="rounded-md border bg-muted/40 p-3"
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-4">
+              {SIMPLE_WIZARD_STEPS.map((step, index) => (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() => goToWizardStep(step.id)}
+                  className={cn(
+                    'rounded-md border px-3 py-3 text-left transition-colors',
+                    step.id === wizardStep
+                      ? 'border-primary bg-primary/5'
+                      : 'bg-background hover:bg-muted/50'
+                  )}
                 >
-                  <p className="text-sm font-medium">{step.title}</p>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-semibold">
+                      {index + 1}
+                    </span>
+                    <span className="text-sm font-medium">{step.title}</span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
                     {step.body}
                   </p>
-                </div>
+                </button>
               ))}
             </div>
           </div>
 
-          <Tabs defaultValue="brief" className="space-y-4">
-            <TabsList>
-              <TabsTrigger value="brief">AI Brief</TabsTrigger>
-              <TabsTrigger value="modules">Modules</TabsTrigger>
-              <TabsTrigger value="output">Output</TabsTrigger>
-              <TabsTrigger value="checks">Checks</TabsTrigger>
-            </TabsList>
+          {wizardStep === 'basics' && (
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="space-y-6">{intakeCard}</div>
+              <div className="space-y-6">
+                {brandGuideWizardCard}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">
+                      What happens here
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm text-muted-foreground">
+                    <p>
+                      Start with the product, listing URL, and whatever rough
+                      notes you already have.
+                    </p>
+                    <p>
+                      Once the product and brand style are clear, the rest of
+                      the wizard can focus on sources, assets, and the final A+
+                      package.
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
 
-            <TabsContent value="brief" className="space-y-4">
-              <div className="rounded-md border bg-card p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold">Prompt contract</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      This is the working prompt assembled from your links,
-                      notes, uploaded assets, and module strategy.
+          {wizardStep === 'sources' && (
+            <div className="space-y-6">
+              {sourcesCard}
+              {generationBrief}
+            </div>
+          )}
+
+          {wizardStep === 'assets' && (
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="space-y-6">
+                {assetsCard}
+                <div className="rounded-md border bg-card p-4">
+                  <h3 className="font-semibold">How SellAvant uses them</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    The AI will classify each image as a product shot, lifestyle
+                    scene, package detail, logo, comparison reference, or source
+                    material, then recommend the right Amazon A+ modules around
+                    the strongest assets.
+                  </p>
+                </div>
+              </div>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Image Library</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="rounded-md border bg-muted/40 p-3">
+                    <p className="text-2xl font-semibold">
+                      {libraryAssetCount}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      uploaded images
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={copyPrompt}
-                  >
-                    <Clipboard className="mr-2 h-4 w-4" />
-                    {promptCopied ? 'Copied' : 'Copy prompt'}
-                  </Button>
-                </div>
-              </div>
-              <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted p-4 text-xs leading-5">
-                {aiPrompt}
-              </pre>
-            </TabsContent>
-
-            <TabsContent value="modules" className="space-y-4">
-              <div className="rounded-md border bg-card p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-primary" />
-                    <h2 className="font-semibold">Editable package plan</h2>
-                  </div>
-                  <Button type="button" size="sm" onClick={copyPrompt}>
-                    <Sparkles className="mr-2 h-4 w-4" />
-                    Send to AI
-                  </Button>
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  These modules are the starting layout the AI should refine,
-                  replace, or reorder based on the product and source evidence.
-                </p>
-              </div>
-              {modules.map((module, index) => (
-                <ModulePreview
-                  key={module.id}
-                  module={module}
-                  canMoveUp={index > 0}
-                  canMoveDown={index < modules.length - 1}
-                  canRemove={modules.length > 1}
-                  onMoveUp={() => moveModule(module.id, -1)}
-                  onMoveDown={() => moveModule(module.id, 1)}
-                  onRemove={() => removeModule(module.id)}
-                />
-              ))}
-            </TabsContent>
-
-            <TabsContent value="output" className="space-y-4">
-              <div className="rounded-md border bg-card p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold">Amazon Builder Package</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Copy this into the next API/import layer or use it as the
-                      Seller Central build sheet.
+                  <div className="space-y-2 text-sm text-muted-foreground">
+                    <p>
+                      Add a short description when it is not obvious what the
+                      image shows.
+                    </p>
+                    <p>
+                      You do not need to decide which module gets which image.
+                      That happens during generation.
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={copyPackage}
-                  >
-                    <Clipboard className="mr-2 h-4 w-4" />
-                    {copied ? 'Copied' : 'Copy JSON'}
-                  </Button>
-                </div>
-              </div>
-              <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted p-4 text-xs leading-5">
-                {JSON.stringify(packageJson, null, 2)}
-              </pre>
-            </TabsContent>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
-            <TabsContent value="checks" className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                {[
-                  'Each visual section maps to a real Amazon module.',
-                  'Mobile copy and desktop copy share the same source module.',
-                  'Logo is reserved as an upload slot, not regenerated by AI.',
-                  'All generated headlines stay under the module character limits.',
-                  'Final copy needs spelling and compliance review before approval submission.',
-                  'A+ API publishing requires Product Listing or Brand Analytics access.',
-                ].map((check, index) => (
-                  <div key={check} className="rounded-md border bg-card p-4">
-                    <div className="flex items-start gap-3">
-                      {index < 4 ? (
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+          {wizardStep === 'review' && (
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <WandSparkles className="h-4 w-4 text-primary" />
+                    Generate Package
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="draft-name">Draft name</Label>
+                    <Input
+                      id="draft-name"
+                      value={draftName}
+                      onChange={(event) => setDraftName(event.target.value)}
+                      placeholder="Spring launch A+"
+                      className={FIELD_CLASSNAME}
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      onClick={() => void generateAPlusPackage()}
+                      disabled={generateStatus === 'generating'}
+                    >
+                      {generateStatus === 'generating' ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       ) : (
-                        <AlertCircle className="mt-0.5 h-4 w-4 text-amber-600" />
+                        <WandSparkles className="mr-2 h-4 w-4" />
                       )}
-                      <p className="text-sm leading-6">{check}</p>
-                    </div>
+                      {generateStatus === 'generating'
+                        ? 'Generating'
+                        : generatedPackage
+                        ? 'Regenerate Package'
+                        : 'Generate A+ Package'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void saveDraft()}
+                      disabled={
+                        saveStatus === 'saving' || saveStatus === 'loading'
+                      }
+                    >
+                      {saveStatus === 'saving' || saveStatus === 'loading' ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Clipboard className="mr-2 h-4 w-4" />
+                      )}
+                      {saveStatus === 'saved'
+                        ? 'Saved'
+                        : saveStatus === 'error'
+                        ? 'Retry save'
+                        : 'Save draft'}
+                    </Button>
                   </div>
-                ))}
-              </div>
-            </TabsContent>
-          </Tabs>
-        </main>
-      </div>
+                  {generateStatus === 'generating' ? (
+                    <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <span className="font-medium">
+                            {generationProgress.phase === 'strategy'
+                              ? 'Building strategy…'
+                              : generationProgress.phase === 'package-outer'
+                              ? 'Planning module structure…'
+                              : generationProgress.phase === 'package-modules'
+                              ? `Writing modules (${
+                                  Object.values(
+                                    generationProgress.moduleStatus ?? {}
+                                  ).filter((s) => s !== 'pending').length
+                                }/${
+                                  generationProgress.moduleSpecs?.length ?? '?'
+                                })…`
+                              : generationProgress.phase === 'images'
+                              ? 'Generating preview images…'
+                              : generationProgress.phase === 'finalizing'
+                              ? 'Finalizing…'
+                              : 'Starting…'}
+                          </span>
+                        </div>
+                        <span className="font-mono text-xs text-sky-700">
+                          {((generationProgress.elapsedMs ?? 0) / 1000).toFixed(
+                            1
+                          )}
+                          s
+                        </span>
+                      </div>
+                      {generationProgress.moduleSpecs?.length ? (
+                        <ul className="mt-3 space-y-1">
+                          {generationProgress.moduleSpecs.map((spec) => {
+                            const status =
+                              generationProgress.moduleStatus?.[spec.order] ??
+                              'pending';
+                            return (
+                              <li
+                                key={spec.order}
+                                className="flex items-center gap-2 text-xs"
+                              >
+                                {status === 'done' ? (
+                                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                ) : status === 'failed' ? (
+                                  <AlertCircle className="h-3.5 w-3.5 text-amber-600" />
+                                ) : (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500" />
+                                )}
+                                <span className="font-mono text-[10px] text-sky-700">
+                                  M{spec.order}
+                                </span>
+                                <span className="truncate text-sky-900">
+                                  {spec.title}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {generateStatus === 'error' && generateError ? (
+                    <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{generateError}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="border-red-300 bg-white hover:bg-red-100"
+                        onClick={() => void generateAPlusPackage()}
+                      >
+                        <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null}
+                  <p className="text-sm text-muted-foreground">
+                    SellAvant will run separate strategy and package models,
+                    then produce the actual module copy, paired desktop/mobile
+                    blueprints, asset assignments, logo dropzones, optional
+                    image briefs, and Seller Central build sheet.
+                  </p>
+                </CardContent>
+              </Card>
+              {generatedPackageCard}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between rounded-lg border bg-card p-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => moveWizardStep(-1)}
+              disabled={activeWizardIndex <= 0}
+            >
+              Back
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              Step {activeWizardIndex + 1} of {SIMPLE_WIZARD_STEPS.length}
+            </p>
+            <Button
+              type="button"
+              onClick={() => moveWizardStep(1)}
+              disabled={activeWizardIndex >= SIMPLE_WIZARD_STEPS.length - 1}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
