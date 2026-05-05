@@ -171,5 +171,13 @@
     "*.{json,md,yml,yaml}": [
       "prettier --write"
     ]
+  },
+  "volta": {
+    "node": "24.14.1",
+    "npm": "11.8.0"
+  },
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
   }
 }
