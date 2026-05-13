@@ -10,9 +10,9 @@ import { BookTemplate, Files, Link2, ShieldCheck } from 'lucide-react';
 const features = [
   {
     icon: Files,
-    title: 'Source Collection',
+    title: 'Authorized Seller Analytics',
     description:
-      'Bring in listing pages, supplier links, competitor references, raw product photography, and polished assets in one workspace.',
+      'Use seller-authorized Brand Analytics, catalog, listing, sales, and advertising data to prioritize work for the connected account.',
   },
   {
     icon: BookTemplate,
@@ -28,9 +28,9 @@ const features = [
   },
   {
     icon: ShieldCheck,
-    title: 'Account-Aware Integrations',
+    title: 'Policy-Aware Integrations',
     description:
-      'Connect Amazon seller and advertising accounts when available, while still supporting manual creative workflows when they are not.',
+      'Connect Amazon seller and advertising accounts while keeping analytics scoped to the authorized seller and avoiding cross-seller data products.',
   },
 ];
 
@@ -44,9 +44,9 @@ export function FeaturesSection() {
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-muted-foreground text-pretty">
             Sellavant is designed for the messy middle of e-commerce creative
-            work: collecting inputs, shaping brand rules, and preparing
-            publishable A+ packages without losing the source context along the
-            way.
+            work: analyzing authorized seller data, shaping brand rules, and
+            preparing publishable A+ packages without losing the source context
+            along the way.
           </p>
         </div>
 

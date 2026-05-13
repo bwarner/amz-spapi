@@ -77,16 +77,39 @@ export default function PrivacyPage() {
             Sellavant is designed to work with official Amazon APIs such as the
             Selling Partner API and Amazon Advertising API. Access is limited to
             scopes and account data authorized by the user. OAuth credentials
-            are stored for authorized access only. Personally identifiable buyer
-            data should not be retained beyond what is necessary to operate the
-            authorized workflow, and some sensitive categories are intentionally
-            excluded from caching or draft storage.
+            are stored for authorized access only. Amazon data is used to
+            provide seller-authorized analytics, reporting, content, and
+            workflow features for the connected seller account.
+          </p>
+          <p className="leading-7">
+            Sellavant does not aggregate SP-API data across Selling Partners,
+            businesses, or Amazon customers to provide or sell datasets,
+            benchmarks, rankings, or competitive intelligence. Sellavant does
+            not calculate, promote, publish, or sell insights about
+            Amazon&apos;s business, marketplace health, strategy, or internal
+            operations. Personally identifiable buyer data should not be
+            retained beyond what is necessary to operate the authorized
+            workflow, and some sensitive categories are intentionally excluded
+            from caching or draft storage.
           </p>
         </section>
 
         <section className="space-y-3">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-            4. Uploaded Files & Source Links
+            4. Data Protection
+          </h2>
+          <p className="leading-7">
+            Sellavant uses HTTPS for data in transit, environment-based secret
+            configuration, access controls, and encrypted credential storage for
+            authorized Amazon connections. Access to stored workflow data is
+            limited to the systems and personnel needed to operate, support, and
+            secure the service.
+          </p>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
+            5. Uploaded Files & Source Links
           </h2>
           <p className="leading-7">
             Brand guides, logos, source files, screenshots, and linked public
@@ -99,7 +122,7 @@ export default function PrivacyPage() {
 
         <section className="space-y-3">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-            5. Sharing & Service Providers
+            6. Sharing & Service Providers
           </h2>
           <p className="leading-7">
             Sellavant relies on third-party infrastructure providers for
@@ -111,7 +134,7 @@ export default function PrivacyPage() {
 
         <section className="space-y-3">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-            6. Retention & Deletion
+            7. Retention & Deletion
           </h2>
           <p className="leading-7">
             Sellavant retains account data, saved drafts, and uploaded materials
@@ -124,7 +147,7 @@ export default function PrivacyPage() {
 
         <section className="space-y-3">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-            7. Your Choices
+            8. Your Choices
           </h2>
           <ul className="list-disc space-y-2 pl-6 leading-7">
             <li>
@@ -144,7 +167,7 @@ export default function PrivacyPage() {
 
         <section className="space-y-3">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-            8. Contact
+            9. Contact
           </h2>
           <p className="leading-7">
             For privacy questions, access requests, or deletion requests, email{' '}

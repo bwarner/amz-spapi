@@ -9,6 +9,8 @@ import SignupLogin from './signup-login';
 
 const navLinks = [
   { href: '/#product', label: 'Product' },
+  { href: '/analytics', label: 'Analytics' },
+  { href: '/pricing', label: 'Pricing' },
   { href: '/#workflow', label: 'Workflow' },
   { href: '/about', label: 'About' },
   { href: '/privacy', label: 'Privacy' },

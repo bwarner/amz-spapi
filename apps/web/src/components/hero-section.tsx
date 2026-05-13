@@ -4,8 +4,8 @@ import { ArrowRight, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const proofPoints = [
-  'Amazon seller workflow focus',
-  'A+ content builder & brand guides',
+  'Brand Analytics workflows',
+  'Seller-authorized reporting',
   'SP-API & Ads API connections',
 ];
 
@@ -31,9 +31,9 @@ export function HeroSection() {
             Build better Amazon content packages with a cleaner AI workflow.
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-center text-lg leading-8 text-slate-200 text-pretty">
-            Sellavant helps your team collect product sources, organize brand
-            rules, and turn raw assets into A+ content packages that are easier
-            to review and publish.
+            Sellavant helps your team analyze authorized Amazon seller data,
+            organize brand rules, and turn insights into A+ content, listing,
+            and advertising workflow improvements.
           </p>
 
           <div className="mt-10 flex w-full flex-wrap justify-center gap-3">
@@ -49,7 +49,7 @@ export function HeroSection() {
               className="border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white"
               asChild
             >
-              <Link href="/about">Learn About Sellavant</Link>
+              <Link href="/analytics">Review Analytics Services</Link>
             </Button>
           </div>
 

@@ -76,11 +76,11 @@ export default function AboutPage() {
           </h2>
           <p className="text-muted-foreground leading-7">
             Sellavant helps organize seller workflows around connected Amazon
-            accounts, uploaded assets, public or supplier source links, saved
-            drafts, and reusable brand guide data. The current product direction
-            is centered on A+ content creation, but the same asset and brand
-            systems are designed to support related listing and advertising
-            workflows over time.
+            accounts, authorized Brand Analytics reports, uploaded assets,
+            public or supplier source links, saved drafts, and reusable brand
+            guide data. The current product direction is centered on analytics,
+            A+ content creation, and the operational work needed to turn seller
+            data into reviewed marketplace improvements.
           </p>
           <p className="text-muted-foreground leading-7">
             Rather than generating one giant block of content and leaving users
@@ -98,6 +98,9 @@ export default function AboutPage() {
           <ul className="space-y-3 text-muted-foreground">
             <li>
               Connect seller or advertising accounts when they are available.
+            </li>
+            <li>
+              Review authorized Brand Analytics and account-level seller data.
             </li>
             <li>
               Upload style guides, logos, source files, and product assets.

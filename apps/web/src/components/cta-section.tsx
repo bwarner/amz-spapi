@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight, FileText, Shield } from 'lucide-react';
+import { ArrowRight, BarChart3, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export function CTASection() {
@@ -10,22 +10,22 @@ export function CTASection() {
           <div className="grid gap-8 px-6 py-10 sm:px-10 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-end">
             <div className="space-y-4 text-center lg:text-left">
               <h2 className="text-3xl font-semibold tracking-tight text-foreground text-balance sm:text-4xl">
-                Build the public-facing foundation before Amazon asks for it
+                Turn Amazon seller data into the next useful action
               </h2>
               <p className="mx-auto max-w-2xl text-lg leading-8 text-muted-foreground text-pretty lg:mx-0">
-                Sellavant now includes the public pages and product positioning
-                needed for a more credible OAuth review posture, alongside the
-                actual seller workflows you are building.
+                Use authorized Brand Analytics, catalog, advertising, and
+                product-source context to prioritize content, listing, and
+                merchandising work for your own seller account.
               </p>
               <div className="flex flex-wrap justify-center gap-3 lg:justify-start">
                 <Button size="lg" asChild>
-                  <Link href="/auth/login?screen_hint=signup&returnTo=/chat">
-                    Open The Workspace
+                  <Link href="/analytics">
+                    Review Analytics Services
                     <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </Link>
                 </Button>
                 <Button variant="outline" size="lg" asChild>
-                  <Link href="/terms">Review Terms</Link>
+                  <Link href="/pricing">View Pricing</Link>
                 </Button>
               </div>
             </div>
@@ -33,29 +33,32 @@ export function CTASection() {
             <div className="grid gap-4">
               <div className="rounded-xl border bg-muted/30 p-4">
                 <div className="flex items-center gap-3">
-                  <FileText
+                  <BarChart3
                     className="h-5 w-5 text-primary"
                     aria-hidden="true"
                   />
                   <p className="font-medium text-foreground">
-                    Public Site Coverage
+                    Seller-Scoped Analytics
                   </p>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  About, Privacy, Terms, Contact, and a cleaner homepage built
-                  for a public application review.
+                  Search, catalog, advertising, and brand reports stay tied to
+                  the seller account that authorized access.
                 </p>
               </div>
               <div className="rounded-xl border bg-muted/30 p-4">
                 <div className="flex items-center gap-3">
-                  <Shield className="h-5 w-5 text-primary" aria-hidden="true" />
+                  <ShieldCheck
+                    className="h-5 w-5 text-primary"
+                    aria-hidden="true"
+                  />
                   <p className="font-medium text-foreground">
-                    Review-Oriented Positioning
+                    Authorized Connections
                   </p>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  Clear product scope, plain-language legal pages, and navigable
-                  public information for prospective users and reviewers.
+                  Connect Amazon accounts only through seller-approved access,
+                  with clear limits on how Amazon data is used.
                 </p>
               </div>
             </div>

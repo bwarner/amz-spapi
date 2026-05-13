@@ -13,6 +13,8 @@ const companyLinks = [
 
 const productLinks = [
   { href: '/#product', label: 'Product' },
+  { href: '/analytics', label: 'Analytics' },
+  { href: '/pricing', label: 'Pricing' },
   { href: '/#workflow', label: 'Workflow' },
   { href: '/login', label: 'Sign In' },
 ];
@@ -33,6 +35,9 @@ export function Footer() {
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">
               Sellavant helps Amazon teams organize product sources, shape brand
               guides, and produce cleaner A+ content workflows with AI.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Sellavant is operated by Farvision LLC.
             </p>
             <p className="text-sm text-muted-foreground">
               Contact:{' '}
@@ -96,9 +101,9 @@ export function Footer() {
 
         <div className="mt-10 border-t pt-6 text-sm text-muted-foreground">
           <p>
-            © {new Date().getFullYear()} Sellavant. Amazon-related workflows are
-            powered by seller-authorized integrations and customer-provided
-            assets.
+            © {new Date().getFullYear()} Farvision LLC. Sellavant workflows for
+            Amazon are powered by seller-authorized integrations and
+            customer-provided assets.
           </p>
         </div>
       </div>
