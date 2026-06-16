@@ -1,7 +1,21 @@
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
 import { createAIProvider } from '@amz-spapi/ai-provider';
+import {
+  APlusGeneratedModuleSchema,
+  RENDERABLE_AMAZON_MODULE_TYPES,
+  type RenderableAmazonModuleType,
+  amazonModuleTypeToKind,
+  generatedModuleSchemaForKind,
+  isAplusGenerationModel,
+  isRenderableAmazonModuleType,
+  moduleImageSlots,
+} from '@farvisionllc/models';
 import { auth0 } from '../../../../lib/auth0';
+import {
+  resolveAplusGenerationMode,
+  resolveImageModelVariant,
+} from '../../../../lib/image-model-flag';
 
 export const maxDuration = 120;
 
@@ -33,6 +47,9 @@ const assetSchema = z.object({
 const requestSchema = z.object({
   productName: z.string().optional(),
   asin: z.string().optional(),
+  // Optional generation model override (gateway slug). Validated against the
+  // shared allowlist before use; anything else falls back to the server default.
+  model: z.string().optional(),
   contentTier: z.enum(['Basic A+', 'Premium A+']).default('Basic A+'),
   rawNotes: z.string().optional(),
   productOneLiner: z.string().optional(),
@@ -80,7 +97,10 @@ const strategySchema = z.object({
   ),
   modulePlan: z.array(
     z.object({
-      moduleType: z.string(),
+      // Constrained to canonical Amazon module types so each planned module maps
+      // to a DISTINCT renderable layout (free-form labels collapse to the
+      // single-image-text fallback → every module looks identical).
+      moduleType: z.enum(RENDERABLE_AMAZON_MODULE_TYPES),
       role: z.string(),
       assetsToUse: z.array(z.string()),
       reason: z.string(),
@@ -88,83 +108,9 @@ const strategySchema = z.object({
   ),
 });
 
-const moduleSchema = z.object({
-  order: z.number(),
-  amazonModuleType: z.string(),
-  title: z.string(),
-  objective: z.string(),
-  visualBrief: z.string(),
-  desktopLayout: z.string(),
-  mobileLayout: z.string(),
-  desktopWireframe: z.array(z.string()),
-  mobileWireframe: z.array(z.string()),
-  headline: z.string(),
-  bodyCopy: z.string(),
-  bullets: z.array(z.string()),
-  canvaLayers: z.array(
-    z.object({
-      layer: z.string(),
-      content: z.string(),
-      notes: z.string(),
-    })
-  ),
-  assetAssignments: z.array(
-    z.object({
-      assetFileName: z.string(),
-      role: z.string(),
-      editNotes: z.string(),
-    })
-  ),
-  imageJobs: z.array(
-    z.object({
-      jobId: z.string(),
-      purpose: z.string(),
-      size: z.enum(['1024x1024', '1792x1024', '1024x1792']),
-      prompt: z.string(),
-      avoid: z.array(z.string()),
-    })
-  ),
-  logoDropzone: z.object({
-    needed: z.boolean(),
-    placement: z.string(),
-    notes: z.string(),
-  }),
-  altText: z.string(),
-  complianceNotes: z.array(z.string()),
-  compositeMockup: z
-    .object({
-      purpose: z.string(),
-      desktop: z.object({
-        size: z.enum(['1024x1024', '1792x1024', '1024x1792']),
-        prompt: z.string(),
-        textElements: z.array(
-          z.object({
-            role: z.string(),
-            text: z.string(),
-            position: z.string(),
-            typography: z.string(),
-          })
-        ),
-      }),
-      mobile: z.object({
-        size: z.enum(['1024x1024', '1792x1024', '1024x1792']),
-        prompt: z.string(),
-        textElements: z.array(
-          z.object({
-            role: z.string(),
-            text: z.string(),
-            position: z.string(),
-            typography: z.string(),
-          })
-        ),
-      }),
-    })
-    .optional(),
-});
-
 const moduleSpecSchema = z.object({
   order: z.number(),
-  amazonModuleType: z.string(),
+  amazonModuleType: z.enum(RENDERABLE_AMAZON_MODULE_TYPES),
   title: z.string(),
   objective: z.string(),
 });
@@ -199,7 +145,7 @@ const packageSchema = z.object({
     imagePlan: z.string(),
   }),
   assumptions: z.array(z.string()),
-  modules: z.array(moduleSchema),
+  modules: z.array(APlusGeneratedModuleSchema),
   sellerCentralBuildSheet: z.array(
     z.object({
       step: z.string(),
@@ -225,7 +171,7 @@ const NO_TIME_SENSITIVE_RULE = [
 function clampModuleCount(
   contentTier: z.infer<typeof requestSchema>['contentTier']
 ) {
-  return contentTier === 'Premium A+' ? 6 : 5;
+  return contentTier === 'Premium A+' ? 7 : 5;
 }
 
 function humanProductName(input: z.infer<typeof requestSchema>) {
@@ -237,36 +183,88 @@ function buildPackageOuterFromStrategy(
   strategy: StrategyOutput
 ): PackageOuterOutput {
   const maxModules = clampModuleCount(input.contentTier);
-  const plannedModules = strategy.modulePlan.slice(0, maxModules);
-  const fallbackModules =
-    plannedModules.length > 0
-      ? plannedModules
-      : [
-          {
-            moduleType: 'STANDARD_IMAGE_TEXT_OVERLAY',
-            role: 'Introduce the product and primary buyer benefit.',
-            assetsToUse: [],
-            reason: 'Gives shoppers a fast, clear reason to keep reading.',
-          },
-          {
-            moduleType: 'STANDARD_FOUR_IMAGE_TEXT',
-            role: 'Explain the strongest features as scannable benefits.',
-            assetsToUse: [],
-            reason: 'Turns product details into an easy comparison surface.',
-          },
-          {
-            moduleType: 'STANDARD_SINGLE_IMAGE_SPECS_DETAIL',
-            role: 'Clarify practical usage, fit, or materials.',
-            assetsToUse: [],
-            reason: 'Reduces buyer uncertainty before purchase.',
-          },
-          {
-            moduleType: 'STANDARD_COMPARISON_TABLE',
-            role: 'Help shoppers choose the right option or understand positioning.',
-            assetsToUse: [],
-            reason: 'Supports decision speed without promotional claims.',
-          },
-        ];
+  // Keep only planned modules that map to a real renderable layout, and dedupe
+  // by layout KIND so two modules never render as the same design (the user's
+  // "all modules look the same" complaint). The default sequence below pads up
+  // to the tier target with additional distinct layouts.
+  const seenKinds = new Set<string>();
+  const plannedModules = strategy.modulePlan
+    .filter((module) => isRenderableAmazonModuleType(module.moduleType))
+    .filter((module) => {
+      const kind = amazonModuleTypeToKind(module.moduleType);
+      if (seenKinds.has(kind)) return false;
+      seenKinds.add(kind);
+      return true;
+    })
+    .slice(0, maxModules);
+  // A coherent default A+ story, using only Amazon module types we can render.
+  // Used to pad the AI's plan up to the tier target so Basic always ships a
+  // full set of modules instead of however few the strategy happened to name.
+  const defaultSequence: Array<{
+    moduleType: RenderableAmazonModuleType;
+    role: string;
+    assetsToUse: string[];
+    reason: string;
+  }> = [
+    {
+      moduleType: 'STANDARD_IMAGE_TEXT_OVERLAY',
+      role: 'Introduce the product and primary buyer benefit.',
+      assetsToUse: [],
+      reason: 'Gives shoppers a fast, clear reason to keep reading.',
+    },
+    {
+      moduleType: 'STANDARD_THREE_IMAGE_TEXT',
+      role: 'Explain the strongest features as scannable benefits.',
+      assetsToUse: [],
+      reason: 'Turns product details into an easy-to-scan benefit row.',
+    },
+    {
+      moduleType: 'STANDARD_DUAL_USE_SPLIT',
+      role: 'Show two contrasting use scenarios side by side (e.g. hot vs cold).',
+      assetsToUse: [],
+      reason: 'Demonstrates versatility at a glance with the same product.',
+    },
+    {
+      moduleType: 'STANDARD_FOUR_IMAGE_TEXT_QUADRANT',
+      role: 'Show use cases, kit contents, or additional benefits.',
+      assetsToUse: [],
+      reason: 'Adds breadth of benefits without long copy.',
+    },
+    {
+      moduleType: 'STANDARD_COMPARISON_TABLE',
+      role: 'Help shoppers choose the right option or understand positioning.',
+      assetsToUse: [],
+      reason: 'Supports decision speed without promotional claims.',
+    },
+    {
+      moduleType: 'STANDARD_TECH_SPECS',
+      role: 'Clarify dimensions, materials, care, and compatibility.',
+      assetsToUse: [],
+      reason: 'Reduces buyer uncertainty before purchase.',
+    },
+    {
+      moduleType: 'STANDARD_HEADER_IMAGE_TEXT',
+      role: 'Tell the brand or product story.',
+      assetsToUse: [],
+      reason: 'Builds trust and context for the buyer.',
+    },
+  ];
+  const fallbackModules = [...plannedModules];
+  // Rotate the fallback order per product so two different products don't pad
+  // out to the same canonical tail when the AI plan is short.
+  const rot =
+    humanProductName(input).length % Math.max(1, defaultSequence.length);
+  const rotatedDefault = [
+    ...defaultSequence.slice(rot),
+    ...defaultSequence.slice(0, rot),
+  ];
+  for (const candidate of rotatedDefault) {
+    if (fallbackModules.length >= maxModules) break;
+    const kind = amazonModuleTypeToKind(candidate.moduleType);
+    if (seenKinds.has(kind)) continue;
+    seenKinds.add(kind);
+    fallbackModules.push(candidate);
+  }
 
   return {
     title: `${humanProductName(input)} A+ content package`,
@@ -332,7 +330,16 @@ function buildPackageOuterFromStrategy(
   };
 }
 
-function createProvider() {
+function createProvider(modelOverride?: string) {
+  // A valid allowlisted override drives BOTH tiers (the generator runs on the
+  // 'fast' tier); otherwise fall back to env config / built-in defaults.
+  const override =
+    modelOverride && isAplusGenerationModel(modelOverride)
+      ? modelOverride
+      : undefined;
+  if (override) {
+    return createAIProvider({ models: { default: override, fast: override } });
+  }
   return createAIProvider({
     models: {
       ...(process.env['AI_DEFAULT_MODEL']
@@ -373,6 +380,14 @@ function compactInput(input: z.infer<typeof requestSchema>) {
     null,
     2
   );
+}
+
+function prepareGeneratedImagePrompt(prompt: string): string {
+  return [
+    prompt,
+    '',
+    'Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, or readable brand marks anywhere in the image. Leave any brand/logo placement as an empty logo-safe area for later editing.',
+  ].join('\n');
 }
 
 function classifyError(detail: string, phase: string) {
@@ -420,6 +435,172 @@ function classifyError(detail: string, phase: string) {
   };
 }
 
+/** Per-module field rules shared by both generation strategies. */
+const MODULE_FIELD_RULES: string[] = [
+  'TEXT FIELDS — write real CUSTOMER-FACING copy the buyer reads. Not design notes, not descriptions of the layout.',
+  '  • headline: ≤8 words, a concrete benefit. body: 1–3 sentences of durable benefit/use-case copy. bullets: ≤90 chars each, benefit statements.',
+  '  • company-logo: set tagline to a short (≤10 words) durable brand promise shown under the logo — e.g. “Insulated kraft cups built for specialty coffee service.” No price/claims.',
+  '  • hero modules (image-header-with-text / image-text-overlay / single-image-text / image-and-text): set badge to a SHORT spec/size pill (≤12 chars, e.g. “16 OZ”, “50-PACK”, “BPA-FREE”) when an obvious size/spec applies; omit otherwise. Never price or promo.',
+  '  • comparison-table: products[].title are the column labels; rows[] are spec/benefit rows with exactly one value per product (same order). Set highlight=true on the seller’s own product.',
+  '  • tech-specs: rows[] are {label, value} product facts (dimensions, materials, care, compatibility, package contents).',
+  '  • dual-use-split: exactly 2 panels showing two CONTRASTING use scenarios of the SAME product (e.g. “Hot Beverages” vs “Cold Drinks”, “Indoor” vs “Outdoor”). Each panel: a short uppercase label (≤3 words), an optional ≤120-char caption, and an image slot whose brief depicts that exact scenario with the same product/look.',
+  '',
+  'IMAGE SLOTS — every image slot describes a PHOTOGRAPH to be generated or uploaded later. For each slot provide role, size, alt, and brief. DO NOT output an "image" field; slots are filled downstream.',
+  '  • role: short stable id (e.g. "hero", "column-1", "comparison-thumb-1").',
+  '  • size: 1792x1024 for a wide hero/banner; 1024x1024 for square feature/column/grid images; 1024x1792 only when a tall portrait genuinely helps.',
+  '  • alt: ≤160 char description of the photo content. No brand names.',
+  '  • brief: a CINEMATIC, ASPIRATIONAL LIFESTYLE photographic prompt of 4–6 sentences — the kind of premium imagery in a high-end brand campaign, NOT a plain product shot. Prefer real people / hands actively USING the product in a believable moment, in a specific aspirational named environment (e.g. a sunlit specialty café, a modern kitchen at golden hour). It must name: the human action/moment, the hero product in genuine use, 3–5 atmospheric props, a specific surface + directional natural light source + ambient background depth, cinematic editorial lighting (soft window light, warm golden hour, etc.), shallow depth of field with foreground/mid/background layers, and a refined premium brand mood. Avoid flat-lay, isolated-on-white, studio-seamless, stock-photo stiffness, and minimalist-whitespace defaults.',
+  '  • CONTINUITY: every brief MUST restate the SAME product (same material/color/finish/shape per the SHOT BIBLE) and the SAME lighting, palette, lens and mood, so all images look like one shoot.',
+  '  • CRITICAL: the brief must NEVER ask for any rendered text, headline, label, callout, price, watermark, badge, or logo. All text lives in the HTML fields above, never baked into pixels.',
+  '  • company-logo background slot: an AMBIENT, on-brand atmosphere photo (soft out-of-focus environment, warm bokeh, brand-colored mood) that sits BEHIND the logo under a tint — keep it soft, low-contrast, and uncluttered, with NO product hero front-and-center, no people staring, no text.',
+];
+
+type ModuleGenContext = {
+  provider: ReturnType<typeof createProvider>;
+  moduleSpecs: z.infer<typeof packageOuterSchema>['moduleSpecs'];
+  sharedContextBlock: string;
+  emit: (event: Record<string, unknown>) => void;
+  startMs: number;
+};
+type ModuleGenResult = {
+  results: z.infer<typeof APlusGeneratedModuleSchema>[];
+  failures: Array<{ order: number; reason: string }>;
+};
+
+/** SINGLE call: one model request writes the whole package (all modules). */
+async function generateModulesSingle(
+  ctx: ModuleGenContext
+): Promise<ModuleGenResult> {
+  const { provider, moduleSpecs, sharedContextBlock, emit, startMs } = ctx;
+  const results: ModuleGenResult['results'] = [];
+  const failures: ModuleGenResult['failures'] = [];
+  const planForPrompt = moduleSpecs.map((spec) => ({
+    order: spec.order,
+    amazonModuleType: spec.amazonModuleType,
+    type: amazonModuleTypeToKind(spec.amazonModuleType),
+    title: spec.title,
+    objective: spec.objective,
+  }));
+  const packagePrompt = [
+    'You are SellAvant, writing the COMPLETE set of structured modules for ONE Amazon A+ content package in a SINGLE response.',
+    `Output EXACTLY ${moduleSpecs.length} modules in the "modules" array, IN ORDER. For each module, set "type" to EXACTLY the kind given in the plan, set order and amazonModuleType from the plan, and a short title.`,
+    'Fill EVERY field that module type defines, and ONLY those fields. No bracket placeholders, no "[unknown]". Write all modules as ONE cohesive set — same positioning, voice, and visual system throughout.',
+    '',
+    'MODULE PLAN (produce these, in this exact order and type):',
+    JSON.stringify(planForPrompt, null, 2),
+    '',
+    ...MODULE_FIELD_RULES,
+    NO_TIME_SENSITIVE_RULE,
+    '',
+    sharedContextBlock,
+  ].join('\n');
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await generateText({
+        model: provider.languageModel('fast'),
+        abortSignal: AbortSignal.timeout(180_000),
+        output: Output.object({
+          schema: z.object({ modules: z.array(APlusGeneratedModuleSchema) }),
+          name: 'a_plus_package_modules',
+        }),
+        prompt: packagePrompt,
+      });
+      results.length = 0;
+      res.output.modules.forEach((module, index) => {
+        results.push({
+          ...module,
+          order: index + 1,
+        } as z.infer<typeof APlusGeneratedModuleSchema>);
+        emit({
+          type: 'module-done',
+          order: index + 1,
+          ms: Date.now() - startMs,
+        });
+      });
+      if (results.length) return { results, failures };
+    } catch (err: unknown) {
+      lastError = err;
+    }
+  }
+  const reason =
+    lastError instanceof Error ? lastError.message : String(lastError);
+  failures.push({ order: 0, reason });
+  console.error(
+    '[a-plus-generate] single-call module generation FAILED after retry:',
+    reason
+  );
+  return { results, failures };
+}
+
+/** PARALLEL: one model request per module, run concurrently with retry. */
+async function generateModulesParallel(
+  ctx: ModuleGenContext
+): Promise<ModuleGenResult> {
+  const { provider, moduleSpecs, sharedContextBlock, emit } = ctx;
+  const results: ModuleGenResult['results'] = [];
+  const failures: ModuleGenResult['failures'] = [];
+  await Promise.all(
+    moduleSpecs.map(async (spec) => {
+      const tThisModule = Date.now();
+      const kind = amazonModuleTypeToKind(spec.amazonModuleType);
+      const modulePrompt = [
+        'You are SellAvant, producing ONE structured module of an Amazon A+ content package.',
+        `This module is the "${kind}" type. Set the "type" field to exactly "${kind}".`,
+        `Set order=${spec.order}, amazonModuleType="${spec.amazonModuleType}", and title to a short module label.`,
+        'Fill EVERY field the schema defines for this module type, and ONLY those fields. Do not invent fields. No bracket placeholders, no "[unknown]".',
+        'Match the global creative direction — same positioning, voice, and visual system as the rest of the package.',
+        '',
+        ...MODULE_FIELD_RULES,
+        NO_TIME_SENSITIVE_RULE,
+        '',
+        'MODULE SPEC',
+        JSON.stringify(spec, null, 2),
+        '',
+        sharedContextBlock,
+      ].join('\n');
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await generateText({
+            model: provider.languageModel('fast'),
+            abortSignal: AbortSignal.timeout(90_000),
+            output: Output.object({
+              schema: generatedModuleSchemaForKind(kind),
+              name: 'a_plus_module',
+            }),
+            prompt: modulePrompt,
+          });
+          results.push({
+            ...res.output,
+            order: spec.order,
+            amazonModuleType: spec.amazonModuleType,
+            type: kind,
+          } as z.infer<typeof APlusGeneratedModuleSchema>);
+          emit({
+            type: 'module-done',
+            order: spec.order,
+            ms: Date.now() - tThisModule,
+          });
+          return;
+        } catch (err: unknown) {
+          lastError = err;
+        }
+      }
+      const reason =
+        lastError instanceof Error ? lastError.message : String(lastError);
+      failures.push({ order: spec.order, reason });
+      console.error(
+        `[a-plus-generate] module ${spec.order} (${spec.amazonModuleType}) FAILED after retry:`,
+        reason
+      );
+      emit({ type: 'module-failed', order: spec.order, reason });
+    })
+  );
+  results.sort((a, b) => a.order - b.order);
+  return { results, failures };
+}
+
 export async function POST(request: Request) {
   const session = await auth0.getSession();
   if (!session?.user?.sub) {
@@ -436,7 +617,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const provider = createProvider();
+  const provider = createProvider(input.model);
   const context = compactInput(input);
 
   const stream = new ReadableStream<Uint8Array>({
@@ -479,6 +660,14 @@ export async function POST(request: Request) {
             'Create a practical strategy from the provided product facts, links, brand guide, and uploaded assets.',
             'Do not use placeholder strings. If information is missing, make a safe assumption or add it to missingFacts.',
             'The user is an ecommerce operator, not a designer. Choose modules and asset usage for them.',
+            `For each modulePlan entry, set moduleType to one of these exact Amazon module types: ${RENDERABLE_AMAZON_MODULE_TYPES.join(
+              ', '
+            )}.`,
+            `Plan the COMPLETE package: choose and ORDER exactly ${clampModuleCount(
+              input.contentTier
+            )} modulePlan entries that tell THIS product's story end to end. This is the final module sequence.`,
+            'STRUCTURE MUST BE DYNAMIC, not a fixed template: decide the opening, the mix of module types, and their order based on what THIS specific product needs to persuade its buyer. Two different products should produce noticeably different structures — vary which modules appear and in what sequence. Do not default to one canonical order.',
+            'Use a VARIETY of distinct module types (each renders as a different layout). Open with a strong hero or brand moment, then sequence the rest into the most persuasive narrative for this product (features, real-life use cases, dual-use scenarios, proof/specs, comparison, brand story) — in whatever order fits best. Avoid repeating the same moduleType.',
             'NEVER plan modules around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them. Use price input only as positioning context (premium vs value tier) — do not surface the number anywhere in module copy.',
             '',
             context,
@@ -555,7 +744,20 @@ export async function POST(request: Request) {
           total: outer.moduleSpecs.length,
         });
         const tModules = Date.now();
+        // Shared "shot bible" so every module's image brief depicts the SAME
+        // product in the SAME look — the page reads as one photoshoot, not a
+        // pile of unrelated AI images (the biggest "this is AI" tell).
+        const shotBible = [
+          'VISUAL CONTINUITY — SHOT BIBLE (applies to EVERY image brief in this package):',
+          `  • SAME HERO PRODUCT in every image: ${humanProductName(
+            input
+          )}. Describe its material, color, finish, shape, and proportions IDENTICALLY across all modules so it is unmistakably the same physical product.`,
+          `  • ONE consistent look everywhere: ${outer.creativeDirection.visualSystem} Keep the same color palette, the same lighting direction & quality (e.g. soft warm window light from one side), the same lens/perspective character, and the same mood in every shot.`,
+          '  • Treat all module images as frames from ONE cohesive premium photoshoot — never disparate stock photos with different products, lighting, or color grading.',
+        ].join('\n');
         const sharedContextBlock = [
+          shotBible,
+          '',
           'GLOBAL CREATIVE DIRECTION',
           JSON.stringify(outer.creativeDirection, null, 2),
           '',
@@ -569,118 +771,26 @@ export async function POST(request: Request) {
           JSON.stringify(strategyResult.output, null, 2),
         ].join('\n');
 
-        const moduleResults: z.infer<typeof moduleSchema>[] = [];
-        const moduleFailures: Array<{ order: number; reason: string }> = [];
-
-        await Promise.all(
-          outer.moduleSpecs.map((spec) => {
-            const tThisModule = Date.now();
-            return generateText({
-              model: provider.languageModel('fast'),
-              abortSignal: AbortSignal.timeout(90_000),
-              output: Output.object({
-                schema: moduleSchema,
-                name: 'a_plus_module',
-              }),
-              prompt: [
-                'You are SellAvant, producing ONE module of an Amazon A+ content package.',
-                'Write the full module: visualBrief, desktopLayout, mobileLayout, desktopWireframe, mobileWireframe, headline, bodyCopy, bullets (3–5), canvaLayers, assetAssignments, imageJobs (only if a generated image is genuinely needed; size must be 1024x1024 / 1792x1024 / 1024x1792; assign jobIds like "module-{order}-{purpose}"), logoDropzone, altText, complianceNotes, compositeMockup.',
-                'Use the order, amazonModuleType, title, and objective EXACTLY as given in the module spec.',
-                'Match the global creative direction — same positioning, voice, visual system, and mobile principle as the rest of the package.',
-                'Never ask image generation to render readable text, logos, watermarks, claims badges, or brand marks. Use logo dropzones instead.',
-                'Do not include bracket placeholders. Do not say "[unknown]" or "[missing]".',
-                '',
-                'CRITICAL — EACH FIELD HAS A DIFFERENT JOB. DO NOT RESTATE CONTENT ACROSS FIELDS.',
-                '  • visualBrief (1–2 sentences): mood, color palette, lighting, photographic style ONLY. Do NOT describe layout, composition, or what physical elements appear where — that goes in the wireframe.',
-                '  • desktopLayout (ONE sentence, ≤140 chars): one-line summary of where the major elements sit on desktop.',
-                '  • mobileLayout (ONE sentence, ≤140 chars): one-line summary for mobile. Must DIFFER from desktopLayout (e.g. stack vs split, crop differences) — do not paraphrase.',
-                '  • desktopWireframe (4–7 items): TERSE layout sketches, ≤80 chars each, format "{position}: {element type}" — NOT prose. Do not describe content, only position and element type. Examples: "Top 60%: hero image", "Right rail: headline + body", "Below image: 3-bullet row", "Bottom-right: logo dropzone".',
-                '  • mobileWireframe (4–7 items): same format, mobile-stacked. Different items than desktop, not a paraphrase.',
-                '  • bodyCopy: 1–2 sentences of CUSTOMER-FACING copy. Not direction, not description of the design. Real prose the buyer reads.',
-                '  • bullets (3–5): each ≤90 chars, customer-facing benefit statements. No design notes, no layout direction.',
-                '  • canvaLayers: only Seller Central field labels with their copy values (e.g. "Headline Text" → the actual headline string). Do not duplicate visualBrief here.',
-                '  • compositeMockup: brief for generating finished-module images with text rendered DIRECTLY in the image (the way premium Amazon brands actually ship A+ content today). PRODUCE BOTH a desktop variant AND a mobile variant — Amazon serves them differently and they must be composed differently, not just resized.',
-                '',
-                '      QUALITY BAR — READ THIS BEFORE WRITING THE prompt FIELD:',
-                '      Premium Amazon A+ photography is EDITORIAL / LIFESTYLE / MAGAZINE-QUALITY — not catalog flat-lay, not isolated product on plain background, not single-subject minimalism. Look at brands like Yeti, Lifeboost, Stanley, Hydro Flask, Vitruvi, Brumate. Their hero composites have 6–10 visual elements composing one cohesive scene with depth, atmosphere, and use-case context.',
-                '',
-                '      FORBIDDEN photography defaults (do NOT write these):',
-                '          ✗ "Flat-lay shot on a neutral background"',
-                '          ✗ "Single product on white/cream/taupe surface"',
-                '          ✗ "Minimalist composition with whitespace"',
-                '          ✗ "Studio lighting on isolated subject"',
-                '          ✗ "Clean simple background"',
-                '      These produce boring catalog images. Write the OPPOSITE.',
-                '',
-                '      REQUIRED elements for every photography prompt — name them explicitly:',
-                '          1. HERO product treatment — multiple instances when the product is small (stack of cups, line of bottles, fanned arrangement). Show scale, abundance, or hierarchy.',
-                '          2. USE-CASE ACTION — someone preparing, pouring, serving, holding, using the product. A hand in frame. Liquid in motion. Steam rising. The product MID-USE, not static.',
-                '          3. ATMOSPHERIC PROPS — 3 to 5 contextual objects that build the scene: ingredients, garnishes, tools, related items, complementary props (e.g. coffee beans + grinder + saucers + sugar cubes + croissant for a coffee cup). Avoid props that compete for attention.',
-                '          4. SPECIFIC ENVIRONMENT — name the setting concretely: "modern marble kitchen counter with natural light from a window", "warm wooden cafe table with morning sun", "minimalist gallery countertop with soft blurred greenery in background". Never "neutral surface" — name surface, lighting source, and ambient depth.',
-                '          5. EDITORIAL LIGHTING — specific direction and quality: "warm directional morning sun from upper-right with subtle backlight rim", "soft north-facing window light with deep shadow falloff", "golden-hour low-angle with long shadows". Never "soft natural lighting".',
-                '          6. DEPTH — foreground prop, mid-ground subject, background environment. Shallow depth of field with intentional bokeh OR layered staging. The image should NOT be flat.',
-                '          7. BRAND MOOD — explicit emotional register that matches positioning: "warm artisanal", "clinical-modern minimalism", "rugged-outdoor adventure", "indulgent-luxe". Anchor this with concrete cues (color palette, texture, prop choice).',
-                '',
-                '      TEXT-ELEMENT QUALITY BAR — text should be GRAPHIC-DESIGN treatment, not plain text floating on the image:',
-                '          ✗ "centered text, top of image, ~48pt sans-serif"',
-                '          ✓ "Top-left brand lockup inside a white rounded card ~280x120px with subtle drop shadow; serif logotype + sans-serif tagline stacked vertically; warm cream background; padded ~20px"',
-                '          ✓ "Centered headline in elegant uppercase letterspacing, set against a translucent dark-brown horizontal band ~140px tall positioned at vertical center-top, ~32px padding"',
-                '          ✓ "Bottom-strip of 4 category tabs evenly spaced, each in a soft-cream pill with thin underline indicator beneath the active tab; 13pt small-caps, warm gray"',
-                '          ✓ "Vertical right-rail callout strip with 3 stacked feature labels: each is a small icon + 2-word label inside a thin-bordered rectangle; dark-brown ink on cream"',
-                '      Text positions should reference design treatments — badges, cards, color blocks, divider strips, ribbons, ruler-arrows for measurements, tab strips. Never just floating type.',
-                '',
-                '      - purpose: ONE short shared label (e.g. "Hero composite — brand lockup + lifestyle pour scene"). Same purpose, two variants below.',
-                '      - desktop: { size, prompt, textElements } for the wide desktop view.',
-                '          • size: prefer 1792x1024 (16:9 landscape) for hero/banner; 1024x1024 only for square spec/feature modules.',
-                '          • prompt: write 4–6 sentences covering all 7 required elements above. Specific, editorial, layered.',
-                '          • Layout intuition: side-by-side or asymmetric editorial composition. Brand lockup in a styled badge top-left. Headline anchored to a colored band or text-card adjacent to the photo. 4–5 deliberate text elements.',
-                '      - mobile: { size, prompt, textElements } for the narrow mobile view.',
-                '          • size: prefer 1024x1024 (square) for most modules; 1024x1792 (tall portrait) only when content really benefits from tall stacking.',
-                '          • prompt: same scene, props, lighting, and mood as desktop but RECOMPOSED — tighter crop, vertical framing, fewer props (2–3 instead of 4–5), subject often centered or upper-third.',
-                '          • Layout intuition: STACKED. Headline above or below the photo in a colored band/card (not overlaid on the photo — small screens make overlay text hard to read). Bigger text relative to image dimensions. 2–3 text elements only — drop decorative callouts that would crowd a small screen.',
-                '          • Headlines on mobile are SHORTER — aim ≤5 words. Write a tighter mobile-only headline if the desktop one is longer.',
-                '      Both variants share: brand voice, photography subject + key props, color palette. They differ in: composition (asymmetric/editorial vs stacked), text density (4–5 vs 2–3), and headline length.',
-                '      For each variant, textElements has 2–5 items (mobile: 2–3 typical). Each item:',
-                '          • role: "headline" | "subhead" | "callout" | "feature-label" | "brand-badge" | "spec-label" | "category-tab"',
-                '          • text: the EXACT string to render, ≤80 chars. Headlines: desktop 2–6 words, mobile 2–5 words. Labels/callouts 1–4 words. Brand badges 1–3 words. NEVER paragraphs, NEVER body copy, NEVER prices, NEVER promo claims.',
-                '          • position: REFERENCE A DESIGN TREATMENT (badge, card, color band, ribbon, ruler-arrow callout, tab strip) — not just coordinates. See examples above.',
-                '          • typography: visual style (e.g. "elegant serif logo, dark brown #2C1A0E, ~36pt with subtle letterspacing, set as a stacked lockup"). Mobile typography is typically LARGER relative to image dimensions than desktop.',
-                '      All text MUST satisfy NO TIME-SENSITIVE CLAIMS rule. No prices, no promotions, no shipping/delivery claims, no stock claims.',
-                '      Match the brand palette and any fonts mentioned in the brand context. If no brand fonts are given, default to a paired serif logotype + clean modern sans-serif body, with a warm or cool accent matched to the product mood.',
-                '      Keep textElements deliberate — 3 well-placed elements beat 5 cluttered ones.',
-                'If you find yourself repeating words from a previous field, stop and write something the previous field did not say.',
-                NO_TIME_SENSITIVE_RULE,
-                '',
-                'MODULE SPEC',
-                JSON.stringify(spec, null, 2),
-                '',
-                sharedContextBlock,
-              ].join('\n'),
-            })
-              .then((res) => {
-                const result = { ...res.output, order: spec.order };
-                moduleResults.push(result);
-                send({
-                  type: 'module-done',
-                  order: spec.order,
-                  ms: Date.now() - tThisModule,
-                });
-              })
-              .catch((err: unknown) => {
-                const reason = err instanceof Error ? err.message : String(err);
-                moduleFailures.push({ order: spec.order, reason });
-                console.error(
-                  `[a-plus-generate] module ${spec.order} (${spec.amazonModuleType}) FAILED:`,
-                  reason
-                );
-                send({
-                  type: 'module-failed',
-                  order: spec.order,
-                  reason,
-                });
-              });
-          })
+        // A/B: PostHog flag `aplus-generation-mode` chooses how modules are
+        // written — 'single' (one call, default) or 'parallel' (one per module).
+        // Resolve the image-model variant here too so the response can report it.
+        const [generationMode, imageVariant] = await Promise.all([
+          resolveAplusGenerationMode(session.user.sub),
+          resolveImageModelVariant(session.user.sub),
+        ]);
+        console.log(
+          `[a-plus-generate] generation mode: ${generationMode}, image variant: ${imageVariant}`
         );
+        const { results: moduleResults, failures: moduleFailures } =
+          await (generationMode === 'parallel'
+            ? generateModulesParallel
+            : generateModulesSingle)({
+            provider,
+            moduleSpecs: outer.moduleSpecs,
+            sharedContextBlock,
+            emit: send,
+            startMs: tModules,
+          });
 
         moduleResults.sort((a, b) => a.order - b.order);
         const modulesMs = Date.now() - tModules;
@@ -731,32 +841,36 @@ export async function POST(request: Request) {
           typeof provider.imageGenerator === 'function';
 
         const imageGenerator = shouldGenerateImages
-          ? provider.imageGenerator?.()
+          ? provider.imageGenerator?.(imageVariant)
           : undefined;
 
         let imageResults: Array<{
           moduleOrder: number;
-          jobId: string;
-          images: Awaited<
-            ReturnType<NonNullable<typeof imageGenerator>['generate']>
-          >;
+          role: string;
         }> = [];
         if (imageGenerator) {
           send({ type: 'phase', phase: 'images' });
           const tImages = Date.now();
+          // Eagerly fill only the first slot of the first couple of modules.
+          // Slots returned by moduleImageSlots reference the parsed module, so
+          // assigning slot.image mutates assembledPackage in place.
           const tasks = assembledPackage.modules.slice(0, 2).flatMap((module) =>
-            module.imageJobs.slice(0, 1).map((job) =>
-              imageGenerator
-                .generate({
-                  prompt: job.prompt,
-                  size: job.size,
-                })
-                .then((images) => ({
-                  moduleOrder: module.order,
-                  jobId: job.jobId,
-                  images,
-                }))
-            )
+            moduleImageSlots(module)
+              .slice(0, 1)
+              .map((slot) =>
+                imageGenerator
+                  .generate({
+                    prompt: prepareGeneratedImagePrompt(slot.brief),
+                    size: slot.size,
+                  })
+                  .then((images) => {
+                    const first = images[0];
+                    if (first?.url) {
+                      slot.image = { url: first.url, alt: slot.alt };
+                    }
+                    return { moduleOrder: module.order, role: slot.role };
+                  })
+              )
           );
           imageResults = await Promise.all(tasks);
           const imagesMs = Date.now() - tImages;
@@ -782,6 +896,12 @@ export async function POST(request: Request) {
           payload: {
             strategy: strategyResult.output,
             package: assembledPackage,
+            // Which A/B paths actually ran, so the UI can show it.
+            runConfig: {
+              generationMode,
+              imageVariant,
+              model: provider.modelId('fast'),
+            },
             imageGeneration: {
               enabled: shouldGenerateImages,
               results: imageResults,

@@ -1,10 +1,10 @@
-import { gateway, generateText } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { gateway, generateImage } from 'ai';
 import type { LanguageModel } from 'ai';
 import type {
   AIProvider,
   AIProviderConfig,
   ImageGenerator,
+  ImageModelVariant,
   ModelTier,
 } from './types.js';
 
@@ -13,30 +13,75 @@ const DEFAULT_MODELS: Record<ModelTier, string> = {
   fast: 'anthropic/claude-haiku-4.5',
 };
 
-const DEFAULT_IMAGE_DRIVER_MODEL =
-  process.env['IMAGE_DRIVER_MODEL'] || 'openai/gpt-5.4';
+type AppImageSize = NonNullable<
+  Parameters<ImageGenerator['generate']>[0]['size']
+>;
 
-function bytesToDataUrl(bytes: Uint8Array, mediaType: string): string {
-  const base64 = Buffer.from(bytes).toString('base64');
-  return `data:${mediaType};base64,${base64}`;
-}
+/**
+ * A/B-switchable image backends. All are gateway "image"-type models driven by
+ * the AI SDK's `generateImage` (a dedicated image call — ~8-12s), NOT the old
+ * reasoning-model-plus-tool path which took ~190s and blew past route timeouts.
+ *
+ * `sizing` picks how the requested size is expressed to each model:
+ *  - 'size'        → exact pixel sizes (gpt-image-1)
+ *  - 'aspectRatio' → ratio strings (Imagen, Grok)
+ * The default variant is gpt-image-1; a request can override via PostHog flag.
+ */
+type ImageModelDef = {
+  slug: string;
+  sizing: 'size' | 'aspectRatio';
+  quality?: 'low' | 'medium' | 'high';
+};
 
-function aspectHint(size: string | undefined): string {
+const IMAGE_MODELS: Record<ImageModelVariant, ImageModelDef> = {
+  openai: {
+    slug: process.env['A_PLUS_IMAGE_MODEL_OPENAI'] || 'openai/gpt-image-1',
+    sizing: 'size',
+    quality:
+      (process.env['A_PLUS_IMAGE_QUALITY'] as ImageModelDef['quality']) ||
+      'medium',
+  },
+  google: {
+    slug:
+      process.env['A_PLUS_IMAGE_MODEL_GOOGLE'] ||
+      'google/imagen-4.0-generate-001',
+    sizing: 'aspectRatio',
+  },
+  grok: {
+    slug: process.env['A_PLUS_IMAGE_MODEL_GROK'] || 'xai/grok-imagine-image',
+    sizing: 'aspectRatio',
+  },
+};
+
+const DEFAULT_IMAGE_VARIANT: ImageModelVariant =
+  (process.env['A_PLUS_IMAGE_VARIANT'] as ImageModelVariant) || 'openai';
+
+/** Map our app image size to gpt-image-1's supported exact sizes. */
+function toExactSize(size: AppImageSize | undefined): string {
   switch (size) {
     case '1792x1024':
-      return 'Render this as a 16:9 landscape image. ';
+      return '1536x1024';
     case '1024x1792':
-      return 'Render this as a 9:16 portrait image. ';
-    case '1024x1024':
-      return 'Render this as a 1:1 square image. ';
+      return '1024x1536';
     default:
-      return '';
+      return '1024x1024';
+  }
+}
+
+/** Map our app image size to an aspect-ratio string (Imagen/Grok). */
+function toAspectRatio(size: AppImageSize | undefined): string {
+  switch (size) {
+    case '1792x1024':
+      return '16:9';
+    case '1024x1792':
+      return '9:16';
+    default:
+      return '1:1';
   }
 }
 
 export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
   const models = { ...DEFAULT_MODELS, ...config.models };
-  const imageDriverModel = config.imageModelId ?? DEFAULT_IMAGE_DRIVER_MODEL;
 
   return {
     providerName: 'gateway',
@@ -49,33 +94,33 @@ export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
       return gateway(models[tier]);
     },
 
-    imageGenerator(): ImageGenerator {
+    imageGenerator(
+      variant: ImageModelVariant = DEFAULT_IMAGE_VARIANT
+    ): ImageGenerator {
+      const model =
+        IMAGE_MODELS[variant] ?? IMAGE_MODELS[DEFAULT_IMAGE_VARIANT];
       return {
         async generate(params: Parameters<ImageGenerator['generate']>[0]) {
-          const result = await generateText({
-            model: imageDriverModel,
-            prompt: `${aspectHint(params.size)}${params.prompt}`,
-            tools: {
-              image_generation: openai.tools.imageGeneration({
-                outputFormat: 'png',
-                quality: 'high',
-              }),
-            },
+          const { image } = await generateImage({
+            model: model.slug,
+            prompt: params.prompt,
+            ...(model.sizing === 'size'
+              ? { size: toExactSize(params.size) as `${number}x${number}` }
+              : {
+                  aspectRatio: toAspectRatio(
+                    params.size
+                  ) as `${number}:${number}`,
+                }),
+            ...(model.quality
+              ? { providerOptions: { openai: { quality: model.quality } } }
+              : {}),
           });
-
-          const generated: { url: string; mediaType: string }[] = [];
-          for (const toolResult of result.staticToolResults) {
-            if (toolResult.toolName !== 'image_generation') continue;
-            const base64 = (toolResult.output as { result?: string })?.result;
-            if (!base64) continue;
-            const bytes = Buffer.from(base64, 'base64');
-            const mediaType = 'image/png';
-            generated.push({
-              url: bytesToDataUrl(bytes, mediaType),
-              mediaType,
-            });
-          }
-          return generated;
+          return [
+            {
+              url: `data:${image.mediaType};base64,${image.base64}`,
+              mediaType: image.mediaType,
+            },
+          ];
         },
       };
     },

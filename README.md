@@ -1,90 +1,80 @@
-# AmzSpapi
+# SellAvant
 
-<a alt="Nx logo" href="https://nx.dev" target="_blank" rel="noreferrer"><img src="https://raw.githubusercontent.com/nrwl/nx/master/images/nx-logo.png" width="45"></a>
+An AI **Amazon seller assistant** — "Perplexity for Amazon ops." A conversational
+console plus operations copilots for **Amazon SP‑API** and **Amazon Ads API**,
+with listing/creative tooling (including an AI **A+ Content Studio**), email
+triage, and profit/margin tracking.
 
-✨ Your new, shiny [Nx workspace](https://nx.dev) is almost ready ✨.
+Nx + TypeScript monorepo.
 
-[Learn more about this workspace setup and its capabilities](https://nx.dev/nx-api/js?utm_source=nx_project&amp;utm_medium=readme&amp;utm_campaign=nx_projects) or run `npx nx graph` to visually explore what was created. Now, let's get you up to speed!
+## Workspace layout
 
-## Finish your CI setup
+**apps/**
 
-[Click here to finish setting up your workspace!](https://cloud.nx.app/connect/wSOjMQP4S9)
+- `web/` — Next.js (App Router) app: dashboards, brand guides, and the A+ Content Studio.
+- `spcli/` — operational CLI for the SP‑API.
+- `adscli/` — operational CLI for the Ads API.
 
+**packages/ & libs/**
 
-## Generate a library
+- `amazon-sp-schema` / `amazon-ads-schema` — official API schemas (Swagger 2.0 / OpenAPI 3.0).
+- `amazon-sp-generated` / `amazon-ads-generated` — generated TypeScript types.
+- `sp-client` / `ad-client` — type‑safe HTTP clients with auto token refresh.
+- `credential-store` — SQLite‑backed OAuth token storage.
+- `oauth` — LWA (Login with Amazon) OAuth helpers.
+- `models` — shared domain models + Zod schemas (incl. A+ content schemas).
+- `ai-provider` — AI Gateway language + image provider.
 
-```sh
-npx nx g @nx/js:lib packages/pkg1 --publishable --importPath=@my-org/pkg1
-```
+## Quickstart
 
-## Run tasks
-
-To build the library use:
-
-```sh
-npx nx build pkg1
-```
-
-To run any task with Nx use:
-
-```sh
-npx nx <target> <project-name>
-```
-
-These targets are either [inferred automatically](https://nx.dev/concepts/inferred-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects) or defined in the `project.json` or `package.json` files.
-
-[More about running tasks in the docs &raquo;](https://nx.dev/features/run-tasks?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Versioning and releasing
-
-To version and release the library use
-
-```
-npx nx release
-```
-
-Pass `--dry-run` to see what would happen without actually releasing the library.
-
-[Learn more about Nx release &raquo;](hhttps://nx.dev/features/manage-releases?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Keep TypeScript project references up to date
-
-Nx automatically updates TypeScript [project references](https://www.typescriptlang.org/docs/handbook/project-references.html) in `tsconfig.json` files to ensure they remain accurate based on your project dependencies (`import` or `require` statements). This sync is automatically done when running tasks such as `build` or `typecheck`, which require updated references to function correctly.
-
-To manually trigger the process to sync the project graph dependencies information to the TypeScript project references, run the following command:
+### Web app
 
 ```sh
-npx nx sync
+npm install
+npx nx serve web          # https://local.sellavant.com:9443
 ```
 
-You can enforce that the TypeScript project references are always in the correct state when running in CI by adding a step to your CI job configuration that runs the following command:
+Copy `apps/web/.env.local.example` → `apps/web/.env.local` and fill in Auth0, the
+AI Gateway key, Couchbase, AWS, and (optionally) PostHog values.
+
+> **VSCode terminal note:** the integrated terminal exports
+> `ELECTRON_RUN_AS_NODE=1`, which breaks some native installs/runs. Prefix with
+> `env -u ELECTRON_RUN_AS_NODE` when installing deps or running the dev server,
+> e.g. `env -u ELECTRON_RUN_AS_NODE npx nx serve web`.
+
+### CLIs
 
 ```sh
-npx nx sync:check
+# SP‑API
+cd apps/spcli && cp config.toml.example config.toml   # add your LWA credentials
+npx nx build spcli
+./spcli.sh credentials add --refresh-token YOUR_TOKEN
+./spcli.sh orders list --days 7
+
+# Ads API
+cd apps/adscli && cp config.toml.example config.toml
+npx nx build adscli
 ```
 
-[Learn more about nx sync](https://nx.dev/reference/nx-commands#sync)
+## Common tasks
 
+```sh
+npx nx graph                      # explore the project graph
+npx nx run-many -t test           # run tests
+npx nx run-many -t lint           # lint
+npx nx typecheck web              # (or: npx tsc -p apps/web/tsconfig.json --noEmit)
+```
 
-[Learn more about Nx on CI](https://nx.dev/ci/intro/ci-with-nx#ready-get-started-with-your-provider?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+## Documentation
 
-## Install Nx Console
+- [CLAUDE.md](./CLAUDE.md) — architecture, conventions, and AI‑assistant guidance
+- [A-PLUS.md](./A-PLUS.md) — A+ Content Studio: pipeline, modules, design styles, image generation, and the env/PostHog A/B switches
+- [DESIGN.md](./DESIGN.md) — SellAvant design system (tokens, components)
+- [CLI-USAGE.md](./CLI-USAGE.md) — `spcli` / `adscli` usage
+- [PRODUCT_ROADMAP.md](./PRODUCT_ROADMAP.md) — product roadmap
+- [AGENTS.md](./AGENTS.md) — agent/automation guidance
 
-Nx Console is an editor extension that enriches your developer experience. It lets you run tasks, generate code, and improves code autocompletion in your IDE. It is available for VSCode and IntelliJ.
+## Tech stack
 
-[Install Nx Console &raquo;](https://nx.dev/getting-started/editor-setup?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-## Useful links
-
-Learn more:
-
-- [Learn more about this workspace setup](https://nx.dev/nx-api/js?utm_source=nx_project&amp;utm_medium=readme&amp;utm_campaign=nx_projects)
-- [Learn about Nx on CI](https://nx.dev/ci/intro/ci-with-nx?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [Releasing Packages with Nx release](https://nx.dev/features/manage-releases?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-- [What are Nx plugins?](https://nx.dev/concepts/nx-plugins?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
-
-And join the Nx community:
-- [Discord](https://go.nx.dev/community)
-- [Follow us on X](https://twitter.com/nxdevtools) or [LinkedIn](https://www.linkedin.com/company/nrwl)
-- [Our Youtube channel](https://www.youtube.com/@nxdevtools)
-- [Our blog](https://nx.dev/blog?utm_source=nx_project&utm_medium=readme&utm_campaign=nx_projects)
+Next.js · TypeScript (strict) · Zod · Nx · Auth0 · Couchbase · AWS (S3, SAM) ·
+Vercel · Vercel AI Gateway (Anthropic / OpenAI / image models).

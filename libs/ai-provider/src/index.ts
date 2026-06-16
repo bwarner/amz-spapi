@@ -3,5 +3,6 @@ export type {
   AIProvider,
   AIProviderConfig,
   ImageGenerator,
+  ImageModelVariant,
   ModelTier,
 } from './types.js';

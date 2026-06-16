@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import { auth0 } from '../../../../lib/auth0';
+import { resolveImageModelVariant } from '../../../../lib/image-model-flag';
 import {
   type MediaAsset,
   createAssetId,
@@ -13,7 +14,10 @@ import {
   upsertHashPointer,
 } from '../../../../lib/media-assets';
 
-export const maxDuration = 60;
+// Direct image-model generation runs ~8-12s, but allow headroom for slower
+// variants/high quality and cold starts so the request never times out
+// mid-generation (the old ~190s reasoning-tool path is gone).
+export const maxDuration = 120;
 
 function extensionForMime(mime: string): string {
   if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
@@ -33,6 +37,14 @@ function pickImageSize(requested: string | undefined): ImageSize {
   if (width > height * 1.1) return '1792x1024';
   if (height > width * 1.1) return '1024x1792';
   return '1024x1024';
+}
+
+function prepareImagePrompt(prompt: string): string {
+  return [
+    prompt,
+    '',
+    'Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, or readable brand marks anywhere in the image. Leave any brand/logo placement as an empty logo-safe area for later editing.',
+  ].join('\n');
 }
 
 export async function POST(request: Request) {
@@ -57,7 +69,9 @@ export async function POST(request: Request) {
 
   const provider = createAIProvider();
 
-  const imageGenerator = provider.imageGenerator?.();
+  // A/B-selected image backend (PostHog flag `aplus-image-model`, default openai).
+  const variant = await resolveImageModelVariant(session.user.sub);
+  const imageGenerator = provider.imageGenerator?.(variant);
   if (!imageGenerator) {
     return Response.json(
       { error: 'Image generation is not configured.' },
@@ -72,7 +86,7 @@ export async function POST(request: Request) {
   let generated: { url: string; mediaType: string; revisedPrompt?: string };
   try {
     const results = await imageGenerator.generate({
-      prompt: body.prompt,
+      prompt: prepareImagePrompt(body.prompt),
       size,
     });
     const first = results[0];

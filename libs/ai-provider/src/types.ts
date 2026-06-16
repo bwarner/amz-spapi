@@ -2,6 +2,13 @@ import type { LanguageModel } from 'ai';
 
 export type ModelTier = 'default' | 'fast';
 
+/**
+ * A/B-switchable image backends. Each maps to a concrete gateway image model in
+ * create-provider; the active variant is chosen per request (e.g. from a PostHog
+ * feature flag) so we can compare quality/cost/latency without code changes.
+ */
+export type ImageModelVariant = 'openai' | 'google' | 'grok';
+
 export interface AIProviderConfig {
   models?: Partial<Record<ModelTier, string>>;
   imageModelId?: string;
@@ -25,7 +32,7 @@ export interface ImageGenerator {
 export interface AIProvider {
   languageModel(tier?: ModelTier): LanguageModel;
   embeddingModel?(): import('@ai-sdk/provider').EmbeddingModelV2<string>;
-  imageGenerator?(): ImageGenerator;
+  imageGenerator?(variant?: ImageModelVariant): ImageGenerator;
   readonly providerName: string;
   modelId(tier?: ModelTier): string;
 }
