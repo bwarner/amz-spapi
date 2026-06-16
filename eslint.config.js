@@ -7,6 +7,8 @@ export default [
   {
     ignores: [
       '**/dist',
+      '**/.next',
+      '**/next-env.d.ts',
       '**/vite.config.*.timestamp*',
       '**/vitest.config.*.timestamp*',
     ],
