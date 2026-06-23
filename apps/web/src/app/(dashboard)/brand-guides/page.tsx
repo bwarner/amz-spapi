@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
+  AlertTriangle,
   ArrowLeft,
   BookTemplate,
   CheckCircle2,
   FileUp,
   Globe,
   ImageIcon,
+  ImageOff,
   Loader2,
   Plus,
   Trash2,
@@ -135,6 +137,102 @@ function formatGuideUpdatedAt(timestamp: number) {
     day: 'numeric',
     year: 'numeric',
   }).format(timestamp);
+}
+
+/**
+ * Chip showing the uploaded logo with its file metadata. When the thumbnail
+ * can't be fetched, we no longer silently hide it (which left only the bare
+ * filename, reading as "it's showing the filename instead of my logo"). Instead
+ * we show a clear failed-load state and probe `/assets/health` to tell a
+ * transient storage/session problem (e.g. an expired AWS SSO session) apart
+ * from a genuinely broken asset, so the message points at the real fix.
+ */
+function UploadedLogoPreview({
+  asset,
+  onRemove,
+}: {
+  asset: NonNullable<BrandGuide['logoAsset']>;
+  onRemove: () => void;
+}) {
+  const [failed, setFailed] = useState(false);
+  const [storageDown, setStorageDown] = useState(false);
+
+  // A new asset (re-upload / switching guides) gets a fresh attempt.
+  useEffect(() => {
+    setFailed(false);
+    setStorageDown(false);
+  }, [asset.assetId]);
+
+  async function handleError() {
+    setFailed(true);
+    try {
+      const response = await fetch('/api/a-plus/assets/health');
+      const body = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+      } | null;
+      setStorageDown(!body?.ok);
+    } catch {
+      setStorageDown(true);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded border bg-white">
+            {failed ? (
+              <ImageOff className="h-5 w-5 text-muted-foreground" />
+            ) : (
+              <img
+                src={`/api/a-plus/assets/${asset.assetId}`}
+                alt={asset.originalFileName}
+                className="max-h-12 max-w-full object-contain"
+                onError={handleError}
+              />
+            )}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">
+              {asset.originalFileName}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {asset.mimeType} · {formatBytes(asset.sizeBytes)}
+            </p>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 text-muted-foreground"
+          onClick={onRemove}
+        >
+          <Trash2 className="h-4 w-4" />
+          <span className="sr-only">Remove logo</span>
+        </Button>
+      </div>
+      {failed && (
+        <p className="flex items-start gap-2 text-xs text-amber-600">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            {storageDown ? (
+              <>
+                Logo preview couldn’t load — media storage isn’t reachable. Your
+                AWS session may have expired; run{' '}
+                <code className="rounded bg-amber-100 px-1 py-0.5 font-mono">
+                  aws sso login
+                </code>{' '}
+                and reload. The logo file is still saved with this guide.
+              </>
+            ) : (
+              'Logo preview couldn’t load. The logo file is still saved with this guide.'
+            )}
+          </span>
+        </p>
+      )}
+    </div>
+  );
 }
 
 function describeGuideCoverage(guide: BrandGuide) {
@@ -1511,47 +1609,15 @@ export default function BrandGuidesPage() {
                     />
                   </label>
                   {draftGuide.logoAsset && (
-                    <div className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded border bg-white">
-                          {/* Preview the actual uploaded logo. If the asset can't
-                              be fetched (e.g. storage not signed in) the image
-                              hides itself rather than showing a broken icon. */}
-                          <img
-                            src={`/api/a-plus/assets/${draftGuide.logoAsset.assetId}`}
-                            alt={draftGuide.logoAsset.originalFileName}
-                            className="max-h-12 max-w-full object-contain"
-                            onError={(event) => {
-                              event.currentTarget.style.display = 'none';
-                            }}
-                          />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
-                            {draftGuide.logoAsset.originalFileName}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {draftGuide.logoAsset.mimeType} ·{' '}
-                            {formatBytes(draftGuide.logoAsset.sizeBytes)}
-                          </p>
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 shrink-0 text-muted-foreground"
-                        onClick={() =>
-                          setDraftGuide((current) => ({
-                            ...current,
-                            logoAsset: undefined,
-                          }))
-                        }
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        <span className="sr-only">Remove logo</span>
-                      </Button>
-                    </div>
+                    <UploadedLogoPreview
+                      asset={draftGuide.logoAsset}
+                      onRemove={() =>
+                        setDraftGuide((current) => ({
+                          ...current,
+                          logoAsset: undefined,
+                        }))
+                      }
+                    />
                   )}
                 </div>
 

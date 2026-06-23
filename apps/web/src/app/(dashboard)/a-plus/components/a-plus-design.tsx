@@ -6,6 +6,7 @@ import {
   applyAPlusGuardrails,
   type APlusGeneratedModule,
   type APlusImageSlot,
+  type IconRowIcon,
 } from '@farvisionllc/models';
 
 /**
@@ -53,6 +54,10 @@ export type BrandTheme = {
   bodyFont: string;
   brandName?: string;
   logoUrl?: string;
+  /** Logo width/height ratio, so the logo plate hugs the mark (no big margins). */
+  logoAspect?: number;
+  /** Brand-header treatment when an ambient backdrop is present. */
+  heroVariant?: 'plate' | 'glass' | 'split' | 'overlay';
   // --- style treatments (consumed by the shared primitives) ---
   style: DesignStyleKey;
   headingWeight: number;
@@ -568,22 +573,26 @@ function Bullets({ items, theme }: { items: string[]; theme: BrandTheme }) {
 
 /** Bold spec/size pill (e.g. "16 OZ") overlaid on a hero image. */
 function SpecBadge({ text, theme }: { text: string; theme: BrandTheme }) {
+  // A branded "tag": accent fill, a fine inner ring, and tracked uppercase type
+  // for a premium product-badge feel (vs a plain white pill).
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#FFFFFF',
-        color: '#111111',
+        background: theme.accent,
+        color: theme.accentInk,
         fontFamily: theme.headingFont,
         fontWeight: 800,
-        fontSize: 24,
-        letterSpacing: 0.5,
+        fontSize: 18,
+        letterSpacing: 1.5,
+        textTransform: 'uppercase',
         lineHeight: 1,
-        padding: '10px 18px',
+        padding: '10px 16px',
         borderRadius: theme.radius,
-        boxShadow: '0 6px 18px rgba(0,0,0,0.22)',
+        border: `1.5px solid ${withAlpha('#FFFFFF', 0.55)}`,
+        boxShadow: '0 8px 20px rgba(0,0,0,0.3)',
       }}
     >
       {text.toUpperCase()}
@@ -917,15 +926,6 @@ function DesignedOverlayHero({
             textAlign,
           }}
         >
-          <div
-            style={{
-              width: 52,
-              height: 4,
-              marginBottom: 20,
-              borderRadius: 4,
-              background: theme.accent,
-            }}
-          />
           {headline ? (
             <div
               style={{
@@ -1032,8 +1032,14 @@ function DesignedColumns({
               border: carded ? `1px solid ${theme.line}` : 'none',
             }}
           >
+            {!mobile && carded ? (
+              <div
+                style={{ display: 'flex', height: 4, background: theme.accent }}
+              />
+            ) : null}
             <div
               style={{
+                position: 'relative',
                 display: 'flex',
                 width: mobile ? 140 : '100%',
                 borderRadius: carded ? 0 : theme.radius,
@@ -1041,6 +1047,28 @@ function DesignedColumns({
               }}
             >
               <Photo slot={cell.image} height={mobile ? 120 : imgH} />
+              {/* Bold numbered step badge over the image. */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  left: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: mobile ? 28 : 34,
+                  height: mobile ? 28 : 34,
+                  borderRadius: 34,
+                  background: theme.accent,
+                  color: theme.accentInk,
+                  fontFamily: theme.headingFont,
+                  fontSize: mobile ? 14 : 16,
+                  fontWeight: 800,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.22)',
+                }}
+              >
+                {String(i + 1).padStart(2, '0')}
+              </div>
             </div>
             <div
               style={{
@@ -1056,11 +1084,11 @@ function DesignedColumns({
                 <div
                   style={{
                     fontFamily: theme.headingFont,
-                    fontSize: mobile ? 18 : 17,
+                    fontSize: mobile ? 18 : 19,
                     fontWeight: theme.headingWeight,
                     color: theme.ink,
                     letterSpacing: theme.headingTracking,
-                    marginBottom: 6,
+                    marginBottom: 7,
                   }}
                 >
                   {clean(cell.headline)}
@@ -1086,6 +1114,116 @@ function DesignedColumns({
   );
 }
 
+const COMPARISON_POSITIVE =
+  /^(yes|included|✓|true|standard|always|full|both)\b/i;
+const COMPARISON_NEGATIVE = /^(no|none|n\/a|n\.a\.|false|✗|never)\b/i;
+
+/** Classify a comparison cell so we can swap text for a check/cross glyph. */
+function comparisonGlyph(value: string): 'yes' | 'no' | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (v === '✓' || COMPARISON_POSITIVE.test(v)) return 'yes';
+  if (
+    v === '✗' ||
+    v === '—' ||
+    v === '–' ||
+    v === '-' ||
+    COMPARISON_NEGATIVE.test(v)
+  )
+    return 'no';
+  return null;
+}
+
+/**
+ * Small accent check / muted cross used in comparison cells. The glyphs are
+ * DRAWN (rotated borders/bars), not typed — the bundled satori font has no
+ * ✓/✗, so a unicode character would render as tofu in PNG export.
+ */
+function GlyphBadge({
+  kind,
+  theme,
+}: {
+  kind: 'yes' | 'no';
+  theme: BrandTheme;
+}) {
+  const yes = kind === 'yes';
+  const mark = yes ? theme.accentInk : theme.muted;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 22,
+        height: 22,
+        borderRadius: 22,
+        background: yes ? theme.accent : 'transparent',
+        border: yes ? 'none' : `1.5px solid ${withAlpha(theme.muted, 0.4)}`,
+      }}
+    >
+      {yes ? (
+        <div
+          style={{
+            display: 'flex',
+            width: 10,
+            height: 5,
+            marginTop: -2,
+            borderLeft: `2.5px solid ${mark}`,
+            borderBottom: `2.5px solid ${mark}`,
+            transform: 'rotate(-45deg)',
+          }}
+        />
+      ) : (
+        // A muted dash for "no" — satori's rotate-origin handling makes a clean
+        // X unreliable, and check-vs-dash reads clearly in a comparison table.
+        <div
+          style={{
+            display: 'flex',
+            width: 9,
+            height: 2,
+            borderRadius: 2,
+            background: mark,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Accent "VS" medallion shown between the two cards of a head-to-head table. */
+function VsBadge({ theme }: { theme: BrandTheme }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        alignSelf: 'center',
+        margin: '0 2px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 52,
+          height: 52,
+          borderRadius: 52,
+          background: theme.accent,
+          color: theme.accentInk,
+          fontFamily: theme.headingFont,
+          fontSize: 19,
+          fontWeight: 800,
+          letterSpacing: 0.5,
+          boxShadow: '0 8px 20px rgba(0,0,0,0.25)',
+        }}
+      >
+        VS
+      </div>
+    </div>
+  );
+}
+
 function DesignedComparison({
   module,
   ctx,
@@ -1093,7 +1231,8 @@ function DesignedComparison({
   module: Extract<APlusGeneratedModule, { type: 'comparison-table' }>;
   ctx: Ctx;
 }) {
-  const { theme } = ctx;
+  const { theme, mobile } = ctx;
+  const ribbonH = 26;
   return (
     <div
       style={{
@@ -1101,92 +1240,148 @@ function DesignedComparison({
         flexDirection: 'column',
         width: '100%',
         background: theme.bg,
-        paddingBottom: 30,
+        paddingBottom: 34,
       }}
     >
       <SectionTitle title={module.title} theme={theme} />
       <div
         style={{
           display: 'flex',
-          flexDirection: ctx.mobile ? 'column' : 'row',
-          padding: ctx.mobile ? '10px 22px 0' : '14px 30px 0',
+          flexDirection: mobile ? 'column' : 'row',
+          alignItems: mobile ? 'stretch' : 'flex-start',
+          padding: mobile ? '12px 22px 0' : '18px 30px 0',
         }}
       >
-        {module.products.map((product, pi) => (
-          <div
-            key={pi}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              flex: ctx.mobile ? '0 1 auto' : 1,
-              width: ctx.mobile ? '100%' : 'auto',
-              margin: ctx.mobile
-                ? '0 0 10px 0'
-                : pi === 0
-                ? '0 8px 0 0'
-                : pi === module.products.length - 1
-                ? '0 0 0 8px'
-                : '0 8px',
-              background: product.highlight ? theme.surface : '#F0EAE1',
-              border: `1px solid ${
-                product.highlight ? theme.accent : theme.line
-              }`,
-              borderRadius: theme.radius,
-              padding: 18,
-            }}
-          >
+        {module.products.flatMap((product, pi) => {
+          const highlight = !!product.highlight;
+          const card = (
             <div
+              key={pi}
               style={{
-                fontFamily: theme.headingFont,
-                fontSize: 18,
-                fontWeight: 700,
-                color: theme.ink,
-                textAlign: 'center',
-                marginBottom: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                flex: mobile ? '0 1 auto' : 1,
+                width: mobile ? '100%' : 'auto',
+                margin: mobile
+                  ? '0 0 12px 0'
+                  : pi === 0
+                  ? '0 7px 0 0'
+                  : pi === module.products.length - 1
+                  ? '0 0 0 7px'
+                  : '0 7px',
+                background: highlight ? theme.surface : theme.surfaceAlt,
+                border: `${highlight ? 2 : 1}px solid ${
+                  highlight ? theme.accent : theme.line
+                }`,
+                borderRadius: theme.radius * 1.4,
+                overflow: 'hidden',
+                boxShadow: highlight ? '0 16px 40px rgba(0,0,0,0.12)' : 'none',
               }}
             >
-              {clean(product.title)}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {module.rows.map((row, ri) => {
-                const value = clean(row.values[pi] ?? '');
-                return (
-                  <div
-                    key={ri}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: '7px 0',
-                      borderTop: ri === 0 ? 'none' : `1px solid ${theme.line}`,
-                    }}
-                  >
+              {/* Ribbon — reserved on every card so headers stay aligned. */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: ribbonH,
+                  background: highlight ? theme.accent : 'transparent',
+                  color: highlight ? theme.accentInk : 'transparent',
+                  fontFamily: theme.bodyFont,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: 1.5,
+                }}
+              >
+                {highlight ? 'RECOMMENDED' : ''}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '13px 14px',
+                  background: highlight
+                    ? withAlpha(theme.accent, 0.12)
+                    : 'transparent',
+                  fontFamily: theme.headingFont,
+                  fontSize: 17,
+                  fontWeight: 800,
+                  color: theme.ink,
+                  textAlign: 'center',
+                }}
+              >
+                {clean(product.title)}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: '4px 16px 16px',
+                }}
+              >
+                {module.rows.map((row, ri) => {
+                  const value = clean(row.values[pi] ?? '');
+                  const glyph = comparisonGlyph(value);
+                  return (
                     <div
+                      key={ri}
                       style={{
-                        flex: 1,
-                        fontFamily: theme.bodyFont,
-                        fontSize: 12,
-                        color: theme.muted,
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '10px 0',
+                        borderTop:
+                          ri === 0 ? 'none' : `1px solid ${theme.line}`,
                       }}
                     >
-                      {row.label}
+                      <div
+                        style={{
+                          display: 'flex',
+                          flex: 1,
+                          fontFamily: theme.bodyFont,
+                          fontSize: 12.5,
+                          color: theme.muted,
+                        }}
+                      >
+                        {row.label}
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'flex-end',
+                          minWidth: 24,
+                        }}
+                      >
+                        {glyph ? (
+                          <GlyphBadge kind={glyph} theme={theme} />
+                        ) : (
+                          <div
+                            style={{
+                              display: 'flex',
+                              fontFamily: theme.bodyFont,
+                              fontSize: 13,
+                              fontWeight: highlight ? 700 : 600,
+                              color: highlight ? theme.accent : theme.ink,
+                              textAlign: 'right',
+                            }}
+                          >
+                            {value}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div
-                      style={{
-                        fontFamily: theme.bodyFont,
-                        fontSize: 13,
-                        fontWeight: product.highlight ? 700 : 400,
-                        color: product.highlight ? theme.accent : theme.ink,
-                        textAlign: 'right',
-                      }}
-                    >
-                      {value}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+          // Head-to-head (exactly 2 products): drop a VS medallion between them.
+          if (!mobile && module.products.length === 2 && pi === 0) {
+            return [card, <VsBadge key="vs" theme={theme} />];
+          }
+          return [card];
+        })}
       </div>
     </div>
   );
@@ -1200,11 +1395,11 @@ function DesignedSpecsOrText({
   ctx: Ctx;
 }) {
   const { theme, mobile } = ctx;
-  // Bold (tight) gets alternating row fills + accent labels; airy gets roomy
-  // hairline rows; others keep clean line-divided rows. Padding scales with density.
-  const zebra = theme.density === 'tight';
+  // Specs render as a framed card with zebra rows + accent labels across every
+  // style — a polished, scannable spec sheet beats naked hairline rows. Padding
+  // scales with density.
   const rowPadY =
-    theme.density === 'airy' ? 14 : theme.density === 'tight' ? 8 : 10;
+    theme.density === 'airy' ? 16 : theme.density === 'tight' ? 11 : 13;
   const outerPad =
     theme.density === 'airy'
       ? '12px 48px 44px'
@@ -1231,7 +1426,15 @@ function DesignedSpecsOrText({
       ) : null}
       {module.type === 'tech-specs' ? (
         <div
-          style={{ display: 'flex', flexDirection: 'column', marginTop: 14 }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            marginTop: 16,
+            borderRadius: theme.radius * 1.5,
+            border: `1px solid ${theme.line}`,
+            overflow: 'hidden',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.05)',
+          }}
         >
           {module.rows.map((row, i) => (
             <div
@@ -1239,31 +1442,32 @@ function DesignedSpecsOrText({
               style={{
                 display: 'flex',
                 flexDirection: mobile ? 'column' : 'row',
-                padding: `${rowPadY}px ${zebra ? 14 : 0}px`,
-                background:
-                  zebra && i % 2 === 1 ? theme.surfaceAlt : 'transparent',
-                borderTop:
-                  zebra || i === 0 ? 'none' : `1px solid ${theme.line}`,
+                alignItems: mobile ? 'flex-start' : 'center',
+                padding: mobile ? '12px 18px' : `${rowPadY}px 24px`,
+                background: i % 2 === 0 ? theme.surface : theme.surfaceAlt,
               }}
             >
               <div
                 style={{
-                  width: mobile ? '100%' : 280,
+                  display: 'flex',
+                  width: mobile ? '100%' : 300,
                   marginBottom: mobile ? 2 : 0,
                   fontFamily: theme.bodyFont,
                   fontSize: 14,
-                  fontWeight: 600,
-                  color: zebra ? theme.accent : theme.ink,
+                  fontWeight: 700,
+                  letterSpacing: 0.2,
+                  color: theme.accent,
                 }}
               >
                 {row.label}
               </div>
               <div
                 style={{
+                  display: 'flex',
                   flex: mobile ? '0 1 auto' : 1,
                   fontFamily: theme.bodyFont,
-                  fontSize: 14,
-                  color: theme.muted,
+                  fontSize: 15,
+                  color: theme.ink,
                 }}
               >
                 {clean(row.value)}
@@ -1315,87 +1519,119 @@ function DesignedLogo({
   // with a brand-tinted scrim + accent flair and a heading-font tagline. The
   // logo is never AI-generated; only the backdrop is.
   const bgSrc = module.background?.image?.url;
-  // Fit the logo within a box (cap BOTH height and width) so wide wordmarks get
-  // width and tall stacked lockups don't dominate — scales to fill without
-  // forcing an oversized fixed height.
-  const logoMaxHeight = bgSrc ? (mobile ? 72 : 104) : mobile ? 64 : 92;
-  const logoMaxWidth = mobile ? 340 : 460;
-  const logo = theme.logoUrl ? (
-    <img
-      src={theme.logoUrl}
-      alt={theme.brandName || 'Brand logo'}
-      style={{
-        maxHeight: logoMaxHeight,
-        maxWidth: logoMaxWidth,
-        width: 'auto',
-        height: 'auto',
-        objectFit: 'contain',
-        display: 'block',
-      }}
-    />
-  ) : theme.brandName ? (
-    <div
-      style={{
-        fontFamily: theme.headingFont,
-        fontSize: mobile ? 34 : 52,
-        fontWeight: theme.headingWeight,
-        letterSpacing: 4,
-        textTransform: 'uppercase',
-        color: theme.ink,
-        textAlign: 'center',
-      }}
-    >
-      {theme.brandName}
-    </div>
-  ) : (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 280,
-        height: 72,
-        border: `1px dashed ${theme.line}`,
-        borderRadius: theme.radius,
-        color: theme.muted,
-        fontFamily: theme.bodyFont,
-        fontSize: 13,
-      }}
-    >
-      Add your brand logo
-    </div>
-  );
   const tagline = clean(module.tagline);
-  const accentRule = (
-    <div
-      style={{
-        width: 76,
-        height: 3,
-        marginTop: 24,
-        borderRadius: 3,
-        background: theme.accent,
-      }}
-    />
-  );
-  const taglineEl = tagline ? (
-    <div
-      style={{
-        marginTop: 16,
-        maxWidth: 700,
-        fontFamily: theme.headingFont,
-        fontSize: mobile ? 17 : 22,
-        lineHeight: 1.4,
-        letterSpacing: 0.2,
-        color: theme.ink,
-        textAlign: 'center',
-      }}
-    >
-      {tagline}
-    </div>
-  ) : null;
 
-  // Brand hero with an ambient backdrop image.
-  if (bgSrc) {
+  // The logo is never AI-generated. Height-driven so the plate HUGS the mark:
+  // when the aspect is known (PNG export) we set an exact width so there are no
+  // dead margins; in the browser preview (aspect unknown) width:'auto' lets the
+  // browser size it naturally. `maxW` caps very wide wordmarks.
+  const renderLogo = (targetH: number, maxW: number) => {
+    if (theme.logoUrl) {
+      let w: number | undefined;
+      let h = targetH;
+      if (theme.logoAspect) {
+        w = Math.round(targetH * theme.logoAspect);
+        if (w > maxW) {
+          w = maxW;
+          h = Math.round(maxW / theme.logoAspect);
+        }
+      }
+      return (
+        <img
+          src={theme.logoUrl}
+          alt={theme.brandName || 'Brand logo'}
+          width={w}
+          height={h}
+          style={{
+            width: w ?? 'auto',
+            height: h,
+            maxWidth: maxW,
+            objectFit: 'contain',
+            display: 'block',
+          }}
+        />
+      );
+    }
+    return theme.brandName ? (
+      <div
+        style={{
+          display: 'flex',
+          fontFamily: theme.headingFont,
+          fontSize: mobile ? 30 : 46,
+          fontWeight: theme.headingWeight,
+          letterSpacing: 4,
+          textTransform: 'uppercase',
+          color: theme.ink,
+        }}
+      >
+        {theme.brandName}
+      </div>
+    ) : (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 280,
+          height: 72,
+          border: `1px dashed ${theme.line}`,
+          borderRadius: theme.radius,
+          color: theme.muted,
+          fontFamily: theme.bodyFont,
+          fontSize: 13,
+        }}
+      >
+        Add your brand logo
+      </div>
+    );
+  };
+
+  // A lockup column — logo, accent rule, tagline — with alignment + sizing per use.
+  const lockup = (o: {
+    align: 'center' | 'flex-start';
+    logoW: number;
+    logoH: number;
+    taglineColor: string;
+    taglineAlign: 'center' | 'left';
+    maxTaglineW: number;
+  }) => (
+    <div
+      style={{ display: 'flex', flexDirection: 'column', alignItems: o.align }}
+    >
+      {renderLogo(o.logoH, o.logoW)}
+      <div
+        style={{
+          width: 76,
+          height: 3,
+          marginTop: 24,
+          borderRadius: 3,
+          background: theme.accent,
+        }}
+      />
+      {tagline ? (
+        <div
+          style={{
+            display: 'flex',
+            marginTop: 16,
+            maxWidth: o.maxTaglineW,
+            fontFamily: theme.headingFont,
+            fontSize: mobile ? 17 : 22,
+            lineHeight: 1.4,
+            letterSpacing: 0.2,
+            color: o.taglineColor,
+            textAlign: o.taglineAlign,
+          }}
+        >
+          {tagline}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // Brand FOOTER: a centered closing band — ornament, logo chip, tagline — over
+  // a darkened backdrop (or a dark brand band when no photo). Distinct from the
+  // left-aligned opening hero so the page reads with a clear bookend.
+  if (module.placement === 'footer') {
     return (
       <div
         style={{
@@ -1404,7 +1640,324 @@ function DesignedLogo({
           alignItems: 'center',
           justifyContent: 'center',
           width: '100%',
-          minHeight: mobile ? 320 : 420,
+          minHeight: mobile ? 220 : 280,
+          background: bgSrc ? theme.surfaceAlt : theme.ink,
+        }}
+      >
+        {bgSrc ? (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+            }}
+          >
+            <img
+              src={bgSrc}
+              alt={module.background?.alt || ''}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block',
+              }}
+            />
+          </div>
+        ) : null}
+        {bgSrc ? (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+              background:
+                'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.72) 100%)',
+            }}
+          />
+        ) : null}
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 5,
+            display: 'flex',
+            background: theme.accent,
+          }}
+        />
+        <div
+          style={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: mobile ? '36px 30px' : '46px 0',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <div style={{ width: 40, height: 2, background: theme.accent }} />
+            <div
+              style={{
+                width: 8,
+                height: 8,
+                margin: '0 10px',
+                borderRadius: 8,
+                background: theme.accent,
+              }}
+            />
+            <div style={{ width: 40, height: 2, background: theme.accent }} />
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginTop: 18,
+              padding: mobile ? '10px 18px' : '12px 22px',
+              borderRadius: theme.radius * 1.4,
+              background: withAlpha('#FFFFFF', 0.95),
+              boxShadow: '0 12px 30px rgba(0,0,0,0.3)',
+            }}
+          >
+            {renderLogo(mobile ? 54 : 62, mobile ? 200 : 260)}
+          </div>
+          {tagline ? (
+            <div
+              style={{
+                display: 'flex',
+                marginTop: 16,
+                maxWidth: 600,
+                fontFamily: theme.headingFont,
+                fontSize: mobile ? 15 : 19,
+                lineHeight: 1.4,
+                color: 'rgba(255,255,255,0.92)',
+                textAlign: 'center',
+              }}
+            >
+              {tagline}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  // Brand hero with an ambient backdrop — the AI picks the treatment per product
+  // (module.heroVariant), so pages vary; theme/default only backstop it.
+  if (bgSrc) {
+    const variant = module.heroVariant ?? theme.heroVariant ?? 'overlay';
+
+    // OVERLAY: editorial hero — headline + benefit subhead + divider + logo
+    // lockup laid directly on a full-bleed lifestyle photo (matches premium A+
+    // brand heroes). A left-weighted scrim keeps text legible on any photo.
+    if (variant === 'overlay') {
+      const headline = clean(module.headline) || theme.brandName || '';
+      return (
+        <div
+          style={{
+            position: 'relative',
+            display: 'flex',
+            width: '100%',
+            minHeight: mobile ? 420 : 480,
+            background: theme.surfaceAlt,
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+            }}
+          >
+            <img
+              src={bgSrc}
+              alt={module.background?.alt || ''}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block',
+              }}
+            />
+          </div>
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+              background:
+                'linear-gradient(90deg, rgba(0,0,0,0.66) 0%, rgba(0,0,0,0.42) 40%, rgba(0,0,0,0.06) 100%)',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 5,
+              display: 'flex',
+              background: theme.accent,
+            }}
+          />
+          <div
+            style={{
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'flex-start',
+              width: '100%',
+              padding: mobile ? '44px 32px' : '56px 64px',
+            }}
+          >
+            {headline ? (
+              <div
+                style={{
+                  display: 'flex',
+                  maxWidth: mobile ? '100%' : 560,
+                  fontFamily: theme.headingFont,
+                  fontSize: mobile ? 34 : 50,
+                  lineHeight: 1.08,
+                  fontWeight: theme.headingWeight,
+                  letterSpacing: theme.headingTracking,
+                  textTransform: theme.headingCase,
+                  color: '#FFFFFF',
+                }}
+              >
+                {headline}
+              </div>
+            ) : null}
+            {tagline ? (
+              <div
+                style={{
+                  display: 'flex',
+                  marginTop: 14,
+                  maxWidth: mobile ? '100%' : 480,
+                  fontFamily: theme.bodyFont,
+                  fontSize: mobile ? 16 : 20,
+                  lineHeight: 1.4,
+                  color: 'rgba(255,255,255,0.92)',
+                }}
+              >
+                {tagline}
+              </div>
+            ) : null}
+          </div>
+          {/* Brand bar anchored to a bottom corner (AI-chosen side) — not floating. */}
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              ...(module.logoCorner === 'bottom-right'
+                ? { right: 0, borderTopLeftRadius: theme.radius * 2.6 }
+                : { left: 0, borderTopRightRadius: theme.radius * 2.6 }),
+              display: 'flex',
+              alignItems: 'center',
+              padding: mobile ? '12px 22px' : '14px 28px',
+              background: `linear-gradient(135deg, #FFFFFF 0%, ${theme.surfaceAlt} 100%)`,
+              borderTop: `4px solid ${theme.accent}`,
+              boxShadow: '0 -6px 22px rgba(0,0,0,0.22)',
+            }}
+          >
+            {renderLogo(mobile ? 42 : 50, mobile ? 200 : 240)}
+          </div>
+        </div>
+      );
+    }
+
+    // SPLIT: lifestyle photo beside a solid brand panel (color-blocked, bold).
+    if (variant === 'split') {
+      return (
+        <div
+          style={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: mobile ? 'column' : 'row',
+            width: '100%',
+            minHeight: mobile ? 0 : 440,
+            background: theme.surface,
+          }}
+        >
+          <div
+            style={{
+              position: 'relative',
+              display: 'flex',
+              width: mobile ? '100%' : '54%',
+              minHeight: mobile ? 240 : 0,
+            }}
+          >
+            <img
+              src={bgSrc}
+              alt={module.background?.alt || ''}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block',
+              }}
+            />
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'flex-start',
+              width: mobile ? '100%' : '46%',
+              padding: mobile ? '34px 30px' : '48px 56px',
+              background: theme.surface,
+            }}
+          >
+            {lockup({
+              align: 'flex-start',
+              logoW: mobile ? 300 : 360,
+              logoH: mobile ? 84 : 120,
+              taglineColor: theme.ink,
+              taglineAlign: 'left',
+              maxTaglineW: 360,
+            })}
+          </div>
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 5,
+              display: 'flex',
+              background: theme.accent,
+            }}
+          />
+        </div>
+      );
+    }
+
+    // PLATE (solid) / GLASS (translucent): full-bleed photo + centered card.
+    const glass = variant === 'glass';
+    return (
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '100%',
+          minHeight: mobile ? 360 : 460,
           background: theme.surfaceAlt,
         }}
       >
@@ -1429,7 +1982,6 @@ function DesignedLogo({
             }}
           />
         </div>
-        {/* Brand-tinted veil so the photo reads as an on-brand backdrop. */}
         <div
           style={{
             position: 'absolute',
@@ -1438,13 +1990,10 @@ function DesignedLogo({
             right: 0,
             bottom: 0,
             display: 'flex',
-            background: `linear-gradient(180deg, ${withAlpha(
-              theme.bg,
-              0.74
-            )} 0%, ${withAlpha(theme.bg, 0.86)} 100%)`,
+            background:
+              'linear-gradient(180deg, rgba(0,0,0,0.32) 0%, rgba(0,0,0,0.12) 42%, rgba(0,0,0,0.40) 100%)',
           }}
         />
-        {/* Accent flair bar across the top. */}
         <div
           style={{
             position: 'absolute',
@@ -1463,18 +2012,31 @@ function DesignedLogo({
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: mobile ? '44px 28px' : '60px 0',
+            padding: mobile ? '30px 34px' : '40px 72px',
+            borderRadius: theme.radius * 1.6,
+            background: glass ? withAlpha('#FFFFFF', 0.7) : theme.surface,
+            border: `1px solid ${
+              glass ? withAlpha('#FFFFFF', 0.55) : withAlpha(theme.ink, 0.06)
+            }`,
+            boxShadow: '0 24px 60px rgba(0,0,0,0.34)',
           }}
         >
-          {logo}
-          {accentRule}
-          {taglineEl}
+          {lockup({
+            align: 'center',
+            logoW: mobile ? 340 : 440,
+            logoH: mobile ? 88 : 128,
+            taglineColor: theme.ink,
+            taglineAlign: 'center',
+            maxTaglineW: 640,
+          })}
         </div>
       </div>
     );
   }
 
-  // Fallback: tinted band (no backdrop) with a large logo.
+  // Fallback (no AI backdrop): a large logo in a soft raised panel on a subtle
+  // brand gradient, so the header reads as an intentional brand lockup rather
+  // than an empty band. Satori-safe: flexbox + linear-gradient + boxShadow only.
   return (
     <div
       style={{
@@ -1483,14 +2045,34 @@ function DesignedLogo({
         alignItems: 'center',
         justifyContent: 'center',
         width: '100%',
-        background: theme.surfaceAlt,
+        background: `linear-gradient(160deg, ${
+          theme.surfaceAlt
+        } 0%, ${withAlpha(theme.accent, 0.1)} 100%)`,
         borderTop: `5px solid ${theme.accent}`,
-        padding: mobile ? '40px 24px' : '56px 0',
+        padding: mobile ? '36px 24px' : '48px 0',
       }}
     >
-      {logo}
-      {accentRule}
-      {taglineEl}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          padding: mobile ? '28px 32px' : '40px 64px',
+          borderRadius: theme.radius * 1.5,
+          background: theme.surface,
+          border: `1px solid ${theme.line}`,
+          boxShadow: '0 18px 44px rgba(0,0,0,0.10)',
+        }}
+      >
+        {lockup({
+          align: 'center',
+          logoW: mobile ? 340 : 500,
+          logoH: mobile ? 104 : 168,
+          taglineColor: theme.ink,
+          taglineAlign: 'center',
+          maxTaglineW: 640,
+        })}
+      </div>
     </div>
   );
 }
@@ -1630,6 +2212,278 @@ function DesignedDualUse({
   );
 }
 
+/**
+ * Generic lucide-style icon paths (stroke), drawn as inline <svg>. Inline SVG
+ * renders both in the browser preview and in satori/next-og export.
+ */
+const ICON_PATHS: Record<IconRowIcon, string[]> = {
+  coffee: [
+    'M17 8h1a4 4 0 1 1 0 8h-1',
+    'M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z',
+    'M6 2v2',
+    'M10 2v2',
+    'M14 2v2',
+  ],
+  leaf: [
+    'M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z',
+    'M2 21c0-3 1.85-5.36 5.08-6',
+  ],
+  shield: [
+    'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z',
+  ],
+  zap: [
+    'M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z',
+  ],
+  heart: [
+    'M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z',
+  ],
+  star: [
+    'M11.5 2.3a.5.5 0 0 1 1 0l2.6 5.3 5.8.8a.5.5 0 0 1 .3.9l-4.2 4 1 5.8a.5.5 0 0 1-.8.5L12 19l-5.2 2.7a.5.5 0 0 1-.7-.5l1-5.8-4.2-4a.5.5 0 0 1 .3-.9l5.8-.8z',
+  ],
+  package: [
+    'M11 21.7a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7z',
+    'M3.3 7 12 12l8.7-5',
+    'M12 22V12',
+  ],
+  home: [
+    'M3 10a2 2 0 0 1 .7-1.5l7-6a2 2 0 0 1 2.6 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+    'M9 21v-6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6',
+  ],
+  gift: [
+    'M20 12v10H4V12',
+    'M2 7h20v5H2z',
+    'M12 22V7',
+    'M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7Z',
+    'M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7Z',
+  ],
+  sparkles: [
+    'M9.9 15.5A2 2 0 0 0 8.5 14.1l-6.1-1.6a.5.5 0 0 1 0-1L8.5 9.9A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0L14.1 8.5A2 2 0 0 0 15.5 9.9l6.1 1.6a.5.5 0 0 1 0 1L15.5 14.1a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z',
+  ],
+  building: [
+    'M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z',
+    'M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2',
+    'M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2',
+    'M10 6h4',
+    'M10 10h4',
+    'M10 14h4',
+  ],
+  users: [
+    'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2',
+    'M9 7a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
+    'M22 21v-2a4 4 0 0 0-3-3.9',
+    'M16 3.1a4 4 0 0 1 0 7.8',
+  ],
+  check: ['M20 6 9 17l-5-5'],
+  clock: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z', 'M12 6v6l4 2'],
+  droplet: [
+    'M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C4 11.1 3 13 3 15a7 7 0 0 0 7 7Z',
+  ],
+  thermometer: ['M14 4v10.5a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z'],
+};
+
+/** Map common/intuitive icon names the model emits to a supported glyph. */
+const ICON_ALIASES: Record<string, IconRowIcon> = {
+  mug: 'coffee',
+  cup: 'coffee',
+  espresso: 'coffee',
+  latte: 'coffee',
+  beverage: 'coffee',
+  tea: 'droplet',
+  drink: 'droplet',
+  water: 'droplet',
+  liquid: 'droplet',
+  hydration: 'droplet',
+  office: 'building',
+  work: 'building',
+  business: 'building',
+  commercial: 'building',
+  workplace: 'building',
+  cafe: 'building',
+  restaurant: 'building',
+  event: 'users',
+  events: 'users',
+  party: 'users',
+  people: 'users',
+  community: 'users',
+  group: 'users',
+  team: 'users',
+  family: 'users',
+  social: 'users',
+  calendar: 'clock',
+  schedule: 'clock',
+  time: 'clock',
+  date: 'clock',
+  duration: 'clock',
+  timer: 'clock',
+  eco: 'leaf',
+  recycle: 'leaf',
+  green: 'leaf',
+  sustainable: 'leaf',
+  plant: 'leaf',
+  natural: 'leaf',
+  biodegradable: 'leaf',
+  compostable: 'leaf',
+  organic: 'leaf',
+  durable: 'shield',
+  protect: 'shield',
+  protection: 'shield',
+  safe: 'shield',
+  secure: 'shield',
+  safety: 'shield',
+  warranty: 'shield',
+  guarantee: 'shield',
+  sturdy: 'shield',
+  fast: 'zap',
+  power: 'zap',
+  energy: 'zap',
+  quick: 'zap',
+  instant: 'zap',
+  performance: 'zap',
+  powerful: 'zap',
+  quality: 'star',
+  premium: 'star',
+  award: 'star',
+  best: 'star',
+  rating: 'star',
+  certified: 'star',
+  excellence: 'star',
+  trusted: 'star',
+  love: 'heart',
+  comfort: 'heart',
+  care: 'heart',
+  favorite: 'heart',
+  comfortable: 'heart',
+  cozy: 'heart',
+  ship: 'package',
+  shipping: 'package',
+  delivery: 'package',
+  box: 'package',
+  bundle: 'package',
+  kit: 'package',
+  pack: 'package',
+  value: 'package',
+  bulk: 'package',
+  thermal: 'thermometer',
+  hot: 'thermometer',
+  cold: 'thermometer',
+  temperature: 'thermometer',
+  insulated: 'thermometer',
+  insulation: 'thermometer',
+  heat: 'thermometer',
+  house: 'home',
+  household: 'home',
+  domestic: 'home',
+  present: 'gift',
+  sparkle: 'sparkles',
+  shine: 'sparkles',
+  clean: 'sparkles',
+  new: 'sparkles',
+  fresh: 'sparkles',
+  verified: 'check',
+  yes: 'check',
+  included: 'check',
+  tick: 'check',
+  done: 'check',
+};
+
+function resolveIcon(name: string): IconRowIcon {
+  const k = name.trim().toLowerCase();
+  if (k in ICON_PATHS) return k as IconRowIcon;
+  return ICON_ALIASES[k] ?? 'check';
+}
+
+/** A horizontal strip of icon + label highlights (use cases / key benefits). */
+function DesignedIconRow({
+  module,
+  ctx,
+}: {
+  module: Extract<APlusGeneratedModule, { type: 'icon-row' }>;
+  ctx: Ctx;
+}) {
+  const { theme, mobile } = ctx;
+  const iconSize = mobile ? 24 : 28;
+  const circle = mobile ? 46 : 56;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        background: theme.bg,
+        paddingBottom: mobile ? 22 : 28,
+      }}
+    >
+      <SectionTitle title={module.title} theme={theme} />
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: mobile ? 'column' : 'row',
+          alignItems: 'stretch',
+          justifyContent: 'center',
+          padding: mobile ? '10px 24px 0' : '16px 30px 0',
+        }}
+      >
+        {module.items.map((item, i) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              flexDirection: mobile ? 'row' : 'column',
+              alignItems: 'center',
+              justifyContent: mobile ? 'flex-start' : 'center',
+              flex: 1,
+              padding: mobile ? '12px 0' : '6px 10px',
+              borderLeft: !mobile && i > 0 ? `1px solid ${theme.line}` : 'none',
+              borderTop: mobile && i > 0 ? `1px solid ${theme.line}` : 'none',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: circle,
+                height: circle,
+                borderRadius: circle,
+                background: theme.accentSoft,
+                marginRight: mobile ? 14 : 0,
+                marginBottom: mobile ? 0 : 12,
+              }}
+            >
+              <svg
+                width={iconSize}
+                height={iconSize}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke={theme.accent}
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                {ICON_PATHS[resolveIcon(item.icon)].map((d, j) => (
+                  <path key={j} d={d} />
+                ))}
+              </svg>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                fontFamily: theme.bodyFont,
+                fontSize: mobile ? 15 : 14,
+                fontWeight: 600,
+                color: theme.ink,
+                textAlign: 'center',
+              }}
+            >
+              {clean(item.label)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Designed (branded) render of one module — used by preview and PNG export. */
 export function DesignedModule({
   module,
@@ -1665,6 +2519,8 @@ export function DesignedModule({
       return <DesignedSpecsOrText module={module} ctx={ctx} />;
     case 'dual-use-split':
       return <DesignedDualUse module={module} ctx={ctx} />;
+    case 'icon-row':
+      return <DesignedIconRow module={module} ctx={ctx} />;
     default:
       return null;
   }

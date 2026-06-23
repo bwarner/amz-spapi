@@ -1,6 +1,14 @@
 import crypto from 'node:crypto';
-import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getDocument, upsertDocument } from '@amz-spapi/couchbase-utils';
+import {
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import {
+  deleteDocument,
+  getDocument,
+  upsertDocument,
+} from '@amz-spapi/couchbase-utils';
 
 export type MediaAssetFeature = 'a-plus' | 'ads' | 'listings' | 'shared';
 
@@ -158,4 +166,43 @@ export async function headAssetObject(asset: MediaAsset) {
       Key: asset.storage.key,
     })
   );
+}
+
+/**
+ * Permanently delete an asset: its S3 object, its Couchbase doc, and its
+ * sha256 hash pointer (only when the pointer still points at this asset, so a
+ * later asset that re-deduped onto the same hash isn't orphaned).
+ *
+ * Best-effort on S3: if the object delete fails we still remove the DB records
+ * so the asset stops appearing/serving. Callers are responsible for ensuring
+ * the asset is unreferenced before calling this — see a-plus-asset-cleanup.
+ */
+export async function deleteAsset(assetId: string): Promise<boolean> {
+  const asset = await getAsset(assetId);
+  if (!asset) return false;
+
+  try {
+    await createAssetS3Client().send(
+      new DeleteObjectCommand({
+        Bucket: asset.storage.bucket,
+        Key: asset.storage.key,
+      })
+    );
+  } catch {
+    // Object may already be gone; continue removing the DB records.
+  }
+
+  await deleteDocument(SCOPE, ASSETS_COLLECTION, assetDocKey(assetId));
+
+  const pointerKey = hashDocKey(asset.userId, asset.hashes.sha256);
+  const pointer = await getDocument<MediaAssetHashPointer>(
+    SCOPE,
+    HASHES_COLLECTION,
+    pointerKey
+  );
+  if (pointer?.assetId === assetId) {
+    await deleteDocument(SCOPE, HASHES_COLLECTION, pointerKey);
+  }
+
+  return true;
 }

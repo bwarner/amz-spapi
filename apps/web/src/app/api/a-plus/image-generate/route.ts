@@ -53,9 +53,13 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { prompt?: unknown; size?: unknown };
+  let body: { prompt?: unknown; size?: unknown; quality?: unknown };
   try {
-    body = (await request.json()) as { prompt?: unknown; size?: unknown };
+    body = (await request.json()) as {
+      prompt?: unknown;
+      size?: unknown;
+      quality?: unknown;
+    };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
   }
@@ -66,6 +70,15 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+
+  // Optional cost/quality tier — 'low' for cheap drafts. Invalid values fall
+  // through to the provider/env default (no error).
+  const quality =
+    body.quality === 'low' ||
+    body.quality === 'medium' ||
+    body.quality === 'high'
+      ? body.quality
+      : undefined;
 
   const provider = createAIProvider();
 
@@ -88,6 +101,7 @@ export async function POST(request: Request) {
     const results = await imageGenerator.generate({
       prompt: prepareImagePrompt(body.prompt),
       size,
+      quality,
     });
     const first = results[0];
     if (!first?.url) {

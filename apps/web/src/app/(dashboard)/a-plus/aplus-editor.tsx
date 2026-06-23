@@ -152,6 +152,16 @@ type AssetLibraryItem = {
   uploadErrorCode?: string;
 };
 
+/**
+ * AI-generated A+ images are named `generated-*` and belong in module slots,
+ * not the user uploads library. Older drafts may still have them persisted in
+ * `assets`, so we filter them out on load.
+ */
+function isGeneratedLibraryAsset(item: AssetLibraryItem): boolean {
+  const name = item.asset?.originalFileName ?? item.fileName ?? '';
+  return name.startsWith('generated-');
+}
+
 type APlusModule = {
   id: string;
   tier: ContentTier;
@@ -169,6 +179,9 @@ type PackageImageJob = {
   jobId: string;
   prompt: string;
   size: string;
+  /** True when this slot already has a generated/uploaded image (e.g. a draft
+   * reloaded from storage) — so "Generate all" never re-pays for it. */
+  hasImage: boolean;
 };
 
 type ImageJobResult =
@@ -1732,6 +1745,14 @@ export function APlusEditor({
   const [imageJobResults, setImageJobResults] = useState<
     Record<string, ImageJobResult>
   >({});
+  // Draft mode generates cheap low-quality images for fast iteration; turn off
+  // for full-quality finals. (Only the gpt-image-1 backend honors quality.)
+  const [draftImages, setDraftImages] = useState(false);
+  // Full-resolution image opened from a library thumbnail (null = closed).
+  const [previewImage, setPreviewImage] = useState<{
+    assetId: string;
+    fileName: string;
+  } | null>(null);
   const [loadedFonts, setLoadedFonts] = useState<Record<string, boolean>>({});
   const selectedBrandGuide =
     brandGuides.find((guide) => guide.brandGuideId === brandGuideId) || null;
@@ -2613,6 +2634,9 @@ export function APlusEditor({
         body: JSON.stringify({
           prompt: prepareGeneratedImagePrompt(prompt, imageForbiddenText),
           size,
+          // Draft mode generates cheap, low-quality images for fast iteration;
+          // finals are full quality. Only gpt-image-1 honors this.
+          quality: draftImages ? 'low' : undefined,
         }),
       });
       const body = (await response.json()) as {
@@ -2654,33 +2678,11 @@ export function APlusEditor({
       // persisted with the design (and survives a reload), not just held in
       // transient imageJobResults. jobId is "img-{order}-{role}".
       writeSlotImageIntoPackage(jobId, imageUrl);
-      const generatedAsset = body.asset;
-      if (generatedAsset) {
-        const newItem: AssetLibraryItem = {
-          id: generatedAsset.assetId,
-          fileName: generatedAsset.originalFileName,
-          description: `Generated for image brief ${jobId}`,
-          asset: {
-            assetId: generatedAsset.assetId,
-            createdForFeature: 'a-plus',
-            originalFileName: generatedAsset.originalFileName,
-            mimeType: generatedAsset.mimeType,
-            sizeBytes: generatedAsset.sizeBytes,
-            hashes: { sha256: '' },
-            status: generatedAsset.status,
-            storage: generatedAsset.storage,
-          },
-          uploadStatus:
-            generatedAsset.status === 'duplicate' ? 'duplicate' : 'uploaded',
-        };
-        setAssetLibrary((current) =>
-          current.some(
-            (entry) => entry.asset?.assetId === generatedAsset.assetId
-          )
-            ? current
-            : [...current, newItem]
-        );
-      }
+      // Generated images live ONLY in the package slot (written above) — they
+      // are intentionally not added to the uploads asset library, which is for
+      // user-provided source images. Keeping generated outputs out of the
+      // library also lets save-time cleanup reclaim a refreshed slot's prior
+      // image once the slot stops referencing it (see a-plus-asset-cleanup).
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Image generation failed.';
@@ -2699,11 +2701,13 @@ export function APlusEditor({
         jobId: slotJobId(module.order, slot.role),
         prompt: slot.brief,
         size: slot.size,
+        hasImage: Boolean(slot.image?.url),
       }))
     );
   }, [generatedPackage]);
 
   const hasRunnablePackageImageJobs = allPackageImageJobs.some((job) => {
+    if (job.hasImage) return false;
     const status = imageJobResults[job.jobId]?.status;
     return status !== 'done' && status !== 'generating';
   });
@@ -2714,6 +2718,9 @@ export function APlusEditor({
 
   function generateAllPackageImages() {
     for (const job of allPackageImageJobs) {
+      // Never re-pay for a slot that already has an image — including a draft
+      // reloaded from storage, where in-memory job status is empty.
+      if (job.hasImage) continue;
       const status = imageJobResults[job.jobId]?.status;
       if (status === 'done' || status === 'generating') continue;
       void generateImageForJob(job.jobId, job.prompt, job.size);
@@ -2892,7 +2899,10 @@ export function APlusEditor({
     if (payload.brandLogoAssetId !== undefined)
       setBrandLogoAssetId(payload.brandLogoAssetId);
     if (payload.rawNotes !== undefined) setRawNotes(payload.rawNotes);
-    if (payload.assets?.length) setAssetLibrary(payload.assets);
+    if (payload.assets?.length)
+      setAssetLibrary(
+        payload.assets.filter((a) => !isGeneratedLibraryAsset(a))
+      );
     if (payload.strategyId) setStrategyId(payload.strategyId);
     if (payload.sources?.length) setSources(payload.sources);
     if (payload.modules?.length) setModules(payload.modules);
@@ -4008,6 +4018,28 @@ export function APlusEditor({
                 className="grid gap-3 rounded-md border bg-background p-3 md:grid-cols-[minmax(0,220px)_1fr_auto]"
               >
                 <div className="min-w-0">
+                  {item.asset?.assetId &&
+                  (item.uploadStatus === 'uploaded' ||
+                    item.uploadStatus === 'duplicate') ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreviewImage({
+                          assetId: item.asset!.assetId,
+                          fileName: item.fileName,
+                        })
+                      }
+                      className="mb-2 block w-full overflow-hidden rounded border bg-muted transition hover:opacity-90"
+                      aria-label={`Preview ${item.fileName}`}
+                    >
+                      <img
+                        src={`/api/a-plus/assets/${item.asset.assetId}?w=320`}
+                        alt={item.fileName}
+                        loading="lazy"
+                        className="h-28 w-full object-cover"
+                      />
+                    </button>
+                  ) : null}
                   <div className="flex items-center gap-2">
                     {item.uploadStatus === 'hashing' ||
                     item.uploadStatus === 'uploading' ? (
@@ -4163,24 +4195,38 @@ export function APlusEditor({
             Generated A+ Package
           </CardTitle>
           {allPackageImageJobs.length ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              disabled={!hasRunnablePackageImageJobs}
-              onClick={generateAllPackageImages}
-            >
-              {isGeneratingPackageImage ? (
-                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <WandSparkles className="mr-2 h-3.5 w-3.5" />
-              )}
-              {isGeneratingPackageImage
-                ? 'Generating images'
-                : hasRunnablePackageImageJobs
-                ? 'Generate all images'
-                : 'All images generated'}
-            </Button>
+            <div className="flex items-center gap-3">
+              <label
+                className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+                title="Generate cheaper, low-quality draft images for fast iteration. Turn off for full-quality finals."
+              >
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5"
+                  checked={draftImages}
+                  onChange={(event) => setDraftImages(event.target.checked)}
+                />
+                Draft quality
+              </label>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                disabled={!hasRunnablePackageImageJobs}
+                onClick={generateAllPackageImages}
+              >
+                {isGeneratingPackageImage ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                )}
+                {isGeneratingPackageImage
+                  ? 'Generating images'
+                  : hasRunnablePackageImageJobs
+                  ? 'Generate all images'
+                  : 'All images generated'}
+              </Button>
+            </div>
           ) : null}
         </div>
       </CardHeader>
@@ -5026,6 +5072,37 @@ export function APlusEditor({
           </div>
         </div>
       )}
+
+      {previewImage ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="relative max-h-full max-w-4xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <img
+              src={`/api/a-plus/assets/${previewImage.assetId}`}
+              alt={previewImage.fileName}
+              className="max-h-[85vh] w-auto rounded-md object-contain shadow-2xl"
+            />
+            <div className="mt-2 flex items-center justify-between gap-3 text-sm text-white">
+              <span className="truncate">{previewImage.fileName}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => setPreviewImage(null)}
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import {
   APlusGeneratedModuleSchema,
+  ICON_ROW_ICONS,
   RENDERABLE_AMAZON_MODULE_TYPES,
   type RenderableAmazonModuleType,
   amazonModuleTypeToKind,
@@ -439,20 +440,24 @@ function classifyError(detail: string, phase: string) {
 const MODULE_FIELD_RULES: string[] = [
   'TEXT FIELDS — write real CUSTOMER-FACING copy the buyer reads. Not design notes, not descriptions of the layout.',
   '  • headline: ≤8 words, a concrete benefit. body: 1–3 sentences of durable benefit/use-case copy. bullets: ≤90 chars each, benefit statements.',
-  '  • company-logo: set tagline to a short (≤10 words) durable brand promise shown under the logo — e.g. “Insulated kraft cups built for specialty coffee service.” No price/claims.',
+  '  • company-logo: a full-bleed brand HERO. Set headline to the brand name plus a short product descriptor — the hero line, ≤8 words (e.g. “<Brand> <Product Category>”). Set tagline to a short (≤10 words) durable benefit/brand-promise subhead. Both must suit THIS product (any category — never assume a specific one). No price/claims. ALSO choose a hero TREATMENT that best fits this product so pages do not all look identical: set heroVariant to one of overlay | split | plate | glass, and (only for overlay) set logoCorner to bottom-left or bottom-right. Vary this choice per product based on the brand mood — do NOT default every product to the same one.',
   '  • hero modules (image-header-with-text / image-text-overlay / single-image-text / image-and-text): set badge to a SHORT spec/size pill (≤12 chars, e.g. “16 OZ”, “50-PACK”, “BPA-FREE”) when an obvious size/spec applies; omit otherwise. Never price or promo.',
   '  • comparison-table: products[].title are the column labels; rows[] are spec/benefit rows with exactly one value per product (same order). Set highlight=true on the seller’s own product.',
   '  • tech-specs: rows[] are {label, value} product facts (dimensions, materials, care, compatibility, package contents).',
   '  • dual-use-split: exactly 2 panels showing two CONTRASTING use scenarios of the SAME product (e.g. “Hot Beverages” vs “Cold Drinks”, “Indoor” vs “Outdoor”). Each panel: a short uppercase label (≤3 words), an optional ≤120-char caption, and an image slot whose brief depicts that exact scenario with the same product/look.',
+  `  • icon-row: 3–5 items, each {icon, label} — a quick scannable strip of use cases or key benefits. label ≤2 words. icon is a short lowercase keyword that suits the item — prefer one of: ${ICON_ROW_ICONS.join(
+    ', '
+  )} (a close synonym like office/event/eco/premium also works; it is mapped to a glyph). No images.`,
   '',
   'IMAGE SLOTS — every image slot describes a PHOTOGRAPH to be generated or uploaded later. For each slot provide role, size, alt, and brief. DO NOT output an "image" field; slots are filled downstream.',
   '  • role: short stable id (e.g. "hero", "column-1", "comparison-thumb-1").',
   '  • size: 1792x1024 for a wide hero/banner; 1024x1024 for square feature/column/grid images; 1024x1792 only when a tall portrait genuinely helps.',
   '  • alt: ≤160 char description of the photo content. No brand names.',
   '  • brief: a CINEMATIC, ASPIRATIONAL LIFESTYLE photographic prompt of 4–6 sentences — the kind of premium imagery in a high-end brand campaign, NOT a plain product shot. Prefer real people / hands actively USING the product in a believable moment, in a specific aspirational named environment (e.g. a sunlit specialty café, a modern kitchen at golden hour). It must name: the human action/moment, the hero product in genuine use, 3–5 atmospheric props, a specific surface + directional natural light source + ambient background depth, cinematic editorial lighting (soft window light, warm golden hour, etc.), shallow depth of field with foreground/mid/background layers, and a refined premium brand mood. Avoid flat-lay, isolated-on-white, studio-seamless, stock-photo stiffness, and minimalist-whitespace defaults.',
+  '  • NO ABSTRACT / CGI SLOP: every image is a believable REAL PHOTOGRAPH of the actual product. NEVER ask for cutaways, cross-sections, exploded views, technical/engineering diagrams, schematics, infographics, 3D-render or CGI looks, extreme material macros, or floating/isolated concept shots. For a feature/benefit cell, show the product in a real context that IMPLIES the benefit (e.g. the cup comfortably held, a neat stack on a counter) — never a diagram OF the benefit.',
   '  • CONTINUITY: every brief MUST restate the SAME product (same material/color/finish/shape per the SHOT BIBLE) and the SAME lighting, palette, lens and mood, so all images look like one shoot.',
   '  • CRITICAL: the brief must NEVER ask for any rendered text, headline, label, callout, price, watermark, badge, or logo. All text lives in the HTML fields above, never baked into pixels.',
-  '  • company-logo background slot: an AMBIENT, on-brand atmosphere photo (soft out-of-focus environment, warm bokeh, brand-colored mood) that sits BEHIND the logo under a tint — keep it soft, low-contrast, and uncluttered, with NO product hero front-and-center, no people staring, no text.',
+  '  • company-logo background slot: ALWAYS include a background slot for every company-logo module — the header is a brand HERO, never a bare logo. It is an AMBIENT, on-brand LIFESTYLE photo of the real environment where THIS product is used or displayed — chosen to fit the product category, NOT any fixed theme (e.g. a sunlit kitchen counter, a modern desk, a styled shelf, an outdoor patio — whatever suits the product). COMPOSE it with the hero subject toward ONE side and clean, low-detail NEGATIVE SPACE on the OPPOSITE side so the overlaid headline/subhead stays legible. Soft out-of-focus depth, gentle bokeh, premium natural light. No text, no logos, no people staring at camera.',
 ];
 
 type ModuleGenContext = {
@@ -500,6 +505,9 @@ async function generateModulesSingle(
       const res = await generateText({
         model: provider.languageModel('fast'),
         abortSignal: AbortSignal.timeout(180_000),
+        // All modules in one object is token-heavy — give it ample room so the
+        // JSON is never truncated (truncation reads as a schema mismatch).
+        maxOutputTokens: 32000,
         output: Output.object({
           schema: z.object({ modules: z.array(APlusGeneratedModuleSchema) }),
           name: 'a_plus_package_modules',
@@ -599,6 +607,65 @@ async function generateModulesParallel(
   );
   results.sort((a, b) => a.order - b.order);
   return { results, failures };
+}
+
+/**
+ * The brand-header module renders as a HERO only when it has a background slot
+ * (an ambient lifestyle backdrop behind the logo). The prompt asks for one, but
+ * if the model omits it we inject a default so the header never degrades to the
+ * plain band. The slot's image is filled by the downstream image-generate step.
+ */
+function ensureLogoBackdrop(
+  modules: z.infer<typeof APlusGeneratedModuleSchema>[]
+): void {
+  for (const module of modules) {
+    if (module.type === 'company-logo' && !module.background) {
+      module.background = {
+        role: 'brand-backdrop',
+        size: '1792x1024',
+        alt: 'Ambient brand lifestyle backdrop',
+        brief:
+          'An ambient, on-brand lifestyle environment appropriate to THIS product’s category and real-world use (the setting where it is naturally used or displayed — not any fixed theme), softly out of focus with gentle bokeh, layered depth and refined premium natural light. Compose with the main subject toward ONE side and clean, low-detail negative space on the OPPOSITE side so overlaid text stays legible. No product hero front-and-centre, no people staring at camera, no text or logos.',
+      };
+    }
+  }
+}
+
+/**
+ * Append a brand FOOTER — a centered closing brand band (`company-logo` with
+ * placement 'footer') — so the page has a clear bookend. Reuses the opening
+ * logo module's logo + tagline when present; idempotent and capped so we never
+ * exceed a sane module count. Product-agnostic.
+ */
+function ensureBrandFooter(
+  modules: z.infer<typeof APlusGeneratedModuleSchema>[]
+): void {
+  if (!modules.length || modules.length >= 7) return;
+  const last = modules[modules.length - 1];
+  if (last.type === 'company-logo' && last.placement === 'footer') return;
+  const header = modules.find((m) => m.type === 'company-logo');
+  const logo = header?.logo ?? {
+    role: 'logo',
+    brief: 'Brand logo (seller-supplied, never generated).',
+    size: '1024x1024' as const,
+    alt: 'Brand logo',
+  };
+  modules.push({
+    order: modules.length + 1,
+    type: 'company-logo',
+    amazonModuleType: 'STANDARD_COMPANY_LOGO',
+    title: 'Brand footer',
+    placement: 'footer',
+    logo,
+    tagline: header?.tagline,
+    background: {
+      role: 'footer-backdrop',
+      size: '1792x1024',
+      alt: 'Ambient brand backdrop',
+      brief:
+        'A dark, moody, on-brand ambient backdrop suited to THIS product’s category (the world it lives in — not any fixed theme), softly out of focus with gentle depth and warm low light, uncluttered. No product hero front-and-centre, no people staring at camera, no text or logos.',
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -793,6 +860,10 @@ export async function POST(request: Request) {
           });
 
         moduleResults.sort((a, b) => a.order - b.order);
+        // Brand header renders as a hero only with a backdrop — guarantee one.
+        ensureLogoBackdrop(moduleResults);
+        // Close the page with a brand footer band (bookend).
+        ensureBrandFooter(moduleResults);
         const modulesMs = Date.now() - tModules;
         console.log(
           `[a-plus-generate] package modules: ${(modulesMs / 1000).toFixed(
