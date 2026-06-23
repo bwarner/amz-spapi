@@ -163,6 +163,14 @@ function isGeneratedLibraryAsset(item: AssetLibraryItem): boolean {
   return name.startsWith('generated-');
 }
 
+// Some drags/OSes hand over files with an empty or non-image MIME type, so we
+// also accept by extension — otherwise those images are silently dropped.
+const IMAGE_FILE_EXT_RE =
+  /\.(png|jpe?g|webp|avif|gif|heic|heif|bmp|tiff?|svg)$/i;
+function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/') || IMAGE_FILE_EXT_RE.test(file.name);
+}
+
 type APlusModule = {
   id: string;
   tier: ContentTier;
@@ -2175,7 +2183,9 @@ export function APlusEditor({
   }
 
   async function uploadLibraryAsset(file: File) {
-    const itemId = `${Date.now()}-${file.name}`;
+    // Unique per item — a batch drop runs in one tick, so Date.now() collides
+    // and same-named files would share a React key (and collapse to one row).
+    const itemId = crypto.randomUUID();
     setAssetLibrary((current) => [
       ...current,
       {
@@ -2307,7 +2317,7 @@ export function APlusEditor({
 
   function uploadLibraryFiles(fileList: FileList | File[]) {
     [...fileList]
-      .filter((file) => file.type.startsWith('image/'))
+      .filter(isImageFile)
       .forEach((file) => void uploadLibraryAsset(file));
   }
 
