@@ -43,7 +43,11 @@ function prepareImagePrompt(prompt: string): string {
   return [
     prompt,
     '',
-    'Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, or readable brand marks anywhere in the image. Leave any brand/logo placement as an empty logo-safe area for later editing.',
+    // Hard realism override — enforced on EVERY image regardless of the brief,
+    // because conceptual cell labels (e.g. "Cross-Section Proof", "Insulation
+    // Engineering") otherwise push the model toward unrealistic diagram/CGI art.
+    'Important image rule: render a realistic, natural-light PHOTOGRAPH of the real physical product in a believable real-world setting. Absolutely NO cutaways, cross-sections, exploded or see-through/x-ray views, technical or engineering diagrams, schematics, blueprints, infographics, heat-maps, arrows/annotations, 3D or CGI renders, or abstract concept art. If the description implies an internal or technical detail, instead show the real product in a natural context that implies it (e.g. a hand holding it, a tidy stack on a counter) — never a depiction OF the concept.',
+    'Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, readable brand marks, or any other text, callouts, or numbers anywhere in the image. Leave any brand/logo placement as an empty logo-safe area for later editing.',
   ].join('\n');
 }
 
