@@ -22,6 +22,7 @@ import {
   Monitor,
   PackageCheck,
   Plus,
+  RefreshCw,
   ShieldAlert,
   Smartphone,
   Sparkles,
@@ -1690,6 +1691,7 @@ export function APlusEditor({
   const [brandFontNotes, setBrandFontNotes] = useState('');
   const [brandLogoAssetId, setBrandLogoAssetId] = useState('');
   const [rawNotes, setRawNotes] = useState('');
+  const [rebuildingNotes, setRebuildingNotes] = useState(false);
   const [assetLibrary, setAssetLibrary] = useState<AssetLibraryItem[]>([]);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('Untitled A+ draft');
@@ -2557,6 +2559,27 @@ export function APlusEditor({
   function inspectSource(source: SourceLink) {
     void checkSource(source);
     void extractSource(source);
+  }
+
+  /**
+   * Clear "What you know so far" and re-extract every linked source into it.
+   * Needed because the notes builder only appends/dedupes by header — it never
+   * rewrites old blocks — so re-extracting in place can't drop stale lines
+   * (e.g. a prior price line or an unlabeled competitor block). Clearing first
+   * lets each source re-append under the current rules (price filtered out,
+   * non-product sources labeled). Structured fields you already filled are left
+   * alone: mergeSourceFacts only fills blanks.
+   */
+  async function rebuildFromSources() {
+    const linked = sources.filter((source) => source.url.trim());
+    if (!linked.length || rebuildingNotes) return;
+    setRebuildingNotes(true);
+    try {
+      setRawNotes('');
+      await Promise.all(linked.map((source) => extractSource(source)));
+    } finally {
+      setRebuildingNotes(false);
+    }
   }
 
   function addDroppedSource(url: string) {
@@ -3599,7 +3622,26 @@ export function APlusEditor({
           </p>
         </div>
         <div className="space-y-2">
-          <Label htmlFor="notes">What you know so far</Label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label htmlFor="notes">What you know so far</Label>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void rebuildFromSources()}
+              disabled={
+                rebuildingNotes || !sources.some((source) => source.url.trim())
+              }
+              title="Clear these notes and re-read every linked source with the current extraction rules"
+            >
+              {rebuildingNotes ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+              )}
+              Rebuild from sources
+            </Button>
+          </div>
           <Textarea
             id="notes"
             value={rawNotes}
