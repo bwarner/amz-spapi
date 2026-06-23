@@ -163,12 +163,67 @@ function isGeneratedLibraryAsset(item: AssetLibraryItem): boolean {
   return name.startsWith('generated-');
 }
 
-// Some drags/OSes hand over files with an empty or non-image MIME type, so we
-// also accept by extension — otherwise those images are silently dropped.
-const IMAGE_FILE_EXT_RE =
-  /\.(png|jpe?g|webp|avif|gif|heic|heif|bmp|tiff?|svg)$/i;
-function isImageFile(file: File): boolean {
-  return file.type.startsWith('image/') || IMAGE_FILE_EXT_RE.test(file.name);
+const EXT_TO_IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  gif: 'image/gif',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  bmp: 'image/bmp',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  svg: 'image/svg+xml',
+};
+
+// Detect an image type from the file's magic bytes. Lets us accept files that
+// have NO extension and no browser-provided MIME (which would otherwise be
+// silently dropped or rejected by the upload preflight).
+async function sniffImageMime(file: File): Promise<string | null> {
+  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(
+    ''
+  );
+  if (hex.startsWith('ffd8ff')) return 'image/jpeg';
+  if (hex.startsWith('89504e470d0a1a0a')) return 'image/png';
+  if (hex.startsWith('47494638')) return 'image/gif';
+  if ((bytes[0] ?? 0) === 0x42 && (bytes[1] ?? 0) === 0x4d) return 'image/bmp';
+  if (hex.startsWith('49492a00') || hex.startsWith('4d4d002a'))
+    return 'image/tiff';
+  // RIFF....WEBP
+  if (hex.startsWith('52494646') && hex.slice(16, 24) === '57454250')
+    return 'image/webp';
+  // ISO-BMFF "ftyp" box (avif/heic) at bytes 4–7
+  if (
+    (bytes[4] ?? 0) === 0x66 &&
+    (bytes[5] ?? 0) === 0x74 &&
+    (bytes[6] ?? 0) === 0x79 &&
+    (bytes[7] ?? 0) === 0x70
+  ) {
+    const brand = String.fromCharCode(
+      bytes[8] ?? 0,
+      bytes[9] ?? 0,
+      bytes[10] ?? 0,
+      bytes[11] ?? 0
+    );
+    if (brand.startsWith('avi')) return 'image/avif';
+    if (brand.startsWith('hei') || brand.startsWith('mif')) return 'image/heic';
+  }
+  return null;
+}
+
+// Best image MIME for a dropped file: browser type → extension → content sniff.
+// Returns null when the file is not a recognized image (so the caller can show
+// a clear error instead of failing silently).
+async function resolveImageMime(file: File): Promise<string | null> {
+  if (file.type.startsWith('image/')) return file.type;
+  const ext = file.name.includes('.')
+    ? (file.name.split('.').pop() ?? '').toLowerCase()
+    : '';
+  if (ext && EXT_TO_IMAGE_MIME[ext]) return EXT_TO_IMAGE_MIME[ext];
+  return sniffImageMime(file);
 }
 
 type APlusModule = {
@@ -2186,16 +2241,18 @@ export function APlusEditor({
     // Unique per item — a batch drop runs in one tick, so Date.now() collides
     // and same-named files would share a React key (and collapse to one row).
     const itemId = crypto.randomUUID();
+    // Prepend so the new row is immediately visible under the dropzone (with its
+    // progress/duplicate/error status) instead of appended below the fold.
     setAssetLibrary((current) => [
-      ...current,
       {
         id: itemId,
         fileName: file.name,
         description: '',
         file,
         uploadStatus: 'hashing',
-        uploadMessage: 'Fingerprinting image...',
+        uploadMessage: 'Reading image…',
       },
+      ...current,
     ]);
 
     await uploadLibraryAssetById(itemId, file);
@@ -2203,6 +2260,20 @@ export function APlusEditor({
 
   async function uploadLibraryAssetById(itemId: string, file: File) {
     try {
+      // Determine the image type up front (browser type → extension → content
+      // sniff). A file with no extension and no detectable image signature is
+      // surfaced as an error row, never silently dropped.
+      const mimeType = await resolveImageMime(file);
+      if (!mimeType) {
+        updateAssetLibraryItem(itemId, {
+          uploadStatus: 'error',
+          uploadMessage: 'Not a recognized image file.',
+          uploadAction:
+            'Use a JPG, PNG, WebP, GIF, AVIF, HEIC, BMP, or TIFF image.',
+        });
+        return;
+      }
+
       const sha256 = await sha256File(file);
       updateAssetLibraryItem(itemId, {
         uploadStatus: 'uploading',
@@ -2216,7 +2287,7 @@ export function APlusEditor({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileName: file.name,
-          mimeType: file.type || 'application/octet-stream',
+          mimeType,
           sizeBytes: file.size,
           sha256,
         }),
@@ -2316,9 +2387,10 @@ export function APlusEditor({
   }
 
   function uploadLibraryFiles(fileList: FileList | File[]) {
-    [...fileList]
-      .filter(isImageFile)
-      .forEach((file) => void uploadLibraryAsset(file));
+    // Accept every dropped file — image detection (incl. extensionless files
+    // via content sniffing) and any rejection happen per-file in the upload,
+    // so nothing is ever silently discarded.
+    [...fileList].forEach((file) => void uploadLibraryAsset(file));
   }
 
   function applyStrategy(nextStrategyId: string) {
