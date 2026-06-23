@@ -5,6 +5,7 @@ import {
   listAPlusDrafts,
   upsertAPlusDraft,
 } from '../../../../lib/a-plus-drafts';
+import { cleanupSupersededDraftAssets } from '../../../../lib/a-plus-asset-cleanup';
 
 export async function GET() {
   const session = await auth0.getSession();
@@ -64,6 +65,20 @@ export async function POST(request: Request) {
     packageJson: body.packageJson,
     createdAt: existing?.createdAt,
   });
+
+  // Free generated images this save dropped (e.g. a refreshed slot) once
+  // nothing else references them. Best-effort: never fail a save on cleanup.
+  try {
+    await cleanupSupersededDraftAssets({
+      userId: session.user.sub,
+      draftId,
+      oldDraft: existing,
+      newPayload: body.payload ?? {},
+      newPackageJson: body.packageJson,
+    });
+  } catch {
+    // Swallow — orphaned assets are harmless and get swept on the next save.
+  }
 
   return Response.json({ draft });
 }

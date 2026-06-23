@@ -20,6 +20,12 @@ export interface ImageGenerator {
     prompt: string;
     size?: '1024x1024' | '1792x1024' | '1024x1792';
     n?: number;
+    /**
+     * Cost/quality tier — 'low' for cheap drafts, 'high' for finals. Only
+     * applied by backends that support it (e.g. gpt-image-1); ignored otherwise.
+     * Falls back to the provider/env default when omitted.
+     */
+    quality?: 'low' | 'medium' | 'high';
   }): Promise<
     {
       url: string;

@@ -105,6 +105,25 @@ export async function listAPlusDrafts(
   return result.rows;
 }
 
+/**
+ * Full draft documents (incl. `payload` + `packageJson`) for one user — used by
+ * asset cleanup to scan for which assets are still referenced. Heavier than
+ * {@link listAPlusDrafts}; call only when you need the whole payload.
+ */
+export async function listAllAPlusDraftDocs(
+  userId: string
+): Promise<APlusDraft[]> {
+  const result = await executeQuery<APlusDraft>(
+    SCOPE,
+    `SELECT RAW d
+     FROM \`${DRAFTS_COLLECTION}\` d
+     WHERE d.userId = $userId
+     AND d.\`deleted\` IS MISSING`,
+    { parameters: { userId } }
+  );
+  return result.rows;
+}
+
 export async function getAPlusDraft(params: {
   userId: string;
   draftId: string;

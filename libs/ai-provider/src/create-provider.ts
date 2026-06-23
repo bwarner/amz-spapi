@@ -101,6 +101,9 @@ export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
         IMAGE_MODELS[variant] ?? IMAGE_MODELS[DEFAULT_IMAGE_VARIANT];
       return {
         async generate(params: Parameters<ImageGenerator['generate']>[0]) {
+          // Per-request quality wins over the model/env default; only the
+          // size-based backend (gpt-image-1) honors it — others ignore it.
+          const quality = params.quality ?? model.quality;
           const { image } = await generateImage({
             model: model.slug,
             prompt: params.prompt,
@@ -111,8 +114,8 @@ export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
                     params.size
                   ) as `${number}:${number}`,
                 }),
-            ...(model.quality
-              ? { providerOptions: { openai: { quality: model.quality } } }
+            ...(quality && model.sizing === 'size'
+              ? { providerOptions: { openai: { quality } } }
               : {}),
           });
           return [

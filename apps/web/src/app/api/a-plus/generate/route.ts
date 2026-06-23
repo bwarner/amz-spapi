@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import {
   APlusGeneratedModuleSchema,
+  ICON_ROW_ICONS,
   RENDERABLE_AMAZON_MODULE_TYPES,
   type RenderableAmazonModuleType,
   amazonModuleTypeToKind,
@@ -330,6 +331,15 @@ function buildPackageOuterFromStrategy(
   };
 }
 
+// OpenAI models default to STRICT JSON-schema structured outputs in AI SDK v6,
+// which reject our discriminated-union/optional package schema. Anthropic's
+// structured output is tool-based and lenient (which is why Claude works), so we
+// turn strict mode off for OpenAI. Keyed under `openai`, so it's ignored by
+// Anthropic and other providers — safe to pass on every call.
+const STRUCTURED_OUTPUT_PROVIDER_OPTIONS = {
+  openai: { strictJsonSchema: false },
+} as const;
+
 function createProvider(modelOverride?: string) {
   // A valid allowlisted override drives BOTH tiers (the generator runs on the
   // 'fast' tier); otherwise fall back to env config / built-in defaults.
@@ -361,7 +371,8 @@ function compactInput(input: z.infer<typeof requestSchema>) {
         contentTier: input.contentTier,
         oneLiner: input.productOneLiner,
         targetCustomer: input.targetCustomer,
-        pricePoint: input.pricePoint,
+        // Price is intentionally NOT sent: A+ content never displays price and
+        // extracted prices are unreliable. Omitting it keeps it out of copy.
         keyFeatures: input.keyFeatures,
         differentiators: input.differentiators,
         objections: input.objections,
@@ -437,22 +448,28 @@ function classifyError(detail: string, phase: string) {
 
 /** Per-module field rules shared by both generation strategies. */
 const MODULE_FIELD_RULES: string[] = [
+  'SUBJECT PRODUCT ONLY: describe and depict OUR product (the "Product listing" source / product facts). Competitor, Supplier, and Reference sources are DIFFERENT products — use them ONLY for comparison-table contrasts and positioning. NEVER attribute their color, size, materials, pack count, lids, or features to our product, in copy OR in image briefs.',
+  'NEVER mention price, discounts, or promotions anywhere — A+ content stays live indefinitely and Amazon rejects time-sensitive claims.',
   'TEXT FIELDS — write real CUSTOMER-FACING copy the buyer reads. Not design notes, not descriptions of the layout.',
   '  • headline: ≤8 words, a concrete benefit. body: 1–3 sentences of durable benefit/use-case copy. bullets: ≤90 chars each, benefit statements.',
-  '  • company-logo: set tagline to a short (≤10 words) durable brand promise shown under the logo — e.g. “Insulated kraft cups built for specialty coffee service.” No price/claims.',
+  '  • company-logo: a full-bleed brand HERO. Set headline to the brand name plus a short product descriptor — the hero line, ≤8 words (e.g. “<Brand> <Product Category>”). Set tagline to a short (≤10 words) durable benefit/brand-promise subhead. Both must suit THIS product (any category — never assume a specific one). No price/claims. ALSO choose a hero TREATMENT that best fits this product so pages do not all look identical: set heroVariant to one of overlay | split | plate | glass, and (only for overlay) set logoCorner to bottom-left or bottom-right. Vary this choice per product based on the brand mood — do NOT default every product to the same one.',
   '  • hero modules (image-header-with-text / image-text-overlay / single-image-text / image-and-text): set badge to a SHORT spec/size pill (≤12 chars, e.g. “16 OZ”, “50-PACK”, “BPA-FREE”) when an obvious size/spec applies; omit otherwise. Never price or promo.',
   '  • comparison-table: products[].title are the column labels; rows[] are spec/benefit rows with exactly one value per product (same order). Set highlight=true on the seller’s own product.',
   '  • tech-specs: rows[] are {label, value} product facts (dimensions, materials, care, compatibility, package contents).',
   '  • dual-use-split: exactly 2 panels showing two CONTRASTING use scenarios of the SAME product (e.g. “Hot Beverages” vs “Cold Drinks”, “Indoor” vs “Outdoor”). Each panel: a short uppercase label (≤3 words), an optional ≤120-char caption, and an image slot whose brief depicts that exact scenario with the same product/look.',
+  `  • icon-row: 3–5 items, each {icon, label} — a quick scannable strip of use cases or key benefits. label ≤2 words. icon is a short lowercase keyword that suits the item — prefer one of: ${ICON_ROW_ICONS.join(
+    ', '
+  )} (a close synonym like office/event/eco/premium also works; it is mapped to a glyph). No images.`,
   '',
   'IMAGE SLOTS — every image slot describes a PHOTOGRAPH to be generated or uploaded later. For each slot provide role, size, alt, and brief. DO NOT output an "image" field; slots are filled downstream.',
   '  • role: short stable id (e.g. "hero", "column-1", "comparison-thumb-1").',
   '  • size: 1792x1024 for a wide hero/banner; 1024x1024 for square feature/column/grid images; 1024x1792 only when a tall portrait genuinely helps.',
   '  • alt: ≤160 char description of the photo content. No brand names.',
   '  • brief: a CINEMATIC, ASPIRATIONAL LIFESTYLE photographic prompt of 4–6 sentences — the kind of premium imagery in a high-end brand campaign, NOT a plain product shot. Prefer real people / hands actively USING the product in a believable moment, in a specific aspirational named environment (e.g. a sunlit specialty café, a modern kitchen at golden hour). It must name: the human action/moment, the hero product in genuine use, 3–5 atmospheric props, a specific surface + directional natural light source + ambient background depth, cinematic editorial lighting (soft window light, warm golden hour, etc.), shallow depth of field with foreground/mid/background layers, and a refined premium brand mood. Avoid flat-lay, isolated-on-white, studio-seamless, stock-photo stiffness, and minimalist-whitespace defaults.',
+  '  • NO ABSTRACT / CGI SLOP: every image is a believable REAL PHOTOGRAPH of the actual product. NEVER ask for cutaways, cross-sections, exploded views, technical/engineering diagrams, schematics, infographics, 3D-render or CGI looks, extreme material macros, or floating/isolated concept shots. For a feature/benefit cell, show the product in a real context that IMPLIES the benefit (e.g. the cup comfortably held, a neat stack on a counter) — never a diagram OF the benefit.',
   '  • CONTINUITY: every brief MUST restate the SAME product (same material/color/finish/shape per the SHOT BIBLE) and the SAME lighting, palette, lens and mood, so all images look like one shoot.',
   '  • CRITICAL: the brief must NEVER ask for any rendered text, headline, label, callout, price, watermark, badge, or logo. All text lives in the HTML fields above, never baked into pixels.',
-  '  • company-logo background slot: an AMBIENT, on-brand atmosphere photo (soft out-of-focus environment, warm bokeh, brand-colored mood) that sits BEHIND the logo under a tint — keep it soft, low-contrast, and uncluttered, with NO product hero front-and-center, no people staring, no text.',
+  '  • company-logo background slot: ALWAYS include a background slot for every company-logo module — the header is a brand HERO, never a bare logo. It is an AMBIENT, on-brand LIFESTYLE photo of the real environment where THIS product is used or displayed — chosen to fit the product category, NOT any fixed theme (e.g. a sunlit kitchen counter, a modern desk, a styled shelf, an outdoor patio — whatever suits the product). COMPOSE it with the hero subject toward ONE side and clean, low-detail NEGATIVE SPACE on the OPPOSITE side so the overlaid headline/subhead stays legible. Soft out-of-focus depth, gentle bokeh, premium natural light. No text, no logos, no people staring at camera.',
 ];
 
 type ModuleGenContext = {
@@ -500,6 +517,10 @@ async function generateModulesSingle(
       const res = await generateText({
         model: provider.languageModel('fast'),
         abortSignal: AbortSignal.timeout(180_000),
+        // All modules in one object is token-heavy — give it ample room so the
+        // JSON is never truncated (truncation reads as a schema mismatch).
+        maxOutputTokens: 32000,
+        providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
         output: Output.object({
           schema: z.object({ modules: z.array(APlusGeneratedModuleSchema) }),
           name: 'a_plus_package_modules',
@@ -565,6 +586,7 @@ async function generateModulesParallel(
           const res = await generateText({
             model: provider.languageModel('fast'),
             abortSignal: AbortSignal.timeout(90_000),
+            providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
             output: Output.object({
               schema: generatedModuleSchemaForKind(kind),
               name: 'a_plus_module',
@@ -599,6 +621,65 @@ async function generateModulesParallel(
   );
   results.sort((a, b) => a.order - b.order);
   return { results, failures };
+}
+
+/**
+ * The brand-header module renders as a HERO only when it has a background slot
+ * (an ambient lifestyle backdrop behind the logo). The prompt asks for one, but
+ * if the model omits it we inject a default so the header never degrades to the
+ * plain band. The slot's image is filled by the downstream image-generate step.
+ */
+function ensureLogoBackdrop(
+  modules: z.infer<typeof APlusGeneratedModuleSchema>[]
+): void {
+  for (const module of modules) {
+    if (module.type === 'company-logo' && !module.background) {
+      module.background = {
+        role: 'brand-backdrop',
+        size: '1792x1024',
+        alt: 'Ambient brand lifestyle backdrop',
+        brief:
+          'An ambient, on-brand lifestyle environment appropriate to THIS product’s category and real-world use (the setting where it is naturally used or displayed — not any fixed theme), softly out of focus with gentle bokeh, layered depth and refined premium natural light. Compose with the main subject toward ONE side and clean, low-detail negative space on the OPPOSITE side so overlaid text stays legible. No product hero front-and-centre, no people staring at camera, no text or logos.',
+      };
+    }
+  }
+}
+
+/**
+ * Append a brand FOOTER — a centered closing brand band (`company-logo` with
+ * placement 'footer') — so the page has a clear bookend. Reuses the opening
+ * logo module's logo + tagline when present; idempotent and capped so we never
+ * exceed a sane module count. Product-agnostic.
+ */
+function ensureBrandFooter(
+  modules: z.infer<typeof APlusGeneratedModuleSchema>[]
+): void {
+  if (!modules.length || modules.length >= 7) return;
+  const last = modules[modules.length - 1];
+  if (last.type === 'company-logo' && last.placement === 'footer') return;
+  const header = modules.find((m) => m.type === 'company-logo');
+  const logo = header?.logo ?? {
+    role: 'logo',
+    brief: 'Brand logo (seller-supplied, never generated).',
+    size: '1024x1024' as const,
+    alt: 'Brand logo',
+  };
+  modules.push({
+    order: modules.length + 1,
+    type: 'company-logo',
+    amazonModuleType: 'STANDARD_COMPANY_LOGO',
+    title: 'Brand footer',
+    placement: 'footer',
+    logo,
+    tagline: header?.tagline,
+    background: {
+      role: 'footer-backdrop',
+      size: '1792x1024',
+      alt: 'Ambient brand backdrop',
+      brief:
+        'A dark, moody, on-brand ambient backdrop suited to THIS product’s category (the world it lives in — not any fixed theme), softly out of focus with gentle depth and warm low light, uncluttered. No product hero front-and-centre, no people staring at camera, no text or logos.',
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -651,6 +732,7 @@ export async function POST(request: Request) {
         const strategyResult = await generateText({
           model: provider.languageModel('fast'),
           abortSignal: AbortSignal.timeout(120_000),
+          providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
           output: Output.object({
             schema: strategySchema,
             name: 'a_plus_content_strategy',
@@ -668,7 +750,8 @@ export async function POST(request: Request) {
             )} modulePlan entries that tell THIS product's story end to end. This is the final module sequence.`,
             'STRUCTURE MUST BE DYNAMIC, not a fixed template: decide the opening, the mix of module types, and their order based on what THIS specific product needs to persuade its buyer. Two different products should produce noticeably different structures — vary which modules appear and in what sequence. Do not default to one canonical order.',
             'Use a VARIETY of distinct module types (each renders as a different layout). Open with a strong hero or brand moment, then sequence the rest into the most persuasive narrative for this product (features, real-life use cases, dual-use scenarios, proof/specs, comparison, brand story) — in whatever order fits best. Avoid repeating the same moduleType.',
-            'NEVER plan modules around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them. Use price input only as positioning context (premium vs value tier) — do not surface the number anywhere in module copy.',
+            'NEVER plan modules around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them.',
+            'Competitor/Reference/Supplier sources are DIFFERENT products. Use them only to inform comparison and positioning — NEVER let their attributes (color, size, materials, pack count, finishes) define our product’s appearance or the visual system.',
             '',
             context,
           ].join('\n'),
@@ -688,6 +771,7 @@ export async function POST(request: Request) {
           ? await generateText({
               model: provider.languageModel('fast'),
               abortSignal: AbortSignal.timeout(45_000),
+              providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
               output: Output.object({
                 schema: packageOuterSchema,
                 name: 'a_plus_content_package_outer',
@@ -752,6 +836,7 @@ export async function POST(request: Request) {
           `  • SAME HERO PRODUCT in every image: ${humanProductName(
             input
           )}. Describe its material, color, finish, shape, and proportions IDENTICALLY across all modules so it is unmistakably the same physical product.`,
+          '  • Base the product’s appearance ONLY on OUR product facts. Competitor/Reference sources are DIFFERENT products — NEVER borrow their colors, lids, sizes, materials, or finishes (e.g. a competitor’s brown cups must not turn our product brown).',
           `  • ONE consistent look everywhere: ${outer.creativeDirection.visualSystem} Keep the same color palette, the same lighting direction & quality (e.g. soft warm window light from one side), the same lens/perspective character, and the same mood in every shot.`,
           '  • Treat all module images as frames from ONE cohesive premium photoshoot — never disparate stock photos with different products, lighting, or color grading.',
         ].join('\n');
@@ -793,6 +878,10 @@ export async function POST(request: Request) {
           });
 
         moduleResults.sort((a, b) => a.order - b.order);
+        // Brand header renders as a hero only with a backdrop — guarantee one.
+        ensureLogoBackdrop(moduleResults);
+        // Close the page with a brand footer band (bookend).
+        ensureBrandFooter(moduleResults);
         const modulesMs = Date.now() - tModules;
         console.log(
           `[a-plus-generate] package modules: ${(modulesMs / 1000).toFixed(

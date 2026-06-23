@@ -85,3 +85,6 @@ apps/web/certificates/*.pem
 
 # Local scratch screenshots
 sellavant-home-smoke.png
+
+# A+ design-preview renders (dev harness output)
+tools/render-out/

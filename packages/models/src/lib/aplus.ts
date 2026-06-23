@@ -120,10 +120,23 @@ const companyLogoModule = z.object({
   ...moduleBase,
   type: z.literal('company-logo'),
   logo: APlusImageSlotSchema,
-  /** Short brand promise shown under the logo in the header band. */
+  /** Brand/product headline shown over the hero backdrop (e.g. brand + product). */
+  headline: z.string().max(120).optional(),
+  /** Short brand promise / benefit subhead shown under the headline. */
   tagline: z.string().max(120).optional(),
   /** Ambient brand backdrop photo behind the logo (NOT the logo itself). */
   background: APlusImageSlotSchema.optional(),
+  /** 'header' = opening brand hero (default); 'footer' = centered closing band. */
+  placement: z.enum(['header', 'footer']).optional(),
+  /**
+   * AI-chosen hero treatment so pages don't all look identical:
+   * 'overlay' = text on photo, logo in a corner bar; 'split' = photo beside a
+   * brand panel; 'plate'/'glass' = logo card centered over the photo. Free
+   * string so an unexpected value falls back to a default instead of failing.
+   */
+  heroVariant: z.string().optional(),
+  /** Corner for the overlay logo bar (AI-chosen): 'bottom-left'|'bottom-right'. */
+  logoCorner: z.string().optional(),
 });
 const imageHeaderWithTextModule = z.object({
   ...moduleBase,
@@ -242,8 +255,49 @@ const dualUseSplitModule = z.object({
     .length(2),
 });
 
+/** Generic, brand-agnostic icon set for the icon-row benefit strip. */
+export const ICON_ROW_ICONS = [
+  'coffee',
+  'leaf',
+  'shield',
+  'zap',
+  'heart',
+  'star',
+  'package',
+  'home',
+  'gift',
+  'sparkles',
+  'building',
+  'users',
+  'check',
+  'clock',
+  'droplet',
+  'thermometer',
+] as const;
+export type IconRowIcon = (typeof ICON_ROW_ICONS)[number];
+
+const iconRowModule = z.object({
+  ...moduleBase,
+  type: z.literal('icon-row'),
+  /**
+   * 2–6 icon + short-label highlights (e.g. use cases or key benefits). `icon`
+   * is a free string (the model picks an intuitive name); the renderer maps it
+   * to the closest supported glyph, so an unknown name never breaks generation.
+   */
+  items: z
+    .array(
+      z.object({
+        icon: z.string().max(40),
+        label: z.string().max(40),
+      })
+    )
+    .min(2)
+    .max(6),
+});
+
 export const APlusGeneratedModuleSchema = z.discriminatedUnion('type', [
   companyLogoModule,
+  iconRowModule,
   imageHeaderWithTextModule,
   imageTextOverlayModule,
   singleImageTextModule,
@@ -271,6 +325,7 @@ export const BASIC_A_PLUS_MODULE_TYPES = [
   'tech-specs',
   'text-only',
   'dual-use-split',
+  'icon-row',
 ] as const satisfies readonly APlusGeneratedModuleKind[];
 
 /** Per-kind schema, so callers can constrain generation to one module type. */
@@ -286,6 +341,7 @@ export const APLUS_GENERATED_MODULE_SCHEMA_BY_KIND = {
   'tech-specs': techSpecsModule,
   'text-only': textOnlyModule,
   'dual-use-split': dualUseSplitModule,
+  'icon-row': iconRowModule,
 } as const satisfies Record<APlusGeneratedModuleKind, z.ZodTypeAny>;
 
 export function generatedModuleSchemaForKind(
@@ -323,6 +379,9 @@ export const AMAZON_MODULE_TYPE_TO_KIND: Record<
   // A two-panel scenario split (e.g. Hot vs Cold). Exports as one image; the
   // seller uploads it into a standard image module in Seller Central.
   STANDARD_DUAL_USE_SPLIT: 'dual-use-split',
+  // No native Amazon icon-row module — the strip bakes into one image the
+  // seller drops into a standard image module.
+  STANDARD_ICON_ROW: 'icon-row',
 };
 
 export function amazonModuleTypeToKind(
@@ -410,6 +469,7 @@ export const RENDERABLE_AMAZON_MODULE_TYPES = [
   'STANDARD_TECH_SPECS',
   'STANDARD_PRODUCT_DESCRIPTION',
   'STANDARD_DUAL_USE_SPLIT',
+  'STANDARD_ICON_ROW',
 ] as const satisfies readonly (keyof typeof AMAZON_MODULE_TYPE_TO_KIND)[];
 export type RenderableAmazonModuleType =
   (typeof RENDERABLE_AMAZON_MODULE_TYPES)[number];
@@ -436,6 +496,7 @@ export const SELLER_CENTRAL_MODULE_NAMES: Record<string, string> = {
   STANDARD_TEXT: 'Standard Text',
   STANDARD_THREE_IMAGE_TEXT: 'Standard Three Image & Text',
   STANDARD_DUAL_USE_SPLIT: 'Standard Image (two-scenario split)',
+  STANDARD_ICON_ROW: 'Standard Image (icon highlights strip)',
 };
 
 /** Seller Central A+ module picker name for a given module type. */
@@ -469,6 +530,7 @@ export function moduleImageSlots(
       );
     case 'tech-specs':
     case 'text-only':
+    case 'icon-row':
       return [];
     default:
       return [];
@@ -540,6 +602,11 @@ export function moduleTextFields(
       push('Body', module.body);
       module.bullets?.forEach((bullet, index) =>
         push(`Bullet ${index + 1}`, bullet)
+      );
+      break;
+    case 'icon-row':
+      module.items.forEach((item, index) =>
+        push(`Icon ${index + 1} label`, item.label)
       );
       break;
   }

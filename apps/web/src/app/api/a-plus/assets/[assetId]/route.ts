@@ -1,10 +1,34 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import sharp from 'sharp';
 import { auth0 } from '../../../../../lib/auth0';
 import { createAssetS3Client, getAsset } from '../../../../../lib/media-assets';
 
+// sharp requires the Node runtime.
+export const runtime = 'nodejs';
+
 const SIGNED_URL_TTL_SECONDS = 300;
 const BROWSER_CACHE_SECONDS = 240;
+// Thumbnails are immutable per asset id, so cache them hard.
+const THUMB_CACHE_SECONDS = 60 * 60 * 24 * 30;
+// Fixed thumbnail widths. Snapping `?w=` to this small set bounds the number of
+// distinct cache keys (and on-the-fly resizes) a caller can request, so varying
+// `w` can't be used to bypass caching and force repeated S3 fetch + decode.
+const THUMB_WIDTHS = [160, 320, 640, 1024] as const;
+// Cap decode work on a crafted/oversized upload (well above any real product
+// photo). sharp's ~268MP default is the backstop; this is the explicit limit.
+const MAX_INPUT_PIXELS = 64_000_000;
+
+function parseThumbWidth(value: string | null): number | null {
+  if (!value) return null;
+  const requested = Number.parseInt(value, 10);
+  if (!Number.isFinite(requested)) return null;
+  // Smallest bucket that satisfies the request, else the largest.
+  return (
+    THUMB_WIDTHS.find((width) => width >= requested) ??
+    THUMB_WIDTHS[THUMB_WIDTHS.length - 1]
+  );
+}
 
 function sanitizeDownloadName(value: string, fallback: string): string {
   const cleaned = value
@@ -48,6 +72,44 @@ export async function GET(
   }
 
   const url = new URL(request.url);
+
+  // Thumbnail path: `?w=<px>` streams a server-resized PNG (cheap, cacheable)
+  // instead of redirecting to the full-resolution original. Any failure falls
+  // through to the full-res signed-URL path below so previews still work.
+  const thumbWidth = parseThumbWidth(url.searchParams.get('w'));
+  if (thumbWidth) {
+    try {
+      const object = await createAssetS3Client().send(
+        new GetObjectCommand({
+          Bucket: asset.storage.bucket,
+          Key: asset.storage.key,
+        })
+      );
+      const bytes = await object.Body?.transformToByteArray();
+      if (bytes) {
+        const png = await sharp(Buffer.from(bytes), {
+          density: 240,
+          limitInputPixels: MAX_INPUT_PIXELS,
+        })
+          .resize({
+            width: thumbWidth,
+            fit: 'inside',
+            withoutEnlargement: true,
+          })
+          .png()
+          .toBuffer();
+        return new Response(new Uint8Array(png), {
+          headers: {
+            'Content-Type': 'image/png',
+            'Cache-Control': `private, max-age=${THUMB_CACHE_SECONDS}, immutable`,
+          },
+        });
+      }
+    } catch {
+      // Fall through to the full-resolution signed URL below.
+    }
+  }
+
   const download = url.searchParams.get('download') === '1';
   const requestedName = url.searchParams.get('filename') || '';
   const downloadName = download
