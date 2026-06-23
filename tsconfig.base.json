@@ -31,19 +31,19 @@
     "verbatimModuleSyntax": false,
     "baseUrl": ".",
     "paths": {
+      "@amz-spapi/ai-provider": ["libs/ai-provider/src/index.ts"],
       "@amz-spapi/amazon-sp-generated": [
         "packages/amazon-sp-generated/src/index.ts"
       ],
       "@amz-spapi/amazon-sp-schema": ["packages/amazon-sp-schema/src/index.ts"],
+      "@amz-spapi/couchbase-utils": ["libs/couchbase-utils/src/index.ts"],
+      "@amz-spapi/seller-agent": ["libs/seller-agent/src/index.ts"],
+      "@amz-spapi/sp-cache": ["packages/sp-cache/src/index.ts"],
       "@farvisionllc/credential-store": [
         "packages/credential-store/src/index.ts"
       ],
       "@farvisionllc/oauth": ["packages/oauth/src/index.ts"],
-      "@farvisionllc/sp-client": ["packages/sp-client/src/index.ts"],
-      "@amz-spapi/ai-provider": ["libs/ai-provider/src/index.ts"],
-      "@amz-spapi/couchbase-utils": ["libs/couchbase-utils/src/index.ts"],
-      "@amz-spapi/sp-cache": ["packages/sp-cache/src/index.ts"],
-      "@amz-spapi/seller-agent": ["libs/seller-agent/src/index.ts"]
+      "@farvisionllc/sp-client": ["packages/sp-client/src/index.ts"]
     }
   }
 }

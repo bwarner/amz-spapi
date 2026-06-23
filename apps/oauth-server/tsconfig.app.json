@@ -10,12 +10,6 @@
   "references": [
     {
       "path": "../../packages/oauth/tsconfig.lib.json"
-    },
-    {
-      "path": "../../packages/credential-store/tsconfig.lib.json"
-    },
-    {
-      "path": "../../packages/models/tsconfig.lib.json"
     }
   ]
 }

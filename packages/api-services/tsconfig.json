@@ -10,9 +10,6 @@
       "path": "./tsconfig.lib.json"
     },
     {
-      "path": "../models"
-    },
-    {
       "path": "./tsconfig.spec.json"
     }
   ]

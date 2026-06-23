@@ -2,24 +2,5 @@
   "extends": "./tsconfig.base.json",
   "compileOnSave": false,
   "files": [],
-  "references": [
-    {
-      "path": "./packages/models"
-    },
-    {
-      "path": "./packages/api-services"
-    },
-    {
-      "path": "./packages/ad-client"
-    },
-    {
-      "path": "./packages/ad-models"
-    },
-    {
-      "path": "./packages/amazon-ads-schema"
-    },
-    {
-      "path": "./packages/amazon-ads-generated"
-    }
-  ]
+  "references": []
 }
