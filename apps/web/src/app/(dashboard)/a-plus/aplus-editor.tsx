@@ -2416,9 +2416,8 @@ export function APlusEditor({
     if ((!productOneLiner.trim() || overwrite) && facts.oneLiner) {
       setProductOneLiner(facts.oneLiner);
     }
-    if ((!pricePoint.trim() || overwrite) && facts.pricePoint) {
-      setPricePoint(facts.pricePoint);
-    }
+    // A+ content never shows price, and auto-extracted prices are frequently
+    // wrong, so we deliberately do NOT pull price into the brief.
     if ((!keyFeatures.trim() || overwrite) && facts.features.length) {
       setKeyFeatures(facts.features.join('\n'));
     }
@@ -2429,22 +2428,25 @@ export function APlusEditor({
       setDifferentiators(facts.differentiators.join('\n'));
     }
 
-    const evidence = facts.evidence.length
+    const baseEvidence = facts.evidence.length
       ? facts.evidence
       : ([
           facts.productName ? `Product: ${facts.productName}` : null,
           facts.oneLiner ? `Summary: ${facts.oneLiner}` : null,
           ...facts.features.map((feature) => `Feature: ${feature}`),
         ].filter(Boolean) as string[]);
+    // A+ never uses price — keep it out of the notes the AI reads.
+    const evidence = baseEvidence.filter((line) => !/^\s*price\b/i.test(line));
 
     const displayUrl = facts.finalUrl || source.url;
-    setRawNotes((current) =>
-      appendUniqueText(
-        current,
-        `Source facts from ${source.kind}: ${displayUrl}`,
-        evidence
-      )
-    );
+    // Only the Product listing describes OUR product. Mark every other source
+    // as a different product so the AI never copies a competitor's attributes
+    // (color, size, materials, pack count) into our copy or image briefs.
+    const sourceHeader =
+      source.kind === 'Product listing'
+        ? `Source facts from ${source.kind}: ${displayUrl}`
+        : `Source facts from ${source.kind} — DIFFERENT product, for comparison/positioning ONLY (do NOT describe our product with these): ${displayUrl}`;
+    setRawNotes((current) => appendUniqueText(current, sourceHeader, evidence));
   }
 
   function sourceOverwriteCandidateCount(

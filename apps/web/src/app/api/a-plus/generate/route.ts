@@ -371,7 +371,8 @@ function compactInput(input: z.infer<typeof requestSchema>) {
         contentTier: input.contentTier,
         oneLiner: input.productOneLiner,
         targetCustomer: input.targetCustomer,
-        pricePoint: input.pricePoint,
+        // Price is intentionally NOT sent: A+ content never displays price and
+        // extracted prices are unreliable. Omitting it keeps it out of copy.
         keyFeatures: input.keyFeatures,
         differentiators: input.differentiators,
         objections: input.objections,
@@ -447,6 +448,8 @@ function classifyError(detail: string, phase: string) {
 
 /** Per-module field rules shared by both generation strategies. */
 const MODULE_FIELD_RULES: string[] = [
+  'SUBJECT PRODUCT ONLY: describe and depict OUR product (the "Product listing" source / product facts). Competitor, Supplier, and Reference sources are DIFFERENT products — use them ONLY for comparison-table contrasts and positioning. NEVER attribute their color, size, materials, pack count, lids, or features to our product, in copy OR in image briefs.',
+  'NEVER mention price, discounts, or promotions anywhere — A+ content stays live indefinitely and Amazon rejects time-sensitive claims.',
   'TEXT FIELDS — write real CUSTOMER-FACING copy the buyer reads. Not design notes, not descriptions of the layout.',
   '  • headline: ≤8 words, a concrete benefit. body: 1–3 sentences of durable benefit/use-case copy. bullets: ≤90 chars each, benefit statements.',
   '  • company-logo: a full-bleed brand HERO. Set headline to the brand name plus a short product descriptor — the hero line, ≤8 words (e.g. “<Brand> <Product Category>”). Set tagline to a short (≤10 words) durable benefit/brand-promise subhead. Both must suit THIS product (any category — never assume a specific one). No price/claims. ALSO choose a hero TREATMENT that best fits this product so pages do not all look identical: set heroVariant to one of overlay | split | plate | glass, and (only for overlay) set logoCorner to bottom-left or bottom-right. Vary this choice per product based on the brand mood — do NOT default every product to the same one.',
@@ -747,7 +750,8 @@ export async function POST(request: Request) {
             )} modulePlan entries that tell THIS product's story end to end. This is the final module sequence.`,
             'STRUCTURE MUST BE DYNAMIC, not a fixed template: decide the opening, the mix of module types, and their order based on what THIS specific product needs to persuade its buyer. Two different products should produce noticeably different structures — vary which modules appear and in what sequence. Do not default to one canonical order.',
             'Use a VARIETY of distinct module types (each renders as a different layout). Open with a strong hero or brand moment, then sequence the rest into the most persuasive narrative for this product (features, real-life use cases, dual-use scenarios, proof/specs, comparison, brand story) — in whatever order fits best. Avoid repeating the same moduleType.',
-            'NEVER plan modules around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them. Use price input only as positioning context (premium vs value tier) — do not surface the number anywhere in module copy.',
+            'NEVER plan modules around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them.',
+            'Competitor/Reference/Supplier sources are DIFFERENT products. Use them only to inform comparison and positioning — NEVER let their attributes (color, size, materials, pack count, finishes) define our product’s appearance or the visual system.',
             '',
             context,
           ].join('\n'),
@@ -832,6 +836,7 @@ export async function POST(request: Request) {
           `  • SAME HERO PRODUCT in every image: ${humanProductName(
             input
           )}. Describe its material, color, finish, shape, and proportions IDENTICALLY across all modules so it is unmistakably the same physical product.`,
+          '  • Base the product’s appearance ONLY on OUR product facts. Competitor/Reference sources are DIFFERENT products — NEVER borrow their colors, lids, sizes, materials, or finishes (e.g. a competitor’s brown cups must not turn our product brown).',
           `  • ONE consistent look everywhere: ${outer.creativeDirection.visualSystem} Keep the same color palette, the same lighting direction & quality (e.g. soft warm window light from one side), the same lens/perspective character, and the same mood in every shot.`,
           '  • Treat all module images as frames from ONE cohesive premium photoshoot — never disparate stock photos with different products, lighting, or color grading.',
         ].join('\n');
