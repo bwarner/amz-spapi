@@ -331,6 +331,15 @@ function buildPackageOuterFromStrategy(
   };
 }
 
+// OpenAI models default to STRICT JSON-schema structured outputs in AI SDK v6,
+// which reject our discriminated-union/optional package schema. Anthropic's
+// structured output is tool-based and lenient (which is why Claude works), so we
+// turn strict mode off for OpenAI. Keyed under `openai`, so it's ignored by
+// Anthropic and other providers — safe to pass on every call.
+const STRUCTURED_OUTPUT_PROVIDER_OPTIONS = {
+  openai: { strictJsonSchema: false },
+} as const;
+
 function createProvider(modelOverride?: string) {
   // A valid allowlisted override drives BOTH tiers (the generator runs on the
   // 'fast' tier); otherwise fall back to env config / built-in defaults.
@@ -508,6 +517,7 @@ async function generateModulesSingle(
         // All modules in one object is token-heavy — give it ample room so the
         // JSON is never truncated (truncation reads as a schema mismatch).
         maxOutputTokens: 32000,
+        providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
         output: Output.object({
           schema: z.object({ modules: z.array(APlusGeneratedModuleSchema) }),
           name: 'a_plus_package_modules',
@@ -573,6 +583,7 @@ async function generateModulesParallel(
           const res = await generateText({
             model: provider.languageModel('fast'),
             abortSignal: AbortSignal.timeout(90_000),
+            providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
             output: Output.object({
               schema: generatedModuleSchemaForKind(kind),
               name: 'a_plus_module',
@@ -718,6 +729,7 @@ export async function POST(request: Request) {
         const strategyResult = await generateText({
           model: provider.languageModel('fast'),
           abortSignal: AbortSignal.timeout(120_000),
+          providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
           output: Output.object({
             schema: strategySchema,
             name: 'a_plus_content_strategy',
@@ -755,6 +767,7 @@ export async function POST(request: Request) {
           ? await generateText({
               model: provider.languageModel('fast'),
               abortSignal: AbortSignal.timeout(45_000),
+              providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
               output: Output.object({
                 schema: packageOuterSchema,
                 name: 'a_plus_content_package_outer',
