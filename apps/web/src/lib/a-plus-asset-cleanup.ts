@@ -49,6 +49,13 @@ function draftAssetIds(
 /**
  * The set of asset ids still referenced by any of the user's drafts (optionally
  * excluding one draft) plus brand-guide logos.
+ *
+ * INVARIANT: A+ drafts (module slots) and brand-guide logos are the ONLY places
+ * generated A+ images are referenced. This is what makes age-free GC safe. If a
+ * new feature ever references these assets (a published/exported listing, a chat
+ * attachment, an ads creative, etc.), it MUST be added to this scan — otherwise
+ * cleanup will delete an in-use image. When that happens, prefer moving to real
+ * reference-counting on the asset doc over chasing every referencer here.
  */
 async function referencedAssetIds(
   userId: string,
@@ -91,7 +98,7 @@ async function gcGeneratedAssets(
     if (!asset || asset.userId !== userId) continue;
     // Safety bound: never auto-delete user uploads, only generated images.
     if (!asset.originalFileName.startsWith('generated-')) continue;
-    if (await deleteAsset(assetId)) deleted++;
+    if (await deleteAsset(assetId, userId)) deleted++;
   }
   return deleted;
 }

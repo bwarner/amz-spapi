@@ -176,10 +176,17 @@ export async function headAssetObject(asset: MediaAsset) {
  * Best-effort on S3: if the object delete fails we still remove the DB records
  * so the asset stops appearing/serving. Callers are responsible for ensuring
  * the asset is unreferenced before calling this — see a-plus-asset-cleanup.
+ *
+ * `userId` is required and enforced here (defense in depth): an asset is never
+ * deleted unless it belongs to the caller, so a future caller can't turn this
+ * into an IDOR delete by omitting the ownership check.
  */
-export async function deleteAsset(assetId: string): Promise<boolean> {
+export async function deleteAsset(
+  assetId: string,
+  userId: string
+): Promise<boolean> {
   const asset = await getAsset(assetId);
-  if (!asset) return false;
+  if (!asset || asset.userId !== userId) return false;
 
   try {
     await createAssetS3Client().send(
