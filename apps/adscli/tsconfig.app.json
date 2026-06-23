@@ -18,9 +18,6 @@
       "path": "../../packages/credential-store/tsconfig.lib.json"
     },
     {
-      "path": "../../packages/models/tsconfig.lib.json"
-    },
-    {
       "path": "../../packages/ad-client/tsconfig.lib.json"
     }
   ]

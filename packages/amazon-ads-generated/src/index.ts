@@ -4,7 +4,7 @@ import { program } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import openapiTS, { astToString } from 'openapi-typescript';
-export * from './lib/ManagerAccount_prod_3p';
+export * from './lib/ManagerAccount_prod_3p.js';
 
 const schemas = [
   'ManagerAccount_prod_3p.json',
