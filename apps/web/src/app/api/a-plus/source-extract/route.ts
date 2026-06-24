@@ -1,5 +1,8 @@
+import { SpApiClient } from '@farvisionllc/sp-client';
 import { auth0 } from '../../../../lib/auth0';
 import { stripHtmlToText } from '../../../../lib/brand-guide-extraction';
+import { getCredentialStore } from '../../../../lib/credential-store';
+import { listAmazonConnections } from '../../../../lib/amazon-connections';
 import {
   getCachedSourceFacts,
   setCachedSourceFacts,
@@ -7,7 +10,11 @@ import {
 
 export const maxDuration = 60;
 
-type ExtractionSource = 'structured-data' | 'meta-tags' | 'heuristic';
+type ExtractionSource =
+  | 'structured-data'
+  | 'meta-tags'
+  | 'heuristic'
+  | 'sp-api-catalog';
 
 type ExtractedProductFacts = {
   productName?: string;
@@ -632,6 +639,227 @@ async function extractWithApify(url: string) {
   return { facts: factsFromApifyItem(firstItem, url) };
 }
 
+type CatalogItemResult = {
+  summaries?: Array<{
+    itemName?: string;
+    brand?: string;
+    manufacturer?: string;
+  }>;
+  attributes?: Record<string, Array<{ value?: unknown }>>;
+  images?: Array<{ images?: Array<{ link?: string; variant?: string }> }>;
+  productTypes?: Array<{ productType?: string }>;
+};
+
+// A+-useful single-value catalog attributes → human labels. Surfaced into the
+// notes the generator reads. (Name/brand/bullets/description handled separately.)
+const CATALOG_ATTR_LABELS: Array<[string, string]> = [
+  ['material', 'Material'],
+  ['fabric_type', 'Fabric'],
+  ['color', 'Color'],
+  ['finish_type', 'Finish'],
+  ['style', 'Style'],
+  ['pattern', 'Pattern'],
+  ['item_shape', 'Shape'],
+  ['item_form', 'Form'],
+  ['size', 'Size'],
+  ['capacity', 'Capacity'],
+  ['number_of_items', 'Number of items'],
+  ['unit_count', 'Unit count'],
+  ['item_package_quantity', 'Package quantity'],
+  ['special_feature', 'Special features'],
+  ['included_components', 'Included components'],
+  ['recommended_uses_for_product', 'Recommended uses'],
+  ['specific_uses_for_product', 'Specific uses'],
+  ['target_audience_keyword', 'Target audience'],
+  ['age_range_description', 'Age range'],
+  ['occasion', 'Occasion'],
+  ['theme', 'Theme'],
+  ['scent', 'Scent'],
+  ['flavor', 'Flavor'],
+  ['model_number', 'Model'],
+  ['part_number', 'Part number'],
+  ['manufacturer', 'Manufacturer'],
+  ['country_of_origin', 'Country of origin'],
+  ['warranty_description', 'Warranty'],
+];
+
+function catalogAttrValues(
+  attributes: CatalogItemResult['attributes'],
+  key: string
+): string[] {
+  const raw = attributes?.[key];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) =>
+      typeof entry?.value === 'string' ? entry.value.trim() : ''
+    )
+    .filter(Boolean);
+}
+
+// Like catalogAttrValues but also accepts numeric {value, unit} measurements.
+function catalogAttrText(
+  attributes: CatalogItemResult['attributes'],
+  key: string
+): string[] {
+  const raw = attributes?.[key];
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const value = (entry as { value?: unknown })?.value;
+    const unit = (entry as { unit?: unknown })?.unit;
+    if (typeof value === 'string' && value.trim()) out.push(value.trim());
+    else if (typeof value === 'number' && Number.isFinite(value)) {
+      out.push(typeof unit === 'string' ? `${value} ${unit}` : String(value));
+    }
+  }
+  return [...new Set(out)];
+}
+
+// Format a nested dimensions attribute (length/width/height leaves with units).
+function catalogDimensions(
+  attributes: CatalogItemResult['attributes'],
+  key: string
+): string | null {
+  const entry = attributes?.[key]?.[0] as
+    | Record<string, { value?: unknown; unit?: unknown }>
+    | undefined;
+  if (!entry || typeof entry !== 'object') return null;
+  const part = (k: string) => {
+    const leaf = entry[k];
+    if (!leaf || typeof leaf.value !== 'number') return null;
+    return typeof leaf.unit === 'string'
+      ? `${leaf.value} ${leaf.unit}`
+      : String(leaf.value);
+  };
+  const dims = ['length', 'width', 'height']
+    .map(part)
+    .filter((d): d is string => Boolean(d));
+  return dims.length ? dims.join(' × ') : null;
+}
+
+/**
+ * Authoritative product facts from SP-API Catalog Items for an Amazon product
+ * URL, when the seller has a connected SP-API profile. Returns null when the
+ * URL isn't an Amazon ASIN, no SP-API profile is connected/usable, or the
+ * lookup yields nothing — callers then fall back to page scraping.
+ */
+async function extractFromAmazonCatalog(
+  rawUrl: string,
+  userId: string
+): Promise<ExtractedProductFacts | null> {
+  const asin = extractAsinFromAmazonUrl(rawUrl);
+  if (!asin) return null;
+
+  const connections = await listAmazonConnections({
+    apiType: 'SP_API',
+    userId,
+  });
+  const connection = connections.find((c) => c.missing.length === 0);
+  if (!connection) return null;
+
+  const { profile, profileName } = connection;
+  const marketplaceId =
+    profile.marketplace_id ||
+    process.env['SP_MARKETPLACE_ID'] ||
+    'ATVPDKIKX0DER';
+  const credStore = getCredentialStore();
+
+  const client = new SpApiClient({
+    clientId: profile.client_id,
+    clientSecret: profile.client_secret,
+    refreshToken: profile.refresh_token,
+    accessToken: profile.access_token,
+    sellerId: profile.seller_id,
+    marketplaceId,
+    region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
+    onTokenRefresh: async (accessToken, expiresIn) => {
+      await credStore.updateAccessToken(
+        profileName,
+        'SP_API',
+        accessToken,
+        expiresIn,
+        userId
+      );
+    },
+  });
+
+  const item = (await client.getCatalogItem(asin, {
+    marketplaceIds: [marketplaceId],
+    includedData: ['summaries', 'attributes', 'images', 'productTypes'],
+  })) as CatalogItemResult;
+
+  const summary = item.summaries?.[0];
+  const productName =
+    summary?.itemName?.trim() ||
+    catalogAttrValues(item.attributes, 'item_name')[0];
+  if (!productName) return null;
+
+  const brandName =
+    summary?.brand?.trim() ||
+    catalogAttrValues(item.attributes, 'brand')[0] ||
+    summary?.manufacturer?.trim() ||
+    undefined;
+
+  const features = catalogAttrValues(item.attributes, 'bullet_point').slice(
+    0,
+    8
+  );
+  const descriptionRaw =
+    catalogAttrValues(item.attributes, 'product_description')[0] || '';
+  const oneLiner =
+    (descriptionRaw ? stripHtmlToText(descriptionRaw) : '').trim() ||
+    features[0] ||
+    undefined;
+
+  const officialImageCount = new Set(
+    (item.images?.[0]?.images || [])
+      .map((img) => img?.link)
+      .filter((link): link is string => Boolean(link))
+  ).size;
+
+  // Surface the rich product attributes (material, color, pack size, uses,
+  // dimensions, etc.) into the notes the generator reads.
+  const attributeEvidence: string[] = [];
+  for (const [key, label] of CATALOG_ATTR_LABELS) {
+    const values = catalogAttrText(item.attributes, key);
+    if (values.length) attributeEvidence.push(`${label}: ${values.join(', ')}`);
+  }
+  const itemDims = catalogDimensions(item.attributes, 'item_dimensions');
+  if (itemDims) attributeEvidence.push(`Item dimensions: ${itemDims}`);
+  const pkgDims = catalogDimensions(item.attributes, 'item_package_dimensions');
+  if (pkgDims) attributeEvidence.push(`Package dimensions: ${pkgDims}`);
+
+  const productType = item.productTypes?.[0]?.productType;
+
+  const evidence = [
+    `Title: ${productName}`,
+    brandName ? `Brand: ${brandName}` : null,
+    `ASIN: ${asin}`,
+    productType ? `Product type: ${productType}` : null,
+    ...features.map((feature) => `Feature: ${feature}`),
+    ...attributeEvidence,
+    officialImageCount
+      ? `${officialImageCount} official product image${
+          officialImageCount === 1 ? '' : 's'
+        } available from Amazon.`
+      : null,
+  ].filter((line): line is string => Boolean(line));
+
+  return {
+    productName,
+    brandName,
+    asin,
+    oneLiner,
+    // Price intentionally omitted — A+ content never uses it.
+    features,
+    differentiators: features.slice(0, 4),
+    warnings: [],
+    evidence,
+    finalUrl: rawUrl,
+    extractionSource: 'sp-api-catalog',
+  };
+}
+
 export async function POST(request: Request) {
   const session = await auth0.getSession();
   if (!session?.user) {
@@ -672,6 +900,24 @@ export async function POST(request: Request) {
     void setCachedSourceFacts(cacheKeyUrl, facts);
     return Response.json({ facts });
   };
+
+  // For Amazon product URLs, prefer authoritative SP-API Catalog data when the
+  // seller has SP-API connected. Falls back to scraping below on any miss.
+  try {
+    const catalogFacts = await extractFromAmazonCatalog(
+      url.toString(),
+      session.user.sub
+    );
+    if (catalogFacts) {
+      console.log('[source-extract] SP-API catalog HIT', cacheKeyUrl);
+      return respondWithFacts(catalogFacts);
+    }
+  } catch (error) {
+    console.warn(
+      '[source-extract] SP-API catalog lookup failed; scraping instead:',
+      error instanceof Error ? error.message : error
+    );
+  }
 
   const apifyFallbackOrError = async (params: {
     url: string;
