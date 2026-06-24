@@ -141,6 +141,20 @@ type UploadedAsset = {
   duplicateOfAssetId?: string;
 };
 
+/** Structured visual profile from /api/a-plus/assets/profile (see redesign §3a). */
+type AssetProfileData = {
+  role: string;
+  subjectProminence: string;
+  orientation: string;
+  background: string;
+  negativeSpace: { side: string; amount: string };
+  affordances: string[];
+  hasBakedText: boolean;
+  isRender: boolean;
+  dominantColors: string[];
+  description: string;
+};
+
 type AssetLibraryItem = {
   id: string;
   fileName: string;
@@ -151,6 +165,9 @@ type AssetLibraryItem = {
   uploadMessage?: string;
   uploadAction?: string;
   uploadErrorCode?: string;
+  /** Vision profile + whether it's currently being computed. */
+  profile?: AssetProfileData;
+  profiling?: boolean;
 };
 
 /**
@@ -2237,6 +2254,50 @@ export function APlusEditor({
     setAssetLibrary((current) => current.filter((item) => item.id !== itemId));
   }
 
+  /**
+   * Vision-profile an uploaded asset: detects role/composition/affordances and a
+   * factual description (redesign §3a). Auto-runs after upload; `force` (manual
+   * "Re-profile") re-runs it. Fills the description field only when it's blank
+   * (unless forced), so it never clobbers seller text.
+   */
+  async function profileAsset(itemId: string, assetId: string, force = false) {
+    setAssetLibrary((current) =>
+      current.map((item) =>
+        item.id === itemId ? { ...item, profiling: true } : item
+      )
+    );
+    try {
+      const response = await fetch('/api/a-plus/assets/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assetId }),
+      });
+      const body = (await response.json()) as {
+        profile?: AssetProfileData;
+        error?: string;
+      };
+      setAssetLibrary((current) =>
+        current.map((item) => {
+          if (item.id !== itemId) return item;
+          if (!response.ok || !body.profile) {
+            return { ...item, profiling: false };
+          }
+          const keepTyped = !force && item.description.trim().length > 0;
+          return {
+            ...item,
+            profiling: false,
+            profile: body.profile,
+            description: keepTyped
+              ? item.description
+              : body.profile.description || item.description,
+          };
+        })
+      );
+    } catch {
+      updateAssetLibraryItem(itemId, { profiling: false });
+    }
+  }
+
   async function uploadLibraryAsset(file: File) {
     // Unique per item — a batch drop runs in one tick, so Date.now() collides
     // and same-named files would share a React key (and collapse to one row).
@@ -2326,6 +2387,7 @@ export function APlusEditor({
           uploadAction: undefined,
           uploadErrorCode: undefined,
         });
+        void profileAsset(itemId, preflight.asset.assetId);
         return;
       }
 
@@ -2371,6 +2433,7 @@ export function APlusEditor({
         uploadAction: undefined,
         uploadErrorCode: undefined,
       });
+      void profileAsset(itemId, confirmed.asset.assetId);
     } catch (error) {
       const rawMessage =
         error instanceof Error ? error.message : 'Image upload failed.';
@@ -4199,6 +4262,41 @@ export function APlusEditor({
                       </span>
                     ) : null}
                   </div>
+                  {item.profiling ? (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Analyzing image…
+                    </div>
+                  ) : item.profile ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      <Badge className="border-border bg-secondary text-[10px] text-secondary-foreground">
+                        {item.profile.role}
+                      </Badge>
+                      {item.profile.affordances.slice(0, 3).map((a) => (
+                        <Badge
+                          key={a}
+                          className="border-border bg-muted text-[10px] text-muted-foreground"
+                        >
+                          {a}
+                        </Badge>
+                      ))}
+                      {item.profile.hasBakedText ? (
+                        <Badge className="border-amber-200 bg-amber-50 text-[10px] text-amber-800">
+                          has text
+                        </Badge>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          item.asset?.assetId &&
+                          void profileAsset(item.id, item.asset.assetId, true)
+                        }
+                        className="ml-1 text-[10px] text-primary hover:underline"
+                      >
+                        Re-analyze
+                      </button>
+                    </div>
+                  ) : null}
                   {item.uploadStatus === 'error' ? (
                     <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-900">
                       <p className="font-medium">
