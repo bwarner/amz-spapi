@@ -66,7 +66,13 @@ function resolveModuleImages(
   return clone;
 }
 
-/** Scale a fixed-canvas design down to the container width. */
+/**
+ * Scale a fixed-canvas design down to the container width. Uses CSS `zoom`
+ * (scales LAYOUT, so the box height is always the real scaled height) instead
+ * of transform + a manually measured height — the measured height could go
+ * stale (late-loading brand fonts/images) and clip a module mid-content while
+ * the next one rendered straight over the overflow.
+ */
 function FitToWidth({
   canvasWidth,
   children,
@@ -75,38 +81,21 @@ function FitToWidth({
   children: React.ReactNode;
 }) {
   const outerRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
-  const [height, setHeight] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     const outer = outerRef.current;
-    const inner = innerRef.current;
-    if (!outer || !inner) return;
-    const update = () => {
-      const s = Math.min(1, outer.clientWidth / canvasWidth);
-      setScale(s);
-      setHeight(inner.offsetHeight * s);
-    };
+    if (!outer) return;
+    const update = () => setScale(Math.min(1, outer.clientWidth / canvasWidth));
     const ro = new ResizeObserver(update);
     ro.observe(outer);
-    ro.observe(inner);
     update();
     return () => ro.disconnect();
   }, [canvasWidth]);
 
   return (
-    <div ref={outerRef} style={{ width: '100%', height, overflow: 'hidden' }}>
-      <div
-        ref={innerRef}
-        style={{
-          width: canvasWidth,
-          transform: `scale(${scale})`,
-          transformOrigin: 'top left',
-        }}
-      >
-        {children}
-      </div>
+    <div ref={outerRef} style={{ width: '100%' }}>
+      <div style={{ width: canvasWidth, zoom: scale }}>{children}</div>
     </div>
   );
 }

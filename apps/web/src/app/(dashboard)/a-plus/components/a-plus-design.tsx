@@ -1628,124 +1628,54 @@ function DesignedLogo({
     </div>
   );
 
-  // Brand FOOTER: a centered closing band — ornament, logo chip, tagline — over
-  // a darkened backdrop (or a dark brand band when no photo). Distinct from the
-  // left-aligned opening hero so the page reads with a clear bookend.
+  // Brand FOOTER: a clean, typographic closing band — thin accent rule, the
+  // logo sitting directly on brand paper (no chip, no ornament), tagline in a
+  // quiet tone beneath. Photographic backdrops read as murk at this size, so
+  // the footer deliberately ignores any background slot on the module.
   if (module.placement === 'footer') {
     return (
       <div
         style={{
           position: 'relative',
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
           width: '100%',
-          minHeight: mobile ? 220 : 280,
-          background: bgSrc ? theme.surfaceAlt : theme.ink,
+          minHeight: mobile ? 200 : 240,
+          padding: mobile ? '40px 30px' : '52px 0',
+          background: theme.bg,
         }}
       >
-        {bgSrc ? (
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-            }}
-          >
-            <img
-              src={bgSrc}
-              alt={module.background?.alt || ''}
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-                display: 'block',
-              }}
-            />
-          </div>
-        ) : null}
-        {bgSrc ? (
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-              background:
-                'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.72) 100%)',
-            }}
-          />
-        ) : null}
         <div
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
             right: 0,
-            height: 5,
+            height: 3,
             display: 'flex',
             background: theme.accent,
           }}
         />
-        <div
-          style={{
-            position: 'relative',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: mobile ? '36px 30px' : '46px 0',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <div style={{ width: 40, height: 2, background: theme.accent }} />
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                margin: '0 10px',
-                borderRadius: 8,
-                background: theme.accent,
-              }}
-            />
-            <div style={{ width: 40, height: 2, background: theme.accent }} />
-          </div>
+        {renderLogo(mobile ? 88 : 108, mobile ? 260 : 340)}
+        {tagline ? (
           <div
             style={{
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
               marginTop: 18,
-              padding: mobile ? '10px 18px' : '12px 22px',
-              borderRadius: theme.radius * 1.4,
-              background: withAlpha('#FFFFFF', 0.95),
-              boxShadow: '0 12px 30px rgba(0,0,0,0.3)',
+              maxWidth: 600,
+              fontFamily: theme.headingFont,
+              fontSize: mobile ? 15 : 19,
+              lineHeight: 1.4,
+              letterSpacing: 0.2,
+              color: theme.muted,
+              textAlign: 'center',
             }}
           >
-            {renderLogo(mobile ? 54 : 62, mobile ? 200 : 260)}
+            {tagline}
           </div>
-          {tagline ? (
-            <div
-              style={{
-                display: 'flex',
-                marginTop: 16,
-                maxWidth: 600,
-                fontFamily: theme.headingFont,
-                fontSize: mobile ? 15 : 19,
-                lineHeight: 1.4,
-                color: 'rgba(255,255,255,0.92)',
-                textAlign: 'center',
-              }}
-            >
-              {tagline}
-            </div>
-          ) : null}
-        </div>
+        ) : null}
       </div>
     );
   }
