@@ -1,9 +1,3 @@
-import { z } from 'zod';
-
-export const ProductSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  price: z.number(),
-});
-
-export type Product = z.infer<typeof ProductSchema>;
+// The real Product domain lives in ./product.ts. This module is retained as a
+// home for future misc/shared models and is intentionally otherwise empty.
+export {};
