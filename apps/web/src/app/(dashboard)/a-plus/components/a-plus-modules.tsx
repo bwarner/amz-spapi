@@ -3,13 +3,17 @@
 import { FileImage, Loader2, WandSparkles } from 'lucide-react';
 import {
   applyAPlusGuardrails,
-  moduleImageSlots,
+  moduleImageSlotEntries,
+  moduleTextFieldDescriptors,
   moduleTextFields,
   type APlusGeneratedModule,
   type APlusImageSlot,
+  type APlusTextFieldPath,
 } from '@farvisionllc/models';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { EditableTextField } from './a-plus-editable-field';
 import { cn } from '@/lib/utils';
 
 export type SlotImageResult =
@@ -471,17 +475,38 @@ export function APlusModuleProductionDetails({
   module,
   slotResults,
   onGenerate,
+  onEditField,
 }: {
   module: APlusGeneratedModule;
   slotResults?: Record<string, SlotImageResult>;
   onGenerate: (jobId: string, brief: string, size: string) => void;
+  /** When provided, text fields render as editable inputs (edits persist). */
+  onEditField?: (path: APlusTextFieldPath, value: string) => void;
 }) {
   const textFields = moduleTextFields(module);
-  const slots = moduleImageSlots(module);
+  const editableFields = onEditField ? moduleTextFieldDescriptors(module) : [];
+  const slotEntries = moduleImageSlotEntries(module);
 
   return (
     <div className="space-y-4">
-      {textFields.length ? (
+      {onEditField && editableFields.length ? (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">Seller Central text fields</p>
+          <p className="text-xs text-muted-foreground">
+            Edit any field — the preview, build sheet, and saved draft update
+            with your changes.
+          </p>
+          <div className="grid gap-2 md:grid-cols-2">
+            {editableFields.map((field) => (
+              <EditableTextField
+                key={JSON.stringify(field.path)}
+                field={field}
+                onEdit={onEditField}
+              />
+            ))}
+          </div>
+        </div>
+      ) : textFields.length ? (
         <div className="space-y-2">
           <p className="text-sm font-medium">Seller Central text fields</p>
           <div className="grid gap-2 md:grid-cols-2">
@@ -502,10 +527,10 @@ export function APlusModuleProductionDetails({
         </div>
       ) : null}
 
-      {slots.length ? (
+      {slotEntries.length ? (
         <div className="space-y-2">
           <p className="text-sm font-medium">Image slots</p>
-          {slots.map((slot) => {
+          {slotEntries.map(({ slot, path }) => {
             const jobId = slotJobId(module.order, slot.role);
             const result = slotResults?.[jobId];
             const downloadName = downloadNameFor(module.order, slot.role);
@@ -544,7 +569,9 @@ export function APlusModuleProductionDetails({
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={result?.status === 'generating'}
+                      disabled={
+                        result?.status === 'generating' || !slot.brief?.trim()
+                      }
                       onClick={() => onGenerate(jobId, slot.brief, slot.size)}
                     >
                       {result?.status === 'generating' ? (
@@ -567,9 +594,36 @@ export function APlusModuleProductionDetails({
                   </div>
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">{slot.alt}</p>
-                <p className="mt-2 leading-6 text-muted-foreground">
-                  {slot.brief}
-                </p>
+                {onEditField ? (
+                  <div className="mt-2 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">
+                        Image brief
+                      </p>
+                      <span className="text-[10px] text-muted-foreground">
+                        {(slot.brief ?? '').length}/1200
+                      </span>
+                    </div>
+                    <Textarea
+                      value={slot.brief ?? ''}
+                      maxLength={1200}
+                      onChange={(event) =>
+                        onEditField([...path, 'brief'], event.target.value)
+                      }
+                      aria-label={`Image brief for ${slot.role}`}
+                      className="min-h-24 bg-background text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Describe exactly what the photo should show (materials,
+                      colors — e.g. “black sip-through lids”). Regenerate uses
+                      this brief.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-2 leading-6 text-muted-foreground">
+                    {slot.brief}
+                  </p>
+                )}
                 {result?.status === 'done' ? (
                   <div className="mt-3 overflow-hidden rounded-md border bg-background">
                     <img

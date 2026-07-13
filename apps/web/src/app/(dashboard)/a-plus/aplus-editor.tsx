@@ -5,9 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
   Bot,
   BrainCircuit,
   ChevronDown,
@@ -16,7 +14,6 @@ import {
   FileImage,
   FileText,
   ImagePlus,
-  Layers3,
   Link as LinkIcon,
   Loader2,
   Monitor,
@@ -25,20 +22,33 @@ import {
   RefreshCw,
   ShieldAlert,
   Smartphone,
-  Sparkles,
   Trash2,
   WandSparkles,
 } from 'lucide-react';
 import {
   APLUS_GENERATION_MODELS,
   applyAPlusGuardrails,
+  compileExperienceToAplus,
+  liftGeneratedPackageToExperience,
   moduleImageSlots,
+  moduleTextFields,
+  normalizeAmazonModuleType,
+  setSectionResolvedImage,
+  setSectionTextField,
+  type APlusCreativity,
   type APlusGeneratedModule as GeneratedModule,
+  type APlusGuidance,
+  type APlusTextFieldPath,
+  type Experience,
 } from '@farvisionllc/models';
 import {
-  APlusModuleProductionDetails,
-  slotJobId,
-} from './components/a-plus-modules';
+  aplusModuleLimitForTier,
+  buildModuleCopyRulesPreview,
+  buildStrategyPrompt,
+  compactGenerationInput,
+} from '@/lib/aplus-generation-prompts';
+import { slotJobId } from './components/a-plus-modules';
+import { APlusSectionsPanel } from './components/a-plus-sections';
 import {
   brandThemeFrom,
   DESIGN_STYLE_KEYS,
@@ -46,8 +56,7 @@ import {
   type DesignStyleKey,
 } from './components/a-plus-design';
 import { APlusDesignedPreview } from './components/a-plus-design-preview';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { APlusGuidancePanel } from './components/a-plus-guidance-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -62,6 +71,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
+import { matchAssetToSlot, type MatcherCandidate } from '@/lib/asset-matcher';
 
 type SourceKind = 'Product listing' | 'Competitor' | 'Supplier' | 'Reference';
 type ContentTier = 'Basic A+' | 'Premium A+';
@@ -104,23 +114,6 @@ type SourceExtraction = {
     evidence: string[];
     finalUrl?: string;
   };
-};
-
-type AssetSlot = {
-  id: string;
-  label: string;
-  detail: string;
-  minSize: string;
-  fileName?: string;
-  asset?: UploadedAsset;
-  uploadStatus?:
-    | 'idle'
-    | 'hashing'
-    | 'uploading'
-    | 'uploaded'
-    | 'duplicate'
-    | 'error';
-  uploadMessage?: string;
 };
 
 type UploadedAsset = {
@@ -243,23 +236,12 @@ async function resolveImageMime(file: File): Promise<string | null> {
   return sniffImageMime(file);
 }
 
-type APlusModule = {
-  id: string;
-  tier: ContentTier;
-  amazonType: string;
-  title: string;
-  role: string;
-  desktop: string;
-  mobile: string;
-  copy: string[];
-  imageSlots: AssetSlot[];
-  status: 'ready' | 'needs-assets' | 'needs-review';
-};
-
 type PackageImageJob = {
   jobId: string;
   prompt: string;
   size: string;
+  /** Slot role — used by the asset matcher to decide place vs generate. */
+  role: string;
   /** True when this slot already has a generated/uploaded image (e.g. a draft
    * reloaded from storage) — so "Generate all" never re-pays for it. */
   hasImage: boolean;
@@ -273,6 +255,8 @@ type ImageJobResult =
       revisedPrompt?: string;
       assetId?: string;
       persistError?: string;
+      /** Filled directly from one of the seller's uploaded assets, not generated. */
+      fromAsset?: boolean;
     }
   | { status: 'error'; message: string };
 
@@ -334,11 +318,23 @@ type DraftPayload = {
   brandFontNotes?: string;
   brandLogoAssetId?: string;
   rawNotes?: string;
-  strategyId?: string;
   sources?: SourceLink[];
   assets?: AssetLibraryItem[];
-  modules?: APlusModule[];
+  /**
+   * The authoritative document (redesign §4). Older drafts carry only
+   * `generatedPackage`, which is lifted into an Experience on load; newer
+   * drafts persist both (generatedPackage = the compiled deployment, kept so
+   * older app versions can still open the draft).
+   */
+  experience?: Experience;
+  generationMeta?: GenerationMeta;
   generatedPackage?: GeneratedAPlusResponse;
+  /** "Creativity" level sent to generation (temperature under the hood). */
+  creativity?: APlusCreativity;
+  /** Advanced-mode seller guidance appended to the generation prompts. */
+  guidance?: APlusGuidance;
+  /** True once the user hand-edits generated content (regenerate warns). */
+  hasManualEdits?: boolean;
 };
 
 type GeneratedAPlusPackage = {
@@ -359,6 +355,20 @@ type GeneratedAPlusPackage = {
   qualityChecklist: string[];
 };
 
+/**
+ * Generation-run artifacts that aren't part of the editable Experience:
+ * model/run reporting plus package-level notes shown in the rationale panel.
+ */
+type GenerationMeta = {
+  strategy?: unknown;
+  runConfig?: GeneratedAPlusResponse['runConfig'];
+  imageGeneration?: GeneratedAPlusResponse['imageGeneration'];
+  modelRuns?: GeneratedAPlusResponse['modelRuns'];
+  assumptions?: string[];
+  sellerCentralBuildSheet?: Array<{ step: string; value: string }>;
+  qualityChecklist?: string[];
+};
+
 type GeneratedAPlusResponse = {
   strategy: unknown;
   package: GeneratedAPlusPackage;
@@ -367,6 +377,7 @@ type GeneratedAPlusResponse = {
     generationMode: string;
     imageVariant: string;
     model: string;
+    creativity?: string;
   };
   imageGeneration: {
     enabled: boolean;
@@ -378,6 +389,32 @@ type GeneratedAPlusResponse = {
     modelId: string;
   }>;
 };
+
+/**
+ * Rewrites legacy app-invented Amazon module type codes (STANDARD_DUAL_USE_SPLIT,
+ * STANDARD_ICON_ROW) to a real Seller Central type on draft load. The render
+ * kind (`type`) is untouched, so legacy layouts still render and PNG-export.
+ * Never throws — a malformed package is returned as-is rather than blocking
+ * the draft from loading.
+ */
+function normalizeGeneratedPackage(
+  response: GeneratedAPlusResponse
+): GeneratedAPlusResponse {
+  try {
+    return {
+      ...response,
+      package: {
+        ...response.package,
+        modules: response.package.modules.map((module) => ({
+          ...module,
+          amazonModuleType: normalizeAmazonModuleType(module.amazonModuleType),
+        })),
+      },
+    };
+  } catch {
+    return response;
+  }
+}
 
 function summarizeBrandGuideColors(guide: BrandGuide | null) {
   if (!guide) return '';
@@ -523,6 +560,9 @@ function mergeGuideIntoDraftPayload(
 
 const APLUS_AUTOSAVE_KEY = 'sellavant:a-plus:autosave-v1';
 
+// Fixed module-copy rules shown read-only in the guidance overlay.
+const MODULE_COPY_RULES_PREVIEW = buildModuleCopyRulesPreview();
+
 const DEFAULT_SOURCES: SourceLink[] = [
   { id: 1, kind: 'Product listing', url: '' },
   { id: 2, kind: 'Competitor', url: '' },
@@ -536,18 +576,6 @@ const SOURCE_KINDS: SourceKind[] = [
   'Reference',
 ];
 
-const APLUS_PROMPT_RULES = [
-  'Work in two phases: discovery/wireframe first, production assets second.',
-  'Recommend real Amazon A+ module types instead of one flattened graphic.',
-  'Show desktop and mobile plans side-by-side for every module.',
-  'Reserve explicit logo safe zones with X/Y/W/H coordinates and contrast notes.',
-  'Do not ask image generation to render logos, text, watermarks, or words.',
-  'Generate editable copy, image prompts, alt text, and Canva layer instructions.',
-  'Flag unsupported claims, gated sources, missing product facts, and spelling risks.',
-];
-
-const BASIC_MODULE_LIMIT = 5;
-const PREMIUM_MODULE_LIMIT = 7;
 const SIMPLE_WIZARD_STEPS: Array<{
   id: WizardStep;
   title: string;
@@ -613,637 +641,6 @@ async function sha256File(file: File): Promise<string> {
     .join('');
 }
 
-const BASIC_MODULES: APlusModule[] = [
-  {
-    id: 'brand-logo',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_COMPANY_LOGO',
-    title: 'Brand mark',
-    role: 'Logo-only brand anchor',
-    desktop: 'Logo centered in a 600 x 180 safe area.',
-    mobile: 'Same logo asset, scaled down with matching clear space.',
-    copy: ['Alt text: Brand logo'],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'logo',
-        label: 'Logo',
-        detail:
-          'Transparent PNG or clean JPG. Keep the brand mark unrendered by AI.',
-        minSize: '600 x 180',
-      },
-    ],
-  },
-  {
-    id: 'hero',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_IMAGE_TEXT_OVERLAY',
-    title: 'Hero promise',
-    role: 'Lead benefit and visual hook',
-    desktop: 'Wide hero with text overlay kept inside Amazon text limits.',
-    mobile: 'Same hierarchy, cropped from the center with the headline first.',
-    copy: [
-      'Headline: A clearer way to show the product promise',
-      'Body: One concise paragraph focused on the primary customer outcome.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'hero-image',
-        label: 'Hero image',
-        detail: 'Use polished product photography or lifestyle context.',
-        minSize: '970 x 300',
-      },
-    ],
-  },
-  {
-    id: 'story',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_HEADER_IMAGE_TEXT',
-    title: 'Product story',
-    role: 'Explain what it is and why it matters',
-    desktop: 'Header image above concise body copy.',
-    mobile: 'Image remains first, body copy broken into short readable lines.',
-    copy: [
-      'Headline: Built for the moments your customers care about',
-      'Body: A proofed description assembled from listing, supplier, and competitor inputs.',
-    ],
-    status: 'needs-review',
-    imageSlots: [
-      {
-        id: 'story-image',
-        label: 'Story image',
-        detail: 'Raw or polished product photo accepted.',
-        minSize: '970 x 600',
-      },
-    ],
-  },
-  {
-    id: 'features',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_THREE_IMAGE_TEXT',
-    title: 'Three feature blocks',
-    role: 'Break benefits into Amazon-editable modules',
-    desktop: 'Three equal columns with one image, headline, and body each.',
-    mobile: 'The same three blocks stack in the same order.',
-    copy: [
-      'Block 1: Primary differentiator with evidence.',
-      'Block 2: Use-case benefit that answers a buyer objection.',
-      'Block 3: Material, compatibility, or durability proof point.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'feature-1',
-        label: 'Feature 1',
-        detail: 'Close-up or annotation image.',
-        minSize: '300 x 300',
-      },
-      {
-        id: 'feature-2',
-        label: 'Feature 2',
-        detail: 'Use-case or scale image.',
-        minSize: '300 x 300',
-      },
-      {
-        id: 'feature-3',
-        label: 'Feature 3',
-        detail: 'Detail, material, or package image.',
-        minSize: '300 x 300',
-      },
-    ],
-  },
-  {
-    id: 'comparison',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_COMPARISON_TABLE',
-    title: 'Comparison table',
-    role: 'Position against alternatives without hand-cutting graphics',
-    desktop: 'Amazon comparison module with product columns.',
-    mobile: 'Amazon handles responsive table behavior from the same data.',
-    copy: [
-      'Columns: This product, competitor alternatives, adjacent SKU.',
-      'Rows: best use, core differentiator, size/material, included items.',
-    ],
-    status: 'needs-review',
-    imageSlots: [],
-  },
-  {
-    id: 'specs',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_TECH_SPECS',
-    title: 'Specs and compatibility',
-    role: 'Turn claims into structured product facts',
-    desktop: 'Specification table with short labels.',
-    mobile: 'Same spec rows, no separate mobile copy.',
-    copy: [
-      'Include: dimensions, materials, care, compatibility, package contents.',
-      'Avoid: unverifiable claims, ranking language, or unsupported guarantees.',
-    ],
-    status: 'ready',
-    imageSlots: [],
-  },
-  {
-    id: 'single-image-text',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_SINGLE_IMAGE_TEXT',
-    title: 'Single image and text',
-    role: 'Focus one benefit with one strong visual',
-    desktop: 'One image paired with a concise headline and body.',
-    mobile: 'Image and copy stack from the same module.',
-    copy: [
-      'Headline: One sharp product benefit',
-      'Body: Explain the proof point without turning it into a graphic.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'single-image',
-        label: 'Single image',
-        detail: 'Use a product or use-case image with clear subject focus.',
-        minSize: '970 x 600',
-      },
-    ],
-  },
-  {
-    id: 'side-image',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_SINGLE_SIDE_IMAGE',
-    title: 'Side image detail',
-    role: 'Pair detail copy with a close-up visual',
-    desktop: 'Image sits beside short, scannable copy.',
-    mobile: 'Image stacks before the matching copy block.',
-    copy: [
-      'Headline: Show the detail buyers inspect',
-      'Body: Use for materials, mechanism, texture, compatibility, or scale.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'side-image',
-        label: 'Side image',
-        detail: 'Close-up, annotation-ready, or scale reference photo.',
-        minSize: '300 x 300',
-      },
-    ],
-  },
-  {
-    id: 'four-quadrant',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_FOUR_IMAGE_TEXT',
-    title: 'Four image grid',
-    role: 'Show use cases, benefits, or kit components',
-    desktop: 'Four equal image/text blocks in a grid.',
-    mobile: 'Blocks stack in the same order.',
-    copy: [
-      'Block 1: Benefit or component.',
-      'Block 2: Benefit or component.',
-      'Block 3: Benefit or component.',
-      'Block 4: Benefit or component.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'quad-1',
-        label: 'Grid image 1',
-        detail: 'Use-case, component, or benefit visual.',
-        minSize: '220 x 220',
-      },
-      {
-        id: 'quad-2',
-        label: 'Grid image 2',
-        detail: 'Use-case, component, or benefit visual.',
-        minSize: '220 x 220',
-      },
-      {
-        id: 'quad-3',
-        label: 'Grid image 3',
-        detail: 'Use-case, component, or benefit visual.',
-        minSize: '220 x 220',
-      },
-      {
-        id: 'quad-4',
-        label: 'Grid image 4',
-        detail: 'Use-case, component, or benefit visual.',
-        minSize: '220 x 220',
-      },
-    ],
-  },
-  {
-    id: 'text-only',
-    tier: 'Basic A+',
-    amazonType: 'STANDARD_TEXT',
-    title: 'Text block',
-    role: 'Use when copy matters more than imagery',
-    desktop: 'Short headline and proof-led body copy.',
-    mobile: 'Same text source, kept concise.',
-    copy: [
-      'Headline: Clarify the buyer promise',
-      'Body: Use for origin story, care instructions, compliance-safe claims, or warranty language.',
-    ],
-    status: 'needs-review',
-    imageSlots: [],
-  },
-];
-
-const PREMIUM_MODULES: APlusModule[] = [
-  {
-    id: 'premium-hero',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_BACKGROUND_IMAGE_WITH_TEXT',
-    title: 'Premium hero',
-    role: 'Large immersive lead benefit with editable overlay copy',
-    desktop:
-      '1464 x 600 background image with a reserved logo zone and copy overlay.',
-    mobile:
-      '600 x 450 version using the same hierarchy and a matched logo zone.',
-    copy: [
-      'Headline: Lead with the premium product promise.',
-      'Body: Keep copy short enough for a clean mobile overlay.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'premium-hero-desktop',
-        label: 'Hero desktop',
-        detail: 'Generate or upload a 1464 x 600 hero with an empty logo zone.',
-        minSize: '1464 x 600',
-      },
-      {
-        id: 'premium-hero-mobile',
-        label: 'Hero mobile',
-        detail: 'Matched 600 x 450 crop/composition, not an unrelated design.',
-        minSize: '600 x 450',
-      },
-    ],
-  },
-  {
-    id: 'premium-full-image',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_FULL_IMAGE',
-    title: 'Premium full image',
-    role: 'Show a clean product/lifestyle scene without flattening text into the image',
-    desktop: '1464 x 600 full-width image with optional copy above or below.',
-    mobile: '600 x 450 scaled/cropped image preserving the same story.',
-    copy: ['Alt text: Product shown in its primary use context.'],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'full-image-desktop',
-        label: 'Full image desktop',
-        detail: 'Full-width premium visual, no generated text or logo.',
-        minSize: '1464 x 600',
-      },
-      {
-        id: 'full-image-mobile',
-        label: 'Full image mobile',
-        detail: 'Mobile companion crop with the same subject and intent.',
-        minSize: '600 x 450',
-      },
-    ],
-  },
-  {
-    id: 'premium-hotspots',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_HOTSPOTS',
-    title: 'Premium hotspots',
-    role: 'Let buyers explore materials, features, or included parts interactively',
-    desktop: '1464 x 600 base image with up to six hotspot callouts.',
-    mobile:
-      'Scaled/tap behavior with the same hotspot order and concise callouts.',
-    copy: [
-      'Hotspot 1: Primary differentiator.',
-      'Hotspot 2: Material, mechanism, or compatibility proof.',
-      'Hotspot 3: Included item, scale, or use-case detail.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'hotspot-base',
-        label: 'Hotspot base image',
-        detail:
-          'Wide image with clear areas for hotspot markers and logo zone.',
-        minSize: '1464 x 600',
-      },
-    ],
-  },
-  {
-    id: 'premium-carousel',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_NAVIGATION_CAROUSEL',
-    title: 'Premium carousel',
-    role: 'Organize use cases, features, or regimen steps into swipeable panels',
-    desktop: '2-5 panels at 1464 x 600 with tab labels.',
-    mobile: 'Same panel sequence, swipeable, with mobile-safe typography.',
-    copy: [
-      'Panel 1: Main use case.',
-      'Panel 2: Differentiator.',
-      'Panel 3: Proof or objection answer.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'carousel-panel-1',
-        label: 'Carousel panel 1',
-        detail: 'First panel visual with clear logo-safe area.',
-        minSize: '1464 x 600',
-      },
-      {
-        id: 'carousel-panel-2',
-        label: 'Carousel panel 2',
-        detail: 'Second panel visual matched to the first.',
-        minSize: '1464 x 600',
-      },
-      {
-        id: 'carousel-panel-3',
-        label: 'Carousel panel 3',
-        detail: 'Third panel visual for proof, scale, or use case.',
-        minSize: '1464 x 600',
-      },
-    ],
-  },
-  {
-    id: 'premium-four-images',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_FOUR_IMAGES_TEXT',
-    title: 'Premium four feature grid',
-    role: 'Four higher-resolution benefit blocks with editable text',
-    desktop: 'Four 300 x 225 visuals with short headline/body copy.',
-    mobile: '2x2 or stacked layout preserving the same block order.',
-    copy: [
-      'Block 1: Best buyer outcome.',
-      'Block 2: Differentiator.',
-      'Block 3: Objection answer.',
-      'Block 4: Trust or compatibility proof.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'premium-feature-1',
-        label: 'Premium feature 1',
-        detail: 'High-res feature visual.',
-        minSize: '300 x 225',
-      },
-      {
-        id: 'premium-feature-2',
-        label: 'Premium feature 2',
-        detail: 'High-res feature visual.',
-        minSize: '300 x 225',
-      },
-      {
-        id: 'premium-feature-3',
-        label: 'Premium feature 3',
-        detail: 'High-res feature visual.',
-        minSize: '300 x 225',
-      },
-      {
-        id: 'premium-feature-4',
-        label: 'Premium feature 4',
-        detail: 'High-res feature visual.',
-        minSize: '300 x 225',
-      },
-    ],
-  },
-  {
-    id: 'premium-comparison',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_COMPARISON_TABLE',
-    title: 'Premium comparison',
-    role: 'Compare this product against competitors or adjacent SKUs',
-    desktop: 'Hero product plus 3-6 comparison products with 5-12 metrics.',
-    mobile: 'Scrollable/toggle comparison using the same data.',
-    copy: [
-      'Columns: This product, competitor alternatives, adjacent SKUs.',
-      'Rows: best use, differentiator, material/size, included items, compatibility.',
-    ],
-    status: 'needs-review',
-    imageSlots: [],
-  },
-  {
-    id: 'premium-video',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_FULL_VIDEO',
-    title: 'Premium video',
-    role: 'Demonstrate setup, use, transformation, or quality proof',
-    desktop: 'MP4 video, 1920 x 1080 minimum, 15 seconds to 3 minutes.',
-    mobile:
-      'Amazon scales the video; thumbnail needs mobile-safe subject framing.',
-    copy: [
-      'Storyboard: opening problem, product in use, proof detail, final benefit.',
-      'Thumbnail: no text baked in; reserve logo or product-safe area only.',
-    ],
-    status: 'needs-assets',
-    imageSlots: [
-      {
-        id: 'video-thumbnail',
-        label: 'Video thumbnail',
-        detail: 'Still image for the Premium video module.',
-        minSize: '1464 x 600',
-      },
-    ],
-  },
-  {
-    id: 'premium-qa',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_QA',
-    title: 'Premium Q&A',
-    role: 'Answer objections in an expandable module',
-    desktop: '2-5 questions with concise answers.',
-    mobile: 'Same questions and answers in accordion behavior.',
-    copy: [
-      'Question 1: Answer the biggest purchase objection.',
-      'Question 2: Clarify sizing, compatibility, care, or setup.',
-      'Question 3: Reinforce proof without unsupported claims.',
-    ],
-    status: 'needs-review',
-    imageSlots: [],
-  },
-  {
-    id: 'premium-specs',
-    tier: 'Premium A+',
-    amazonType: 'PREMIUM_TECHNICAL_SPECIFICATIONS',
-    title: 'Premium technical specs',
-    role: 'Turn product facts into a richer specifications table',
-    desktop: '4-16 metric rows with short labels.',
-    mobile: 'Same structured rows with no separate mobile copy.',
-    copy: [
-      'Include: dimensions, materials, care, compatibility, contents, certifications.',
-      'Avoid: unverifiable superlatives, guarantees, and ranking language.',
-    ],
-    status: 'ready',
-    imageSlots: [],
-  },
-];
-
-type ModuleStrategy = {
-  id: string;
-  tier: ContentTier;
-  name: string;
-  description: string;
-  moduleIds: string[];
-};
-
-const MODULE_LIBRARY = [...BASIC_MODULES, ...PREMIUM_MODULES];
-
-const MODULE_STRATEGIES: ModuleStrategy[] = [
-  {
-    id: 'basic-balanced',
-    tier: 'Basic A+',
-    name: 'Basic balanced launch',
-    description:
-      'Brand, hero, story, features, and specs within Basic A+ limits.',
-    moduleIds: ['brand-logo', 'hero', 'story', 'features', 'specs'],
-  },
-  {
-    id: 'basic-visual',
-    tier: 'Basic A+',
-    name: 'Basic visual product',
-    description: 'Best when photos and lifestyle use cases sell the product.',
-    moduleIds: [
-      'brand-logo',
-      'hero',
-      'single-image-text',
-      'four-quadrant',
-      'features',
-    ],
-  },
-  {
-    id: 'basic-technical',
-    tier: 'Basic A+',
-    name: 'Basic technical/spec heavy',
-    description:
-      'Best for compatibility, parts, dimensions, or utility products.',
-    moduleIds: ['brand-logo', 'hero', 'side-image', 'features', 'specs'],
-  },
-  {
-    id: 'basic-comparison',
-    tier: 'Basic A+',
-    name: 'Basic comparison driven',
-    description: 'Best when competitors or adjacent SKUs are central.',
-    moduleIds: ['brand-logo', 'hero', 'features', 'comparison', 'specs'],
-  },
-  {
-    id: 'premium-immersive',
-    tier: 'Premium A+',
-    name: 'Premium immersive launch',
-    description:
-      'Large hero, full image, hotspots, carousel, feature grid, Q&A, and specs.',
-    moduleIds: [
-      'premium-hero',
-      'premium-full-image',
-      'premium-hotspots',
-      'premium-carousel',
-      'premium-four-images',
-      'premium-qa',
-      'premium-specs',
-    ],
-  },
-  {
-    id: 'premium-visual',
-    tier: 'Premium A+',
-    name: 'Premium visual storytelling',
-    description:
-      'Best when lifestyle imagery, panels, and product detail visuals carry the sale.',
-    moduleIds: [
-      'premium-hero',
-      'premium-carousel',
-      'premium-full-image',
-      'premium-four-images',
-      'premium-hotspots',
-      'premium-comparison',
-    ],
-  },
-  {
-    id: 'premium-technical',
-    tier: 'Premium A+',
-    name: 'Premium technical proof',
-    description:
-      'Best for feature exploration, specs, compatibility, and objection handling.',
-    moduleIds: [
-      'premium-hero',
-      'premium-hotspots',
-      'premium-four-images',
-      'premium-comparison',
-      'premium-specs',
-      'premium-qa',
-    ],
-  },
-  {
-    id: 'premium-video',
-    tier: 'Premium A+',
-    name: 'Premium video led',
-    description:
-      'Best when a demo, transformation, or setup sequence is central.',
-    moduleIds: [
-      'premium-hero',
-      'premium-video',
-      'premium-carousel',
-      'premium-four-images',
-      'premium-comparison',
-      'premium-qa',
-    ],
-  },
-];
-
-function strategiesForTier(contentTier: ContentTier) {
-  return MODULE_STRATEGIES.filter((strategy) => strategy.tier === contentTier);
-}
-
-function modulesForTier(contentTier: ContentTier) {
-  return MODULE_LIBRARY.filter((module) => module.tier === contentTier);
-}
-
-function defaultStrategyId(contentTier: ContentTier) {
-  return strategiesForTier(contentTier)[0]?.id || MODULE_STRATEGIES[0].id;
-}
-
-function createModule(
-  templateId: string,
-  contentTier: ContentTier
-): APlusModule {
-  const tierLibrary = modulesForTier(contentTier);
-  const template =
-    tierLibrary.find((module) => module.id === templateId) || tierLibrary[0];
-
-  return {
-    ...template,
-    id:
-      template.id +
-      '-' +
-      Date.now() +
-      '-' +
-      Math.random().toString(16).slice(2, 8),
-    copy: [...template.copy],
-    imageSlots: template.imageSlots.map((slot) => ({ ...slot })),
-  };
-}
-
-function createStrategyModules(
-  strategyId: string,
-  contentTier: ContentTier
-): APlusModule[] {
-  const tierStrategies = strategiesForTier(contentTier);
-  const strategy =
-    tierStrategies.find((item) => item.id === strategyId) || tierStrategies[0];
-  return strategy.moduleIds.map((moduleId) =>
-    createModule(moduleId, contentTier)
-  );
-}
-
-function statusLabel(status: APlusModule['status']) {
-  if (status === 'ready') return 'Ready';
-  if (status === 'needs-assets') return 'Assets';
-  return 'Review';
-}
-
-function statusClass(status: APlusModule['status']) {
-  if (status === 'ready')
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800';
-  if (status === 'needs-assets')
-    return 'border-amber-200 bg-amber-50 text-amber-800';
-  return 'border-sky-200 bg-sky-50 text-sky-800';
-}
-
 function sourceStatusClass(status: SourceCheck['status']) {
   if (status === 'accessible') {
     return 'border-emerald-200 bg-emerald-50 text-emerald-800';
@@ -1283,200 +680,6 @@ function appendUniqueText(current: string, heading: string, lines: string[]) {
   return current.trim() ? `${current.trim()}\n\n${block}` : block;
 }
 
-function uploadedAssetsForPrompt(
-  modules: APlusModule[],
-  assetLibrary: AssetLibraryItem[]
-) {
-  const libraryAssets = assetLibrary
-    .filter((item) => item.asset)
-    .map((item) => ({
-      source: 'Asset library',
-      fileName: item.fileName,
-      description: item.description,
-      assetId: item.asset?.assetId,
-      sha256: item.asset?.hashes.sha256,
-      storageKey: item.asset?.storage.key,
-    }));
-
-  const slotAssets = modules.flatMap((module) =>
-    module.imageSlots
-      .filter((slot) => slot.asset)
-      .map((slot) => ({
-        source: `${module.title} / ${slot.label}`,
-        module: module.title,
-        slot: slot.label,
-        fileName: slot.fileName,
-        description: slot.detail,
-        assetId: slot.asset?.assetId,
-        sha256: slot.asset?.hashes.sha256,
-        storageKey: slot.asset?.storage.key,
-      }))
-  );
-
-  return [...libraryAssets, ...slotAssets];
-}
-
-function buildAPlusPrompt({
-  productName,
-  asin,
-  contentTier,
-  brandVoice,
-  brandFontNotes,
-  rawNotes,
-  productOneLiner,
-  targetCustomer,
-  pricePoint,
-  keyFeatures,
-  differentiators,
-  objections,
-  brandColors,
-  logoNotes,
-  brandLogoAssetId,
-  selectedBrandGuide,
-  activeStrategy,
-  sources,
-  sourceChecks,
-  assets,
-  modules,
-}: {
-  productName: string;
-  asin: string;
-  contentTier: ContentTier;
-  brandVoice: string;
-  brandFontNotes: string;
-  rawNotes: string;
-  productOneLiner: string;
-  targetCustomer: string;
-  pricePoint: string;
-  keyFeatures: string;
-  differentiators: string;
-  objections: string;
-  brandColors: string;
-  logoNotes: string;
-  brandLogoAssetId: string;
-  selectedBrandGuide: BrandGuide | null;
-  activeStrategy: (typeof MODULE_STRATEGIES)[number];
-  sources: SourceLink[];
-  sourceChecks: Record<number, SourceCheck>;
-  assets: AssetLibraryItem[];
-  modules: APlusModule[];
-}) {
-  const moduleLimit =
-    contentTier === 'Basic A+' ? BASIC_MODULE_LIMIT : PREMIUM_MODULE_LIMIT;
-  const filledSources = sources.filter((source) => source.url.trim());
-  const uploadedAssets = uploadedAssetsForPrompt(modules, assets);
-
-  return [
-    'You are SellAvant, an expert Amazon A+ content strategist and production designer.',
-    '',
-    'GOAL',
-    `Create a ${contentTier} content package that can be entered into Amazon Seller Central A+ Content Manager without manually slicing one giant design.`,
-    `Use no more than ${moduleLimit} modules unless you explicitly mark extras as optional alternates.`,
-    contentTier === 'Premium A+'
-      ? 'Use the Premium A+ module pool: background image with text, full image, comparison tables, dual/single image with text, four images, technical specs, carousels, hotspots, Q&A, and video modules.'
-      : 'Use the Basic A+ module pool: company logo, image/text modules, comparison chart, text modules, and technical specifications.',
-    '',
-    'PRODUCT',
-    `Name: ${productName || 'Not provided. Infer cautiously from sources.'}`,
-    `ASIN: ${asin || 'Not provided.'}`,
-    `One-sentence product description: ${
-      productOneLiner || 'Infer from sources when enough evidence exists.'
-    }`,
-    `Price point: ${pricePoint || 'Not provided.'}`,
-    `Target customer: ${
-      targetCustomer || 'Infer from sources when enough evidence exists.'
-    }`,
-    '',
-    'BRAND KIT',
-    `Guide: ${
-      selectedBrandGuide
-        ? `${selectedBrandGuide.name}${
-            selectedBrandGuide.brandName
-              ? ` (${selectedBrandGuide.brandName})`
-              : ''
-          }`
-        : 'No saved guide selected.'
-    }`,
-    `Voice: ${brandVoice || 'Clear, specific, conversion-focused, no hype.'}`,
-    `Colors: ${
-      brandColors ||
-      'No saved colors. Infer cautiously from provided brand assets only.'
-    }`,
-    `Fonts: ${
-      brandFontNotes || 'No saved brand fonts. Use clean Amazon-safe defaults.'
-    }`,
-    `Logo notes: ${
-      logoNotes ||
-      'Leave logo dropzones/placeholders. Do not recreate or stylize the logo.'
-    }`,
-    `Logo asset id: ${brandLogoAssetId || 'No uploaded logo asset attached.'}`,
-    '',
-    'RAW INPUTS',
-    `Features and benefits: ${
-      keyFeatures || 'Extract from links, photos, notes, and listing data.'
-    }`,
-    `Differentiators: ${
-      differentiators || 'Extract from sources and competitor references.'
-    }`,
-    `Buyer objections: ${objections || 'Identify likely objections.'}`,
-    `Other notes: ${rawNotes || 'None provided.'}`,
-    '',
-    'SOURCES',
-    filledSources.length
-      ? filledSources
-          .map((source) => {
-            const check = sourceChecks[source.id];
-            const status = check
-              ? ` - source check: ${check.status}${
-                  check.httpStatus ? ` HTTP ${check.httpStatus}` : ''
-                }${check.message ? `, ${check.message}` : ''}`
-              : '';
-            return `- ${source.kind}: ${source.url}${status}`;
-          })
-          .join('\n')
-      : '- No links provided yet. Ask for an Amazon listing, supplier page, Alibaba page, Shopify page, or competitor links.',
-    '',
-    'UPLOADED ASSETS',
-    uploadedAssets.length
-      ? uploadedAssets
-          .map(
-            (asset) =>
-              `- ${asset.fileName}; source=${asset.source}; description=${
-                asset.description || 'None provided.'
-              }; assetId=${asset.assetId}; sha256=${asset.sha256}; storageKey=${
-                asset.storageKey
-              }`
-          )
-          .join('\n')
-      : '- No uploaded product/logo images yet. Request raw product photos, polished product photos, lifestyle photos, packaging shots, screenshots, and transparent logo files.',
-    '',
-    'STARTING MODULE STRATEGY',
-    `${activeStrategy.name}: ${activeStrategy.description}. Treat this as a recommendation, not a user-selected design decision. Choose the best Amazon modules from the product facts and available assets.`,
-    modules
-      .slice(0, moduleLimit)
-      .map(
-        (module, index) =>
-          `${index + 1}. ${module.amazonType} - ${module.title}: ${module.role}`
-      )
-      .join('\n'),
-    '',
-    'OUTPUT CONTRACT',
-    APLUS_PROMPT_RULES.map((rule) => `- ${rule}`).join('\n'),
-    '',
-    'DELIVERABLES',
-    '1. Missing-information questions, only if needed.',
-    '2. Recommended module list with Amazon module type, role, copy, asset requirements, and why it belongs.',
-    '3. Low-fidelity desktop/mobile wireframe for each module with logo safe zones.',
-    '4. Image-generation prompts for each needed image with exact dimensions and empty logo areas.',
-    '5. Canva/Seller Central build sheet with copy, alt text, module order, and image slots.',
-    '6. Compliance and spelling review checklist before publishing.',
-  ].join('\n');
-}
-
-function looksLikeMarkdown(text: string): boolean {
-  return /(^|\n)\s*\|.*\|/.test(text) || /(^|\n)\s*[-*+#]\s/.test(text);
-}
-
 function cleanAPlusDisplayText(text: string): string {
   return applyAPlusGuardrails(text).cleaned;
 }
@@ -1485,7 +688,11 @@ function cleanAPlusDisplayLines(lines: string[]): string[] {
   return lines.map(cleanAPlusDisplayText).filter(Boolean);
 }
 
-function prepareGeneratedImagePrompt(prompt: string, forbiddenText: string[]) {
+function prepareGeneratedImagePrompt(
+  prompt: string,
+  forbiddenText: string[],
+  productContext?: string
+) {
   const specificForbiddenText = forbiddenText.length
     ? ` Do not render these exact strings anywhere in the image: ${forbiddenText
         .map((item) => `"${item}"`)
@@ -1493,257 +700,16 @@ function prepareGeneratedImagePrompt(prompt: string, forbiddenText: string[]) {
     : '';
 
   return [
+    // A slot brief regenerated on its own carries no surrounding module/shot
+    // context, so always restate WHAT the product is — without this the image
+    // model invents a subject (famously: an office printer for coffee cups).
+    ...(productContext
+      ? [`THE HERO PRODUCT IN THIS SHOT: ${productContext}`, '']
+      : []),
     prompt,
     '',
     `Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, or readable brand marks anywhere in the image.${specificForbiddenText} Leave any brand/logo placement as an empty logo-safe area for later editing.`,
   ].join('\n');
-}
-
-function MarkdownText({
-  text,
-  className,
-  fallbackTag = 'p',
-}: {
-  text: string;
-  className?: string;
-  fallbackTag?: 'p' | 'div';
-}) {
-  if (!text) return null;
-
-  if (!looksLikeMarkdown(text)) {
-    if (fallbackTag === 'div') {
-      return <div className={className}>{text}</div>;
-    }
-    return <p className={className}>{text}</p>;
-  }
-
-  return (
-    <div className={className}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          table: ({ node: _node, ...props }) => (
-            <div className="my-2 overflow-x-auto">
-              <table className="w-full border-collapse text-xs" {...props} />
-            </div>
-          ),
-          thead: ({ node: _node, ...props }) => (
-            <thead className="bg-muted" {...props} />
-          ),
-          th: ({ node: _node, ...props }) => (
-            <th
-              className="border border-border px-2 py-1.5 text-left font-medium"
-              {...props}
-            />
-          ),
-          td: ({ node: _node, ...props }) => (
-            <td
-              className="border border-border px-2 py-1.5 align-top"
-              {...props}
-            />
-          ),
-          p: ({ node: _node, ...props }) => (
-            <p
-              className="my-1.5 leading-relaxed last:mb-0 first:mt-0"
-              {...props}
-            />
-          ),
-          ul: ({ node: _node, ...props }) => (
-            <ul className="my-1.5 list-disc space-y-1 pl-5" {...props} />
-          ),
-          ol: ({ node: _node, ...props }) => (
-            <ol className="my-1.5 list-decimal space-y-1 pl-5" {...props} />
-          ),
-          h1: ({ node: _node, ...props }) => (
-            <h4 className="mt-2 mb-1 text-sm font-semibold" {...props} />
-          ),
-          h2: ({ node: _node, ...props }) => (
-            <h4 className="mt-2 mb-1 text-sm font-semibold" {...props} />
-          ),
-          h3: ({ node: _node, ...props }) => (
-            <h4 className="mt-2 mb-1 text-sm font-semibold" {...props} />
-          ),
-          code: ({ node: _node, ...props }) => (
-            <code
-              className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]"
-              {...props}
-            />
-          ),
-          strong: ({ node: _node, ...props }) => (
-            <strong className="font-semibold" {...props} />
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-function ModuleCopy({ lines }: { lines: string[] }) {
-  if (lines.length === 0) return null;
-
-  const text = lines.join('\n');
-
-  if (!looksLikeMarkdown(text)) {
-    return (
-      <div className="space-y-2">
-        {lines.map((line) => (
-          <p key={line} className="rounded-md border bg-card px-3 py-2 text-sm">
-            {line}
-          </p>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <MarkdownText
-      text={text}
-      className="rounded-md border bg-card px-3 py-2 text-sm"
-      fallbackTag="div"
-    />
-  );
-}
-
-function ModulePreview({
-  module,
-  canMoveUp,
-  canMoveDown,
-  canRemove,
-  onMoveUp,
-  onMoveDown,
-  onRemove,
-}: {
-  module: APlusModule;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  canRemove: boolean;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
-  onRemove: () => void;
-}) {
-  const hasSlots = module.imageSlots.length > 0;
-
-  return (
-    <article className="rounded-md border bg-background">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="font-semibold">{module.title}</h3>
-            <Badge variant="outline" className="font-mono text-[10px]">
-              {module.amazonType}
-            </Badge>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">{module.role}</p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Badge className={cn('border', statusClass(module.status))}>
-            {statusLabel(module.status)}
-          </Badge>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            disabled={!canMoveUp}
-            onClick={onMoveUp}
-            title="Move module up"
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            disabled={!canMoveDown}
-            onClick={onMoveDown}
-            title="Move module down"
-          >
-            <ArrowDown className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-            disabled={!canRemove}
-            onClick={onRemove}
-            title="Remove module"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-      <div className="grid gap-4 p-4 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-3">
-          <div className="rounded-md bg-muted p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-              <Monitor className="h-4 w-4" />
-              Desktop
-            </div>
-            <p className="text-sm text-muted-foreground">{module.desktop}</p>
-          </div>
-          <div className="rounded-md bg-muted p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-              <Smartphone className="h-4 w-4" />
-              Mobile
-            </div>
-            <p className="text-sm text-muted-foreground">{module.mobile}</p>
-          </div>
-          <ModuleCopy lines={module.copy} />
-        </div>
-        <div className="space-y-3">
-          {hasSlots ? (
-            module.imageSlots.map((slot) => {
-              const previewable =
-                slot.asset?.status === 'uploaded' &&
-                (slot.asset.mimeType?.startsWith('image/') ?? true);
-              return (
-                <div key={slot.id} className="rounded-md border bg-card p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <FileImage className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-sm font-medium">{slot.label}</span>
-                    </div>
-                    <Badge variant="secondary" className="text-[11px]">
-                      {slot.fileName ? 'Attached' : 'Open'}
-                    </Badge>
-                  </div>
-                  {previewable && slot.asset ? (
-                    <div className="mt-3 overflow-hidden rounded-md border bg-muted">
-                      <img
-                        src={`/api/a-plus/assets/${slot.asset.assetId}`}
-                        alt={slot.fileName || slot.label}
-                        className="block max-h-48 w-full object-contain"
-                        loading="lazy"
-                      />
-                    </div>
-                  ) : null}
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    {slot.fileName ||
-                      'Reserved image slot for final Amazon upload.'}
-                  </p>
-                </div>
-              );
-            })
-          ) : (
-            <div className="rounded-md border bg-card p-4">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <FileText className="h-4 w-4 text-muted-foreground" />
-                Text/data module
-              </div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                This module exports as structured copy instead of a flattened
-                graphic.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    </article>
-  );
 }
 
 export function APlusEditor({
@@ -1781,9 +747,6 @@ export function APlusEditor({
   const [saveStatus, setSaveStatus] = useState<
     'idle' | 'loading' | 'saving' | 'saved' | 'error'
   >('idle');
-  const [strategyId, setStrategyId] = useState(() =>
-    defaultStrategyId('Basic A+')
-  );
   const [sources, setSources] = useState<SourceLink[]>(DEFAULT_SOURCES);
   const [sourceChecks, setSourceChecks] = useState<Record<number, SourceCheck>>(
     {}
@@ -1791,9 +754,6 @@ export function APlusEditor({
   const [sourceExtractions, setSourceExtractions] = useState<
     Record<number, SourceExtraction>
   >({});
-  const [modules, setModules] = useState<APlusModule[]>(() =>
-    createStrategyModules(defaultStrategyId('Basic A+'), 'Basic A+')
-  );
   const [copied, setCopied] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
   const [generateStatus, setGenerateStatus] = useState<
@@ -1816,14 +776,25 @@ export function APlusEditor({
     startedAt?: number;
     elapsedMs?: number;
   }>({});
-  const [generatedPackage, setGeneratedPackage] =
-    useState<GeneratedAPlusResponse | null>(null);
+  // The authoritative document: everything the user edits lives here; the
+  // Amazon deployment below is always derived from it.
+  const [experience, setExperience] = useState<Experience | null>(null);
+  const [generationMeta, setGenerationMeta] = useState<GenerationMeta | null>(
+    null
+  );
   const [previewViewport, setPreviewViewport] =
     useState<PreviewViewport>('desktop');
   const [designStyle, setDesignStyle] = useState<DesignStyleKey>('editorial');
   const [generationModel, setGenerationModel] = useState<string>(
     APLUS_GENERATION_MODELS[0]?.id ?? 'anthropic/claude-haiku-4.5'
   );
+  // "Creativity" (Low/Medium/High) — maps to sampling temperature server-side.
+  const [creativity, setCreativity] = useState<APlusCreativity>('medium');
+  // Advanced-mode seller guidance appended to the generation prompts.
+  const [guidanceStrategy, setGuidanceStrategy] = useState('');
+  const [guidanceModuleCopy, setGuidanceModuleCopy] = useState('');
+  // True once generated module copy has been hand-edited (regenerate warns).
+  const [hasManualEdits, setHasManualEdits] = useState(false);
   const [imageJobResults, setImageJobResults] = useState<
     Record<string, ImageJobResult>
   >({});
@@ -1869,6 +840,24 @@ export function APlusEditor({
       ),
     [selectedBrandGuide?.brandName, selectedBrandGuide?.name]
   );
+  // Compact product identity prepended to every image-generation prompt so a
+  // slot regenerated on its own still knows what the product is.
+  const imageProductContext = useMemo(() => {
+    const facts = keyFeatures
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 4)
+      .join('; ');
+    return [
+      productName.trim() || 'the product described below',
+      productOneLiner.trim(),
+      facts ? `Key physical facts: ${facts}` : '',
+    ]
+      .filter(Boolean)
+      .join('. ')
+      .slice(0, 500);
+  }, [keyFeatures, productName, productOneLiner]);
 
   const brandGuideFontsToPreview = useMemo(
     () =>
@@ -1890,15 +879,6 @@ export function APlusEditor({
     ]
   );
 
-  const activeStrategy =
-    strategiesForTier(contentTier).find(
-      (strategy) => strategy.id === strategyId
-    ) ||
-    strategiesForTier(contentTier)[0] ||
-    MODULE_STRATEGIES[0];
-  const availableStrategies = strategiesForTier(contentTier);
-  const availableModules = modulesForTier(contentTier);
-
   const libraryAssetCount = assetLibrary.filter(
     (item) =>
       item.uploadStatus === 'uploaded' || item.uploadStatus === 'duplicate'
@@ -1908,6 +888,40 @@ export function APlusEditor({
   const productListingExtraction = productListingSource
     ? sourceExtractions[productListingSource.id]
     : undefined;
+
+  // The Amazon deployment is a pure derivation of the Experience — recompiled
+  // live on every edit/reorder (the compiler is framework-free and cheap).
+  const deployment = useMemo(
+    () =>
+      experience
+        ? compileExperienceToAplus(experience, { tier: contentTier })
+        : null,
+    [contentTier, experience]
+  );
+
+  // Back/forward-compat view of the generated package: older app versions
+  // read payload.generatedPackage, so keep writing it from the compiled state.
+  const compatGeneratedPackage = useMemo<GeneratedAPlusResponse | null>(() => {
+    if (!experience || !deployment) return null;
+    return {
+      strategy: generationMeta?.strategy ?? null,
+      package: {
+        title: experience.title,
+        executiveSummary: experience.goal,
+        creativeDirection: experience.artDirection,
+        assumptions: generationMeta?.assumptions ?? [],
+        modules: deployment.modules,
+        sellerCentralBuildSheet: generationMeta?.sellerCentralBuildSheet ?? [],
+        qualityChecklist: generationMeta?.qualityChecklist ?? [],
+      },
+      runConfig: generationMeta?.runConfig,
+      imageGeneration: generationMeta?.imageGeneration ?? {
+        enabled: false,
+        results: [],
+      },
+      modelRuns: generationMeta?.modelRuns ?? [],
+    };
+  }, [deployment, experience, generationMeta]);
 
   const currentDraftPayload = useMemo<DraftPayload>(
     () => ({
@@ -1928,11 +942,17 @@ export function APlusEditor({
       brandFontNotes,
       brandLogoAssetId,
       rawNotes,
-      strategyId,
       sources,
       assets: assetLibrary,
-      modules,
-      generatedPackage: generatedPackage ?? undefined,
+      experience: experience ?? undefined,
+      generationMeta: generationMeta ?? undefined,
+      generatedPackage: compatGeneratedPackage ?? undefined,
+      creativity,
+      guidance: {
+        strategy: guidanceStrategy.trim() || undefined,
+        moduleCopy: guidanceModuleCopy.trim() || undefined,
+      },
+      hasManualEdits: hasManualEdits || undefined,
     }),
     [
       asin,
@@ -1940,73 +960,98 @@ export function APlusEditor({
       brandFontNotes,
       brandVoice,
       builderMode,
+      compatGeneratedPackage,
       contentTier,
+      creativity,
       differentiators,
+      experience,
+      generationMeta,
+      guidanceModuleCopy,
+      guidanceStrategy,
+      hasManualEdits,
       keyFeatures,
       logoNotes,
       brandLogoAssetId,
       assetLibrary,
-      modules,
       objections,
       pricePoint,
       productName,
       productOneLiner,
       rawNotes,
       sources,
-      strategyId,
       targetCustomer,
       wizardStep,
-      generatedPackage,
     ]
   );
 
-  const aiPrompt = useMemo(
-    () =>
-      buildAPlusPrompt({
-        productName,
-        asin,
-        contentTier,
-        brandVoice,
-        rawNotes,
-        productOneLiner,
-        targetCustomer,
-        pricePoint,
-        keyFeatures,
-        differentiators,
-        objections,
-        brandColors,
-        brandFontNotes,
+  // The exact POST body sent to /api/a-plus/generate. Factored into a memo so
+  // the guidance overlay's prompt preview and the actual request can't drift.
+  const generateRequestBody = useMemo(
+    () => ({
+      productName,
+      asin,
+      model: generationModel,
+      contentTier,
+      creativity,
+      guidance: {
+        strategy: guidanceStrategy.trim() || undefined,
+        moduleCopy: guidanceModuleCopy.trim() || undefined,
+      },
+      rawNotes,
+      productOneLiner,
+      targetCustomer,
+      pricePoint,
+      keyFeatures,
+      differentiators,
+      objections,
+      brand: {
+        name: selectedBrandGuide?.name,
+        brandName: selectedBrandGuide?.brandName,
+        colors: brandColors,
+        fonts: brandFontNotes,
+        voice: brandVoice,
         logoNotes,
-        brandLogoAssetId,
-        selectedBrandGuide,
-        activeStrategy,
-        sources,
-        sourceChecks,
-        assets: assetLibrary,
-        modules,
-      }),
+        logoAssetId: brandLogoAssetId,
+      },
+      sources,
+      assets: assetLibrary,
+    }),
     [
-      activeStrategy,
       asin,
       brandColors,
       brandFontNotes,
       brandVoice,
       contentTier,
+      creativity,
       differentiators,
+      generationModel,
+      guidanceModuleCopy,
+      guidanceStrategy,
       keyFeatures,
       logoNotes,
       brandLogoAssetId,
       assetLibrary,
-      modules,
       objections,
       pricePoint,
       productName,
       productOneLiner,
       rawNotes,
-      sourceChecks,
+      selectedBrandGuide,
       sources,
       targetCustomer,
     ]
+  );
+
+  // The real Phase-1 strategy prompt the generator runs (shown read-only in
+  // the guidance overlay), built from the same request body it will receive.
+  const strategyPromptPreview = useMemo(
+    () =>
+      buildStrategyPrompt({
+        contextJson: compactGenerationInput(generateRequestBody),
+        moduleCount: aplusModuleLimitForTier(contentTier),
+        guidance: guidanceStrategy,
+      }),
+    [contentTier, generateRequestBody, guidanceStrategy]
   );
 
   const packageJson = useMemo(
@@ -2016,7 +1061,6 @@ export function APlusEditor({
         contentType: 'EMC',
         tier: contentTier,
         locale: 'en-US',
-        moduleStrategy: activeStrategy.name,
         asinSet: asin ? [asin] : [],
         sourceLinks: sources.filter((source) => source.url.trim()),
         brandVoice,
@@ -2030,29 +1074,36 @@ export function APlusEditor({
           storage: item.asset?.storage || null,
           status: item.uploadStatus,
         })),
-        contentModuleList: modules.map((module) => ({
-          id: module.id,
-          tier: module.tier,
-          contentModuleType: module.amazonType,
+        // The build sheet is derived from the COMPILED deployment (including
+        // any hand edits), so it always matches what the preview shows.
+        contentModuleList: (deployment?.modules ?? []).map((module) => ({
+          order: module.order,
+          contentModuleType: module.amazonModuleType,
           title: module.title,
-          desktopPlan: module.desktop,
-          mobilePlan: module.mobile,
-          copy: module.copy,
-          imageSlots: module.imageSlots.map((slot) => ({
-            id: slot.id,
-            label: slot.label,
-            minimumSize: slot.minSize,
-            fileName: slot.fileName || null,
-            assetId: slot.asset?.assetId || null,
-            sha256: slot.asset?.hashes.sha256 || null,
-            storage: slot.asset?.storage || null,
+          textFields: moduleTextFields(module),
+          imageSlots: moduleImageSlots(module).map((slot) => ({
+            role: slot.role,
+            size: slot.size,
+            alt: slot.alt,
+            url: slot.image?.url ?? null,
           })),
         })),
+        // Which sections produced which Amazon modules (incl. slice stacks).
+        deployment: deployment
+          ? {
+              moduleMapping: deployment.moduleMapping,
+              validation: deployment.validation,
+            }
+          : null,
       },
       workflow: {
         apiPossible: true,
-        aiPrompt,
-        promptRules: APLUS_PROMPT_RULES,
+        aiPrompt: strategyPromptPreview,
+        creativity,
+        guidance: {
+          strategy: guidanceStrategy.trim() || null,
+          moduleCopy: guidanceModuleCopy.trim() || null,
+        },
         brandGuide: selectedBrandGuide
           ? {
               brandGuideId: selectedBrandGuide.brandGuideId,
@@ -2094,19 +1145,20 @@ export function APlusEditor({
       },
     }),
     [
-      activeStrategy.name,
       asin,
-      aiPrompt,
       brandColors,
       brandFontNotes,
       brandVoice,
       contentTier,
+      creativity,
+      deployment,
       differentiators,
+      guidanceModuleCopy,
+      guidanceStrategy,
       keyFeatures,
       logoNotes,
       brandLogoAssetId,
       assetLibrary,
-      modules,
       objections,
       pricePoint,
       productName,
@@ -2114,6 +1166,7 @@ export function APlusEditor({
       rawNotes,
       selectedBrandGuide,
       sources,
+      strategyPromptPreview,
       targetCustomer,
     ]
   );
@@ -2188,12 +1241,12 @@ export function APlusEditor({
   // doesn't churn the visible save indicator. The first save creates the draft
   // row; subsequent saves update it via the returned draftId.
   useEffect(() => {
-    if (!generatedPackage) return;
+    if (!experience) return;
     const handle = window.setTimeout(() => {
       void saveDraft({ silent: true });
     }, 1200);
     return () => window.clearTimeout(handle);
-  }, [generatedPackage]);
+  }, [experience]);
 
   useEffect(() => {
     if (generateStatus !== 'generating' || !generationProgress.startedAt) {
@@ -2456,46 +1509,94 @@ export function APlusEditor({
     [...fileList].forEach((file) => void uploadLibraryAsset(file));
   }
 
-  function applyStrategy(nextStrategyId: string) {
-    setStrategyId(nextStrategyId);
-    setModules(createStrategyModules(nextStrategyId, contentTier));
-  }
-
-  function addModule(templateId: string) {
-    setModules((current) => [
-      ...current,
-      createModule(templateId, contentTier),
-    ]);
-  }
-
   function applyContentTier(nextTier: ContentTier) {
-    const nextStrategyId = defaultStrategyId(nextTier);
     setContentTier(nextTier);
-    setStrategyId(nextStrategyId);
-    setModules(createStrategyModules(nextStrategyId, nextTier));
   }
 
-  function removeModule(moduleId: string) {
-    setModules((current) =>
-      current.length > 1
-        ? current.filter((module) => module.id !== moduleId)
-        : current
+  /** Applies an edit to one section of the Experience (single source of truth). */
+  function updateSection(
+    sectionId: string,
+    update: (
+      section: Experience['sections'][number]
+    ) => Experience['sections'][number]
+  ) {
+    setExperience((current) => {
+      if (!current) return current;
+      let changed = false;
+      const sections = current.sections.map((section) => {
+        if (section.id !== sectionId) return section;
+        const next = update(section);
+        if (next !== section) changed = true;
+        return next;
+      });
+      if (!changed) return current;
+      return { ...current, sections };
+    });
+  }
+
+  function updateSectionText(
+    sectionId: string,
+    path: APlusTextFieldPath,
+    value: string
+  ) {
+    updateSection(sectionId, (section) =>
+      setSectionTextField(section, path, value)
     );
+    setHasManualEdits(true);
   }
 
-  function moveModule(moduleId: string, direction: -1 | 1) {
-    setModules((current) => {
-      const index = current.findIndex((module) => module.id === moduleId);
+  function updateSectionNotes(sectionId: string, value: string) {
+    updateSection(sectionId, (section) => ({
+      ...section,
+      notes: value.trim() ? value : undefined,
+    }));
+  }
+
+  function toggleSectionLock(sectionId: string) {
+    updateSection(sectionId, (section) => ({
+      ...section,
+      locked: !section.locked,
+    }));
+  }
+
+  /** Reorders a section within the narrative; the deployment recompiles live. */
+  function moveSection(sectionId: string, direction: -1 | 1) {
+    setExperience((current) => {
+      if (!current) return current;
+      const ordered = [...current.sections].sort((a, b) => a.order - b.order);
+      const index = ordered.findIndex((section) => section.id === sectionId);
       const nextIndex = index + direction;
-      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) {
+      if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) {
         return current;
       }
-
-      const next = [...current];
-      const [module] = next.splice(index, 1);
-      next.splice(nextIndex, 0, module);
-      return next;
+      const swapped = [...ordered];
+      [swapped[index], swapped[nextIndex]] = [
+        swapped[nextIndex],
+        swapped[index],
+      ];
+      return {
+        ...current,
+        sections: swapped.map((section, position) => ({
+          ...section,
+          order: position + 1,
+        })),
+      };
     });
+    setHasManualEdits(true);
+  }
+
+  function updateExperienceTitle(value: string) {
+    setExperience((current) =>
+      current ? { ...current, title: value } : current
+    );
+    setHasManualEdits(true);
+  }
+
+  function updateExperienceGoal(value: string) {
+    setExperience((current) =>
+      current ? { ...current, goal: value } : current
+    );
+    setHasManualEdits(true);
   }
 
   function addSource() {
@@ -2752,7 +1853,7 @@ export function APlusEditor({
   }
 
   async function copyPrompt() {
-    await navigator.clipboard.writeText(aiPrompt);
+    await navigator.clipboard.writeText(strategyPromptPreview);
     setPromptCopied(true);
     setTimeout(() => setPromptCopied(false), 2000);
   }
@@ -2763,29 +1864,22 @@ export function APlusEditor({
     // Only persist real asset references (e.g. /api/a-plus/assets/<id>). A
     // `data:` URL means the image failed to upload to storage (commonly expired
     // AWS creds); it stays in transient preview state but must NEVER be written
-    // into the package — several 2-3MB base64 blobs exceed the draft request-body
+    // into the draft — several 2-3MB base64 blobs exceed the draft request-body
     // limit and corrupt the save (Unterminated JSON / 500). The image still shows
     // in the preview via imageJobResults; it just won't survive a reload.
     if (url.startsWith('data:')) return;
     const order = Number(match[1]);
     const role = match[2];
-    setGeneratedPackage((current) => {
-      if (!current) return current;
-      let changed = false;
-      const modules = current.package.modules.map((module) => {
-        if (module.order !== order) return module;
-        const clone = structuredClone(module);
-        for (const slot of moduleImageSlots(clone)) {
-          if (slot.role === role) {
-            slot.image = { url, alt: slot.alt };
-            changed = true;
-          }
-        }
-        return clone;
-      });
-      if (!changed) return current;
-      return { ...current, package: { ...current.package, modules } };
-    });
+    // Job ids are keyed by COMPILED module order; resolve back to the source
+    // section through the deployment mapping, then write into the Experience
+    // (single source of truth) — the compiled slot picks it up on recompile.
+    const sectionId = deployment?.moduleMapping.find(
+      (entry) => entry.order === order
+    )?.sectionIds[0];
+    if (!sectionId) return;
+    updateSection(sectionId, (section) =>
+      setSectionResolvedImage(section, role, { url })
+    );
   }
 
   async function generateImageForJob(
@@ -2802,7 +1896,11 @@ export function APlusEditor({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: prepareGeneratedImagePrompt(prompt, imageForbiddenText),
+          prompt: prepareGeneratedImagePrompt(
+            prompt,
+            imageForbiddenText,
+            imageProductContext
+          ),
           size,
           // Draft mode generates cheap, low-quality images for fast iteration;
           // finals are full quality. Only gpt-image-1 honors this.
@@ -2864,17 +1962,18 @@ export function APlusEditor({
   }
 
   const allPackageImageJobs = useMemo<PackageImageJob[]>(() => {
-    if (!generatedPackage) return [];
+    if (!deployment) return [];
 
-    return generatedPackage.package.modules.flatMap((module) =>
+    return deployment.modules.flatMap((module) =>
       moduleImageSlots(module).map((slot) => ({
         jobId: slotJobId(module.order, slot.role),
         prompt: slot.brief,
         size: slot.size,
+        role: slot.role,
         hasImage: Boolean(slot.image?.url),
       }))
     );
-  }, [generatedPackage]);
+  }, [deployment]);
 
   const hasRunnablePackageImageJobs = allPackageImageJobs.some((job) => {
     if (job.hasImage) return false;
@@ -2886,18 +1985,83 @@ export function APlusEditor({
     (job) => imageJobResults[job.jobId]?.status === 'generating'
   );
 
+  const placedFromAssetCount = Object.values(imageJobResults).filter(
+    (result) => result?.status === 'done' && result.fromAsset
+  ).length;
+
+  function orientationFromSize(
+    size: string
+  ): 'portrait' | 'landscape' | 'square' {
+    const match = size.match(/(\d+)\s*x\s*(\d+)/i);
+    if (!match) return 'square';
+    const w = Number(match[1]);
+    const h = Number(match[2]);
+    if (w > h * 1.05) return 'landscape';
+    if (h > w * 1.05) return 'portrait';
+    return 'square';
+  }
+
   function generateAllPackageImages() {
+    // Profiled, uploaded assets are candidates for direct placement (redesign #26).
+    const baseCandidates: MatcherCandidate[] = assetLibrary
+      .filter(
+        (item) =>
+          item.profile &&
+          item.asset?.assetId &&
+          (item.uploadStatus === 'uploaded' ||
+            item.uploadStatus === 'duplicate')
+      )
+      .map((item) => ({
+        assetId: item.asset!.assetId,
+        profile: item.profile!,
+      }));
+    // Don't place the same photo into more than one slot.
+    const usedAssetIds = new Set<string>();
+
     for (const job of allPackageImageJobs) {
       // Never re-pay for a slot that already has an image — including a draft
       // reloaded from storage, where in-memory job status is empty.
       if (job.hasImage) continue;
       const status = imageJobResults[job.jobId]?.status;
       if (status === 'done' || status === 'generating') continue;
+
+      const decision = matchAssetToSlot(
+        { role: job.role, orientation: orientationFromSize(job.size) },
+        baseCandidates.filter((c) => !usedAssetIds.has(c.assetId))
+      );
+
+      if (decision.strategy === 'place') {
+        // Use the seller's real photo directly — no generation, no cost.
+        const url = `/api/a-plus/assets/${decision.assetId}`;
+        usedAssetIds.add(decision.assetId);
+        writeSlotImageIntoPackage(job.jobId, url);
+        setImageJobResults((current) => ({
+          ...current,
+          [job.jobId]: {
+            status: 'done',
+            url,
+            assetId: decision.assetId,
+            fromAsset: true,
+          },
+        }));
+        continue;
+      }
+
       void generateImageForJob(job.jobId, job.prompt, job.size);
     }
   }
 
   async function generateAPlusPackage() {
+    // Hand-edited copy would be silently replaced — make it an explicit choice.
+    if (
+      experience &&
+      hasManualEdits &&
+      !window.confirm(
+        'Regenerating will replace your edited module copy. Continue?'
+      )
+    ) {
+      return;
+    }
     setGenerateStatus('generating');
     setGenerateError('');
     setGenerationProgress({ startedAt: Date.now(), phase: 'strategy' });
@@ -2906,30 +2070,7 @@ export function APlusEditor({
       const response = await fetch('/api/a-plus/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          productName,
-          asin,
-          model: generationModel,
-          contentTier,
-          rawNotes,
-          productOneLiner,
-          targetCustomer,
-          pricePoint,
-          keyFeatures,
-          differentiators,
-          objections,
-          brand: {
-            name: selectedBrandGuide?.name,
-            brandName: selectedBrandGuide?.brandName,
-            colors: brandColors,
-            fonts: brandFontNotes,
-            voice: brandVoice,
-            logoNotes,
-            logoAssetId: brandLogoAssetId,
-          },
-          sources,
-          assets: assetLibrary,
-        }),
+        body: JSON.stringify(generateRequestBody),
       });
 
       if (
@@ -3032,7 +2173,23 @@ export function APlusEditor({
         throw new Error('Generation finished without producing a package.');
       }
 
-      setGeneratedPackage(finalPayload);
+      // Lift the generated package into the Experience model — the editor's
+      // single source of truth; the deployment view recompiles from it.
+      setExperience(
+        liftGeneratedPackageToExperience(finalPayload.package, {
+          productId: asin.trim() || undefined,
+        })
+      );
+      setGenerationMeta({
+        strategy: finalPayload.strategy,
+        runConfig: finalPayload.runConfig,
+        imageGeneration: finalPayload.imageGeneration,
+        modelRuns: finalPayload.modelRuns,
+        assumptions: finalPayload.package.assumptions,
+        sellerCentralBuildSheet: finalPayload.package.sellerCentralBuildSheet,
+        qualityChecklist: finalPayload.package.qualityChecklist,
+      });
+      setHasManualEdits(false);
       setGenerateStatus('generated');
       setGenerationProgress({});
     } catch (error) {
@@ -3073,10 +2230,31 @@ export function APlusEditor({
       setAssetLibrary(
         payload.assets.filter((a) => !isGeneratedLibraryAsset(a))
       );
-    if (payload.strategyId) setStrategyId(payload.strategyId);
     if (payload.sources?.length) setSources(payload.sources);
-    if (payload.modules?.length) setModules(payload.modules);
-    if (payload.generatedPackage) setGeneratedPackage(payload.generatedPackage);
+    // Old drafts may also carry `strategyId`/`modules` (the retired
+    // pre-generation module plan) — those keys are simply ignored.
+    if (payload.experience) {
+      // Newer drafts persist the Experience directly.
+      setExperience(payload.experience);
+      setGenerationMeta(payload.generationMeta ?? null);
+    } else if (payload.generatedPackage) {
+      // Older drafts only carry the generated package — lift it.
+      const normalized = normalizeGeneratedPackage(payload.generatedPackage);
+      setExperience(liftGeneratedPackageToExperience(normalized.package));
+      setGenerationMeta({
+        strategy: normalized.strategy,
+        runConfig: normalized.runConfig,
+        imageGeneration: normalized.imageGeneration,
+        modelRuns: normalized.modelRuns,
+        assumptions: normalized.package.assumptions,
+        sellerCentralBuildSheet: normalized.package.sellerCentralBuildSheet,
+        qualityChecklist: normalized.package.qualityChecklist,
+      });
+    }
+    if (payload.creativity) setCreativity(payload.creativity);
+    setGuidanceStrategy(payload.guidance?.strategy ?? '');
+    setGuidanceModuleCopy(payload.guidance?.moduleCopy ?? '');
+    setHasManualEdits(payload.hasManualEdits === true);
   }
 
   async function loadDraft(nextDraftId: string) {
@@ -3109,15 +2287,13 @@ export function APlusEditor({
   }
 
   function newDraft() {
-    const nextTier = 'Basic A+' as const;
-    const nextStrategyId = defaultStrategyId(nextTier);
     setDraftId(null);
     setDraftName('Untitled A+ draft');
     setBuilderMode('simple');
     setWizardStep('basics');
     setProductName('');
     setAsin('');
-    setContentTier(nextTier);
+    setContentTier('Basic A+');
     setProductOneLiner('');
     setTargetCustomer('');
     setPricePoint('');
@@ -3132,11 +2308,14 @@ export function APlusEditor({
     setBrandGuideId(null);
     setRawNotes('');
     setAssetLibrary([]);
-    setStrategyId(nextStrategyId);
     setSources(DEFAULT_SOURCES);
     setSourceChecks({});
-    setModules(createStrategyModules(nextStrategyId, nextTier));
-    setGeneratedPackage(null);
+    setExperience(null);
+    setGenerationMeta(null);
+    setCreativity('medium');
+    setGuidanceStrategy('');
+    setGuidanceModuleCopy('');
+    setHasManualEdits(false);
     setImageJobResults({});
   }
 
@@ -3457,100 +2636,6 @@ export function APlusEditor({
             come back.
           </p>
         </div>
-      </CardContent>
-    </Card>
-  );
-
-  const strategyCard = (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Layers3 className="h-4 w-4 text-primary" />
-          Module Strategy
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="module-strategy">Starting layout</Label>
-          <select
-            id="module-strategy"
-            value={strategyId}
-            onChange={(event) => applyStrategy(event.target.value)}
-            className={SELECT_CLASSNAME}
-          >
-            {availableStrategies.map((strategy) => (
-              <option key={strategy.id} value={strategy.id}>
-                {strategy.name}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs leading-5 text-muted-foreground">
-            {activeStrategy.description}
-          </p>
-        </div>
-
-        <Collapsible>
-          <CollapsibleTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full justify-between"
-            >
-              Advanced module controls
-              <ChevronDown className="h-4 w-4" />
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="mt-4 space-y-4">
-            <div className="space-y-2">
-              <Label>Current module order</Label>
-              <div className="space-y-1.5">
-                {modules.map((module, index) => (
-                  <div
-                    key={module.id}
-                    className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs"
-                  >
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-muted font-mono">
-                      {index + 1}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">
-                      {module.title}
-                    </span>
-                    <Badge variant="outline" className="text-[10px]">
-                      {module.imageSlots.length
-                        ? `${module.imageSlots.length} img`
-                        : 'text'}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Add module</Label>
-              <div className="grid gap-2">
-                {availableModules.map((module) => (
-                  <Button
-                    key={module.id}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-auto justify-start whitespace-normal py-2 text-left"
-                    onClick={() => addModule(module.id)}
-                  >
-                    <Plus className="mr-2 h-4 w-4 shrink-0" />
-                    <span className="min-w-0">
-                      <span className="block text-sm">{module.title}</span>
-                      <span className="block truncate font-mono text-[10px] text-muted-foreground">
-                        {module.amazonType}
-                      </span>
-                    </span>
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
       </CardContent>
     </Card>
   );
@@ -4410,370 +3495,304 @@ export function APlusEditor({
     </div>
   );
 
-  const generatedPackageCard = generatedPackage ? (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <PackageCheck className="h-4 w-4 text-primary" />
-            Generated A+ Package
-          </CardTitle>
-          {allPackageImageJobs.length ? (
-            <div className="flex items-center gap-3">
-              <label
-                className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-                title="Generate cheaper, low-quality draft images for fast iteration. Turn off for full-quality finals."
-              >
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5"
-                  checked={draftImages}
-                  onChange={(event) => setDraftImages(event.target.checked)}
-                />
-                Draft quality
-              </label>
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                disabled={!hasRunnablePackageImageJobs}
-                onClick={generateAllPackageImages}
-              >
-                {isGeneratingPackageImage ? (
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <WandSparkles className="mr-2 h-3.5 w-3.5" />
-                )}
-                {isGeneratingPackageImage
-                  ? 'Generating images'
-                  : hasRunnablePackageImageJobs
-                  ? 'Generate all images'
-                  : 'All images generated'}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        <div>
-          <h3 className="text-lg font-semibold">
-            {cleanAPlusDisplayText(generatedPackage.package.title)}
-          </h3>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {cleanAPlusDisplayText(generatedPackage.package.executiveSummary)}
-          </p>
-        </div>
-
-        <section className="space-y-3">
+  const generatedPackageCard =
+    experience && deployment ? (
+      <Card>
+        <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium">A+ Page Preview</p>
-              <p className="text-xs text-muted-foreground">
-                Buyer-facing module stack. Layout and copy are live HTML; images
-                fill in as you generate them.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <ToggleGroup
-                type="single"
-                value={previewViewport}
-                onValueChange={(value) => {
-                  if (value === 'desktop' || value === 'mobile') {
-                    setPreviewViewport(value);
-                  }
-                }}
-                className="rounded-md border bg-background p-1"
-              >
-                <ToggleGroupItem
-                  value="desktop"
-                  aria-label="Show desktop preview"
-                  className="h-8 gap-1.5 px-3"
+            <CardTitle className="flex items-center gap-2 text-base">
+              <PackageCheck className="h-4 w-4 text-primary" />
+              Your A+ Story
+            </CardTitle>
+            {allPackageImageJobs.length ? (
+              <div className="flex items-center gap-3">
+                <label
+                  className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+                  title="Generate cheaper, low-quality draft images for fast iteration. Turn off for full-quality finals."
                 >
-                  <Monitor className="h-3.5 w-3.5" />
-                  Desktop
-                </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="mobile"
-                  aria-label="Show mobile preview"
-                  className="h-8 gap-1.5 px-3"
-                >
-                  <Smartphone className="h-3.5 w-3.5" />
-                  Mobile
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </div>
-          </div>
-          {Object.values(imageJobResults).some(
-            (result) => result?.status === 'done' && result.persistError
-          ) ? (
-            <div className="flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                Some images generated but{' '}
-                <span className="font-medium">
-                  couldn’t be saved to storage
-                </span>{' '}
-                — they show in this preview but won’t persist on reload, and the
-                draft won’t store them. This usually means your AWS sign-in
-                expired. Run{' '}
-                <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px]">
-                  aws sso login --profile sellavant-dev
-                </code>{' '}
-                then regenerate the affected images.
-              </span>
-            </div>
-          ) : null}
-          {hasRunnablePackageImageJobs || isGeneratingPackageImage ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3">
-              <div className="flex items-start gap-2 text-sm text-amber-900">
-                <ImagePlus className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>
-                  The preview shows{' '}
-                  <span className="font-medium">“Image pending”</span>{' '}
-                  placeholders — module images aren’t generated until you run
-                  them. This step uses AI image credits.
-                </span>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                onClick={generateAllPackageImages}
-                disabled={isGeneratingPackageImage}
-              >
-                {isGeneratingPackageImage ? (
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <WandSparkles className="mr-2 h-3.5 w-3.5" />
-                )}
-                {isGeneratingPackageImage
-                  ? 'Generating images…'
-                  : 'Generate all images'}
-              </Button>
-            </div>
-          ) : null}
-          <APlusDesignedPreview
-            modules={generatedPackage.package.modules}
-            theme={designTheme}
-            viewport={previewViewport}
-            slotResults={imageJobResults}
-            onRegenerate={(jobId, brief, size) =>
-              generateImageForJob(jobId, brief, size)
-            }
-          />
-        </section>
-
-        <Collapsible>
-          <div className="rounded-md border bg-muted/20">
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                className="flex h-auto w-full justify-between gap-3 px-4 py-3 text-left"
-              >
-                <span>
-                  <span className="block text-sm font-medium">
-                    Package rationale
-                  </span>
-                  <span className="block text-xs font-normal text-muted-foreground">
-                    Strategy, model runs, assumptions, and package-level build
-                    notes.
-                  </span>
-                </span>
-                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="space-y-4 border-t p-4">
-              <div className="flex flex-wrap gap-2">
-                {generatedPackage.modelRuns.map((run) => (
-                  <Badge key={`${run.role}-${run.modelId}`} variant="outline">
-                    {run.role === 'strategy'
-                      ? 'Strategy model'
-                      : 'Package model'}
-                    : {run.provider} / {run.modelId}
-                  </Badge>
-                ))}
-                <Badge variant="outline">
-                  Images{' '}
-                  {generatedPackage.imageGeneration.enabled ? 'on' : 'planned'}
-                </Badge>
-                {generatedPackage.runConfig ? (
-                  <>
-                    <Badge variant="secondary">
-                      Mode: {generatedPackage.runConfig.generationMode}
-                    </Badge>
-                    <Badge variant="secondary">
-                      Image: {generatedPackage.runConfig.imageVariant}
-                    </Badge>
-                  </>
-                ) : null}
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                {[
-                  [
-                    'Positioning',
-                    generatedPackage.package.creativeDirection.positioning,
-                  ],
-                  [
-                    'Visual System',
-                    generatedPackage.package.creativeDirection.visualSystem,
-                  ],
-                  [
-                    'Mobile Principle',
-                    generatedPackage.package.creativeDirection.mobilePrinciple,
-                  ],
-                  [
-                    'Image Plan',
-                    generatedPackage.package.creativeDirection.imagePlan,
-                  ],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-md border bg-card p-3">
-                    <p className="text-xs font-semibold uppercase text-muted-foreground">
-                      {label}
-                    </p>
-                    <p className="mt-2 text-sm leading-6">
-                      {cleanAPlusDisplayText(value)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              {generatedPackage.package.assumptions.length ? (
-                <div className="rounded-md border bg-card p-3">
-                  <p className="text-sm font-medium">Assumptions</p>
-                  <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
-                    {cleanAPlusDisplayLines(
-                      generatedPackage.package.assumptions
-                    ).map((assumption) => (
-                      <li key={assumption}>- {assumption}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              <div className="grid gap-3 md:grid-cols-2">
-                {generatedPackage.package.sellerCentralBuildSheet.map((row) => (
-                  <div
-                    key={`${row.step}-${row.value}`}
-                    className="rounded-md border bg-card p-3 text-sm"
-                  >
-                    <p className="font-medium">{row.step}</p>
-                    <p className="mt-1 text-muted-foreground">
-                      {cleanAPlusDisplayText(row.value)}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </CollapsibleContent>
-          </div>
-        </Collapsible>
-
-        <div className="space-y-3">
-          {generatedPackage.package.modules.map((module) => (
-            <article
-              key={`${module.order}-${module.amazonModuleType}`}
-              className="rounded-md border bg-background"
-            >
-              <Collapsible>
-                <div className="flex flex-wrap items-start justify-between gap-3 p-4">
-                  <div>
-                    <Badge variant="secondary">Module {module.order}</Badge>
-                    <h4 className="mt-2 font-semibold">
-                      {cleanAPlusDisplayText(module.title)}
-                    </h4>
-                    <p className="mt-1 text-xs font-mono text-muted-foreground">
-                      {module.amazonModuleType}
-                    </p>
-                  </div>
-                  <CollapsibleTrigger asChild>
-                    <Button type="button" variant="outline" size="sm">
-                      Build details
-                      <ChevronDown className="ml-2 h-3.5 w-3.5" />
-                    </Button>
-                  </CollapsibleTrigger>
-                </div>
-
-                <CollapsibleContent className="border-t p-4">
-                  <APlusModuleProductionDetails
-                    module={module}
-                    slotResults={imageJobResults}
-                    onGenerate={(jobId, brief, size) =>
-                      generateImageForJob(jobId, brief, size)
-                    }
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5"
+                    checked={draftImages}
+                    onChange={(event) => setDraftImages(event.target.checked)}
                   />
-                </CollapsibleContent>
-              </Collapsible>
-            </article>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  ) : null;
+                  Draft quality
+                </label>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  disabled={!hasRunnablePackageImageJobs}
+                  onClick={generateAllPackageImages}
+                >
+                  {isGeneratingPackageImage ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {isGeneratingPackageImage
+                    ? 'Generating images'
+                    : hasRunnablePackageImageJobs
+                    ? 'Generate all images'
+                    : 'All images generated'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {placedFromAssetCount > 0 ? (
+            <p className="text-xs font-medium text-emerald-700">
+              {placedFromAssetCount} image
+              {placedFromAssetCount === 1 ? '' : 's'} placed from your uploaded
+              photos; the rest were generated.
+            </p>
+          ) : null}
+
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium">A+ Page Preview</p>
+                <p className="text-xs text-muted-foreground">
+                  Buyer-facing module stack. Layout and copy are live HTML;
+                  images fill in as you generate them.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <ToggleGroup
+                  type="single"
+                  value={previewViewport}
+                  onValueChange={(value) => {
+                    if (value === 'desktop' || value === 'mobile') {
+                      setPreviewViewport(value);
+                    }
+                  }}
+                  className="rounded-md border bg-background p-1"
+                >
+                  <ToggleGroupItem
+                    value="desktop"
+                    aria-label="Show desktop preview"
+                    className="h-8 gap-1.5 px-3"
+                  >
+                    <Monitor className="h-3.5 w-3.5" />
+                    Desktop
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="mobile"
+                    aria-label="Show mobile preview"
+                    className="h-8 gap-1.5 px-3"
+                  >
+                    <Smartphone className="h-3.5 w-3.5" />
+                    Mobile
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </div>
+            </div>
+            {Object.values(imageJobResults).some(
+              (result) => result?.status === 'done' && result.persistError
+            ) ? (
+              <div className="flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  Some images generated but{' '}
+                  <span className="font-medium">
+                    couldn’t be saved to storage
+                  </span>{' '}
+                  — they show in this preview but won’t persist on reload, and
+                  the draft won’t store them. This usually means your AWS
+                  sign-in expired. Run{' '}
+                  <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px]">
+                    aws sso login --profile sellavant-dev
+                  </code>{' '}
+                  then regenerate the affected images.
+                </span>
+              </div>
+            ) : null}
+            {hasRunnablePackageImageJobs || isGeneratingPackageImage ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-start gap-2 text-sm text-amber-900">
+                  <ImagePlus className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    The preview shows{' '}
+                    <span className="font-medium">“Image pending”</span>{' '}
+                    placeholders — module images aren’t generated until you run
+                    them. This step uses AI image credits.
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={generateAllPackageImages}
+                  disabled={isGeneratingPackageImage}
+                >
+                  {isGeneratingPackageImage ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {isGeneratingPackageImage
+                    ? 'Generating images…'
+                    : 'Generate all images'}
+                </Button>
+              </div>
+            ) : null}
+            <APlusDesignedPreview
+              modules={deployment.modules}
+              theme={designTheme}
+              viewport={previewViewport}
+              slotResults={imageJobResults}
+              onRegenerate={(jobId, brief, size) =>
+                generateImageForJob(jobId, brief, size)
+              }
+            />
+          </section>
+
+          <Collapsible>
+            <div className="rounded-md border bg-muted/20">
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="flex h-auto w-full justify-between gap-3 px-4 py-3 text-left"
+                >
+                  <span>
+                    <span className="block text-sm font-medium">
+                      Package rationale
+                    </span>
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      Strategy, model runs, assumptions, and package-level build
+                      notes.
+                    </span>
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-4 border-t p-4">
+                <div className="flex flex-wrap gap-2">
+                  {(generationMeta?.modelRuns ?? []).map((run) => (
+                    <Badge key={`${run.role}-${run.modelId}`} variant="outline">
+                      {run.role === 'strategy'
+                        ? 'Strategy model'
+                        : 'Package model'}
+                      : {run.provider} / {run.modelId}
+                    </Badge>
+                  ))}
+                  <Badge variant="outline">
+                    Images{' '}
+                    {generationMeta?.imageGeneration?.enabled
+                      ? 'on'
+                      : 'planned'}
+                  </Badge>
+                  {generationMeta?.runConfig ? (
+                    <>
+                      <Badge variant="secondary">
+                        Mode: {generationMeta.runConfig.generationMode}
+                      </Badge>
+                      <Badge variant="secondary">
+                        Image: {generationMeta.runConfig.imageVariant}
+                      </Badge>
+                      {generationMeta.runConfig.creativity ? (
+                        <Badge variant="secondary">
+                          Creativity: {generationMeta.runConfig.creativity}
+                        </Badge>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  {[
+                    ['Positioning', experience.artDirection.positioning],
+                    ['Visual System', experience.artDirection.visualSystem],
+                    [
+                      'Mobile Principle',
+                      experience.artDirection.mobilePrinciple,
+                    ],
+                    ['Image Plan', experience.artDirection.imagePlan],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-md border bg-card p-3">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">
+                        {label}
+                      </p>
+                      <p className="mt-2 text-sm leading-6">
+                        {cleanAPlusDisplayText(value)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {generationMeta?.assumptions?.length ? (
+                  <div className="rounded-md border bg-card p-3">
+                    <p className="text-sm font-medium">Assumptions</p>
+                    <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+                      {cleanAPlusDisplayLines(generationMeta.assumptions).map(
+                        (assumption) => (
+                          <li key={assumption}>- {assumption}</li>
+                        )
+                      )}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  {(generationMeta?.sellerCentralBuildSheet ?? []).map(
+                    (row) => (
+                      <div
+                        key={`${row.step}-${row.value}`}
+                        className="rounded-md border bg-card p-3 text-sm"
+                      >
+                        <p className="font-medium">{row.step}</p>
+                        <p className="mt-1 text-muted-foreground">
+                          {cleanAPlusDisplayText(row.value)}
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              </CollapsibleContent>
+            </div>
+          </Collapsible>
+
+          <div className="space-y-3">
+            <APlusSectionsPanel
+              experience={experience}
+              deployment={deployment}
+              tier={contentTier}
+              slotResults={imageJobResults}
+              onEditTitle={updateExperienceTitle}
+              onEditGoal={updateExperienceGoal}
+              onEditSectionField={updateSectionText}
+              onEditSectionNotes={updateSectionNotes}
+              onToggleSectionLock={toggleSectionLock}
+              onMoveSection={moveSection}
+              onGenerateImage={(jobId, brief, size) =>
+                generateImageForJob(jobId, brief, size)
+              }
+            />
+          </div>
+        </CardContent>
+      </Card>
+    ) : null;
 
   const tabsSection = (
-    <Tabs defaultValue="brief" className="space-y-4">
+    <Tabs defaultValue="guidance" className="space-y-4">
       <TabsList>
-        <TabsTrigger value="brief">AI Brief</TabsTrigger>
-        <TabsTrigger value="modules">Modules</TabsTrigger>
+        <TabsTrigger value="guidance">Guidance</TabsTrigger>
         <TabsTrigger value="output">Output</TabsTrigger>
         <TabsTrigger value="checks">Checks</TabsTrigger>
       </TabsList>
 
-      <TabsContent value="brief" className="space-y-4">
-        <div className="rounded-md border bg-card p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">Prompt contract</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                This is the working prompt assembled from your links, notes,
-                uploaded assets, and module strategy.
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={copyPrompt}
-            >
-              <Clipboard className="mr-2 h-4 w-4" />
-              {promptCopied ? 'Copied' : 'Copy prompt'}
-            </Button>
-          </div>
-        </div>
-        <pre className="max-h-[70vh] overflow-auto rounded-md border bg-muted p-4 text-xs leading-5">
-          {aiPrompt}
-        </pre>
-      </TabsContent>
-
-      <TabsContent value="modules" className="space-y-4">
-        <div className="rounded-md border bg-card p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" />
-              <h2 className="font-semibold">Editable package plan</h2>
-            </div>
-            <Button type="button" size="sm" onClick={copyPrompt}>
-              <Sparkles className="mr-2 h-4 w-4" />
-              Send to AI
-            </Button>
-          </div>
-          <p className="mt-2 text-sm text-muted-foreground">
-            These modules are the starting layout the AI should refine, replace,
-            or reorder based on the product and source evidence.
-          </p>
-        </div>
-        {modules.map((module, index) => (
-          <ModulePreview
-            key={module.id}
-            module={module}
-            canMoveUp={index > 0}
-            canMoveDown={index < modules.length - 1}
-            canRemove={modules.length > 1}
-            onMoveUp={() => moveModule(module.id, -1)}
-            onMoveDown={() => moveModule(module.id, 1)}
-            onRemove={() => removeModule(module.id)}
-          />
-        ))}
+      <TabsContent value="guidance" className="space-y-4">
+        <APlusGuidancePanel
+          strategyPromptPreview={strategyPromptPreview}
+          moduleCopyRulesPreview={MODULE_COPY_RULES_PREVIEW}
+          guidanceStrategy={guidanceStrategy}
+          guidanceModuleCopy={guidanceModuleCopy}
+          onGuidanceStrategyChange={setGuidanceStrategy}
+          onGuidanceModuleCopyChange={setGuidanceModuleCopy}
+          onCopyStrategyPrompt={copyPrompt}
+          strategyPromptCopied={promptCopied}
+        />
       </TabsContent>
 
       <TabsContent value="output" className="space-y-4">
@@ -4869,10 +3888,12 @@ export function APlusEditor({
               <Bot className="h-3.5 w-3.5" />
               AI package
             </Badge>
-            <Badge variant="outline" className="gap-1.5">
-              <PackageCheck className="h-3.5 w-3.5" />
-              {modules.length} modules
-            </Badge>
+            {experience ? (
+              <Badge variant="outline" className="gap-1.5">
+                <PackageCheck className="h-3.5 w-3.5" />
+                {experience.sections.length} sections
+              </Badge>
+            ) : null}
             <Badge variant="outline" className="gap-1.5">
               <FileImage className="h-3.5 w-3.5" />
               {libraryAssetCount} images
@@ -4889,7 +3910,6 @@ export function APlusEditor({
         <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[360px_1fr]">
           <aside className="space-y-4">
             {draftWorkspaceCard}
-            {strategyCard}
             {intakeCard}
             {sourcesCard}
             {assetsCard}
@@ -5144,6 +4164,32 @@ export function APlusEditor({
                       models are slower but stronger.
                     </p>
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="generation-creativity">Creativity</Label>
+                    <select
+                      id="generation-creativity"
+                      aria-label="Creativity"
+                      value={creativity}
+                      onChange={(event) =>
+                        setCreativity(event.target.value as APlusCreativity)
+                      }
+                      className={FIELD_CLASSNAME}
+                    >
+                      <option value="low">
+                        Low — plays it safe, sticks closely to your facts
+                      </option>
+                      <option value="medium">
+                        Medium — balanced (recommended)
+                      </option>
+                      <option value="high">
+                        High — bolder angles, more varied wording
+                      </option>
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      Applies to copywriting; the module plan itself stays
+                      grounded.
+                    </p>
+                  </div>
                   <div className="flex flex-wrap items-center gap-3">
                     <Button
                       type="button"
@@ -5157,7 +4203,7 @@ export function APlusEditor({
                       )}
                       {generateStatus === 'generating'
                         ? 'Generating'
-                        : generatedPackage
+                        : experience
                         ? 'Regenerate Package'
                         : 'Generate A+ Package'}
                     </Button>
