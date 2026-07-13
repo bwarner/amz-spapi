@@ -376,12 +376,12 @@ export const AMAZON_MODULE_TYPE_TO_KIND: Record<
   STANDARD_TECH_SPECS: 'tech-specs',
   STANDARD_PRODUCT_DESCRIPTION: 'text-only',
   STANDARD_TEXT: 'text-only',
-  // A two-panel scenario split (e.g. Hot vs Cold). Exports as one image; the
-  // seller uploads it into a standard image module in Seller Central.
-  STANDARD_DUAL_USE_SPLIT: 'dual-use-split',
-  // No native Amazon icon-row module — the strip bakes into one image the
-  // seller drops into a standard image module.
-  STANDARD_ICON_ROW: 'icon-row',
+  // Legacy app-invented codes — NOT real Seller Central module types. Kept only
+  // so drafts generated before they were removed from the renderable set still
+  // parse and render; new generations can no longer produce them, and
+  // normalizeAmazonModuleType() rewrites them to a real type on draft load.
+  STANDARD_DUAL_USE_SPLIT: 'dual-use-split', // legacy
+  STANDARD_ICON_ROW: 'icon-row', // legacy
 };
 
 export function amazonModuleTypeToKind(
@@ -443,6 +443,42 @@ export function isAplusGenerationModel(id: string): boolean {
   return APLUS_GENERATION_MODEL_IDS.has(id);
 }
 
+/**
+ * Creativity level for A+ generation. Surfaced in the UI as Low/Medium/High
+ * ("Creativity") and mapped server-side to per-phase sampling temperatures —
+ * the word "temperature" never reaches the UI.
+ */
+export const APLUS_CREATIVITY_LEVELS = ['low', 'medium', 'high'] as const;
+export const APlusCreativitySchema = z.enum(APLUS_CREATIVITY_LEVELS);
+export type APlusCreativity = z.infer<typeof APlusCreativitySchema>;
+
+/**
+ * Per-phase temperature mapping. The strategy phase emits a schema-constrained
+ * plan where higher temperature mostly buys enum drift and JSON flakiness, so
+ * it stays conservative at every level; module copy is per-field prose where
+ * creativity is the point, so it gets the full range (low is 0.3 rather than
+ * 0.2 so "Low" still avoids robotic repetition across 5–7 modules).
+ */
+export const APLUS_CREATIVITY_TEMPERATURE: Record<
+  'strategy' | 'moduleCopy',
+  Record<APlusCreativity, number>
+> = {
+  strategy: { low: 0.2, medium: 0.4, high: 0.6 },
+  moduleCopy: { low: 0.3, medium: 0.7, high: 1.0 },
+};
+
+/**
+ * Optional seller guidance appended to the generation prompts (advanced mode).
+ * Bounded so a runaway paste can't blow up the prompt; compliance rules in the
+ * base prompts always take precedence over guidance.
+ */
+export const APLUS_GUIDANCE_MAX_LENGTH = 2000;
+export const APlusGuidanceSchema = z.object({
+  strategy: z.string().max(APLUS_GUIDANCE_MAX_LENGTH).optional(),
+  moduleCopy: z.string().max(APLUS_GUIDANCE_MAX_LENGTH).optional(),
+});
+export type APlusGuidance = z.infer<typeof APlusGuidanceSchema>;
+
 /** True if the type maps to a real renderable layout (i.e. not the fallback). */
 export function isRenderableAmazonModuleType(
   amazonModuleType: string
@@ -468,8 +504,6 @@ export const RENDERABLE_AMAZON_MODULE_TYPES = [
   'STANDARD_COMPARISON_TABLE',
   'STANDARD_TECH_SPECS',
   'STANDARD_PRODUCT_DESCRIPTION',
-  'STANDARD_DUAL_USE_SPLIT',
-  'STANDARD_ICON_ROW',
 ] as const satisfies readonly (keyof typeof AMAZON_MODULE_TYPE_TO_KIND)[];
 export type RenderableAmazonModuleType =
   (typeof RENDERABLE_AMAZON_MODULE_TYPES)[number];
@@ -495,8 +529,8 @@ export const SELLER_CENTRAL_MODULE_NAMES: Record<string, string> = {
   STANDARD_TECH_SPECS: 'Standard Technical Specifications',
   STANDARD_TEXT: 'Standard Text',
   STANDARD_THREE_IMAGE_TEXT: 'Standard Three Image & Text',
-  STANDARD_DUAL_USE_SPLIT: 'Standard Image (two-scenario split)',
-  STANDARD_ICON_ROW: 'Standard Image (icon highlights strip)',
+  STANDARD_DUAL_USE_SPLIT: 'Standard Image (two-scenario split)', // legacy
+  STANDARD_ICON_ROW: 'Standard Image (icon highlights strip)', // legacy
 };
 
 /** Seller Central A+ module picker name for a given module type. */
@@ -504,29 +538,69 @@ export function sellerCentralModuleName(amazonModuleType: string): string {
   return SELLER_CENTRAL_MODULE_NAMES[amazonModuleType] || amazonModuleType;
 }
 
+/**
+ * Legacy app-invented "Amazon" codes remapped to the real Seller Central type
+ * a seller would actually use. Both legacy layouts export as one wide PNG the
+ * seller uploads into a standard image module, so the image-header module is
+ * the honest deployment target.
+ */
+export const LEGACY_AMAZON_MODULE_TYPE_REMAP: Record<string, string> = {
+  STANDARD_DUAL_USE_SPLIT: 'STANDARD_HEADER_IMAGE_TEXT',
+  STANDARD_ICON_ROW: 'STANDARD_HEADER_IMAGE_TEXT',
+};
+
+/** Rewrites legacy fake module type codes to a real Seller Central type. */
+export function normalizeAmazonModuleType(amazonModuleType: string): string {
+  return LEGACY_AMAZON_MODULE_TYPE_REMAP[amazonModuleType] ?? amazonModuleType;
+}
+
 /** All image slots in a module (in render order), for per-slot image generation. */
 export function moduleImageSlots(
   module: APlusGeneratedModule
 ): APlusImageSlot[] {
+  return moduleImageSlotEntries(module).map((entry) => entry.slot);
+}
+
+/**
+ * Image slots with their descriptor path into the module (same order as
+ * moduleImageSlots), so editors can update slot fields — e.g. the brief at
+ * [...path, 'brief'] — via setModuleTextField.
+ */
+export function moduleImageSlotEntries(
+  module: APlusGeneratedModule
+): Array<{ slot: APlusImageSlot; path: APlusTextFieldPath }> {
   switch (module.type) {
     case 'company-logo':
       // The logo itself is the seller's uploaded brand asset (never AI), but the
       // ambient brand BACKDROP behind it is AI-generated, so expose that slot.
-      return module.background ? [module.background] : [];
+      return module.background
+        ? [{ slot: module.background, path: ['background'] }]
+        : [];
     case 'image-header-with-text':
     case 'image-text-overlay':
     case 'single-image-text':
     case 'image-and-text':
-      return [module.image];
+      return [{ slot: module.image, path: ['image'] }];
     case 'three-image-text':
-      return module.columns.map((column) => column.image);
+      return module.columns.map((column, index) => ({
+        slot: column.image,
+        path: ['columns', index, 'image'],
+      }));
     case 'four-image-text-quadrant':
-      return module.quadrants.map((quadrant) => quadrant.image);
+      return module.quadrants.map((quadrant, index) => ({
+        slot: quadrant.image,
+        path: ['quadrants', index, 'image'],
+      }));
     case 'dual-use-split':
-      return module.panels.map((panel) => panel.image);
+      return module.panels.map((panel, index) => ({
+        slot: panel.image,
+        path: ['panels', index, 'image'],
+      }));
     case 'comparison-table':
-      return module.products.flatMap((product) =>
-        product.image ? [product.image] : []
+      return module.products.flatMap((product, index) =>
+        product.image
+          ? [{ slot: product.image, path: ['products', index, 'image'] }]
+          : []
       );
     case 'tech-specs':
     case 'text-only':
@@ -612,6 +686,246 @@ export function moduleTextFields(
   }
 
   return fields;
+}
+
+// ---------------------------------------------------------------------------
+// Editable text-field descriptors. Enumerates EVERY customer-facing copy field
+// of a generated module — including empty optional ones so users can add copy,
+// plus the module title and image alt text — each with a stable path usable by
+// setModuleTextField(). moduleTextFields() above stays the "filled fields only"
+// view that the build sheet and guardrail sweep depend on.
+// ---------------------------------------------------------------------------
+
+export type APlusTextFieldPath = ReadonlyArray<string | number>;
+
+export type APlusModuleTextFieldDescriptor = {
+  label: string;
+  path: APlusTextFieldPath;
+  value: string;
+  maxLength: number;
+  multiline: boolean;
+};
+
+export function moduleTextFieldDescriptors(
+  module: APlusGeneratedModule
+): APlusModuleTextFieldDescriptor[] {
+  const fields: APlusModuleTextFieldDescriptor[] = [];
+  const add = (
+    label: string,
+    path: APlusTextFieldPath,
+    value: string | undefined | null,
+    maxLength: number,
+    multiline = false
+  ) => fields.push({ label, path, value: value ?? '', maxLength, multiline });
+
+  add('Module title', ['title'], module.title, 120);
+
+  switch (module.type) {
+    case 'company-logo':
+      add('Headline', ['headline'], module.headline, 120);
+      add('Tagline', ['tagline'], module.tagline, 120);
+      add('Logo alt text', ['logo', 'alt'], module.logo.alt, 160);
+      if (module.background) {
+        add(
+          'Backdrop alt text',
+          ['background', 'alt'],
+          module.background.alt,
+          160
+        );
+      }
+      break;
+    case 'image-header-with-text':
+    case 'image-text-overlay':
+      add('Headline', ['headline'], module.headline, 160);
+      add('Body', ['body'], module.body, 800, true);
+      add('Badge', ['badge'], module.badge, 16);
+      add('Image alt text', ['image', 'alt'], module.image.alt, 160);
+      break;
+    case 'single-image-text':
+    case 'image-and-text':
+      add('Headline', ['headline'], module.headline, 160);
+      add('Body', ['body'], module.body, 800, true);
+      module.bullets?.forEach((bullet, index) =>
+        add(`Bullet ${index + 1}`, ['bullets', index], bullet, 160)
+      );
+      add('Badge', ['badge'], module.badge, 16);
+      add('Image alt text', ['image', 'alt'], module.image.alt, 160);
+      break;
+    case 'three-image-text':
+      module.columns.forEach((column, index) => {
+        add(
+          `Column ${index + 1} headline`,
+          ['columns', index, 'headline'],
+          column.headline,
+          160
+        );
+        add(
+          `Column ${index + 1} body`,
+          ['columns', index, 'body'],
+          column.body,
+          400,
+          true
+        );
+        add(
+          `Column ${index + 1} image alt`,
+          ['columns', index, 'image', 'alt'],
+          column.image.alt,
+          160
+        );
+      });
+      break;
+    case 'four-image-text-quadrant':
+      module.quadrants.forEach((quadrant, index) => {
+        add(
+          `Block ${index + 1} headline`,
+          ['quadrants', index, 'headline'],
+          quadrant.headline,
+          160
+        );
+        add(
+          `Block ${index + 1} body`,
+          ['quadrants', index, 'body'],
+          quadrant.body,
+          400,
+          true
+        );
+        add(
+          `Block ${index + 1} image alt`,
+          ['quadrants', index, 'image', 'alt'],
+          quadrant.image.alt,
+          160
+        );
+      });
+      break;
+    case 'comparison-table':
+      module.products.forEach((product, index) => {
+        add(
+          `Product ${index + 1}`,
+          ['products', index, 'title'],
+          product.title,
+          100
+        );
+        if (product.image) {
+          add(
+            `Product ${index + 1} image alt`,
+            ['products', index, 'image', 'alt'],
+            product.image.alt,
+            160
+          );
+        }
+      });
+      module.rows.forEach((row, rowIndex) => {
+        add(
+          `Row ${rowIndex + 1} label`,
+          ['rows', rowIndex, 'label'],
+          row.label,
+          60
+        );
+        row.values.forEach((value, valueIndex) =>
+          add(
+            `${row.label || `Row ${rowIndex + 1}`} — ${
+              module.products[valueIndex]?.title || `Product ${valueIndex + 1}`
+            }`,
+            ['rows', rowIndex, 'values', valueIndex],
+            value,
+            80
+          )
+        );
+      });
+      break;
+    case 'tech-specs':
+      add('Headline', ['headline'], module.headline, 160);
+      module.rows.forEach((row, index) => {
+        add(`Spec ${index + 1} label`, ['rows', index, 'label'], row.label, 60);
+        add(
+          `Spec ${index + 1} value`,
+          ['rows', index, 'value'],
+          row.value,
+          200
+        );
+      });
+      break;
+    case 'text-only':
+      add('Headline', ['headline'], module.headline, 160);
+      add('Body', ['body'], module.body, 1200, true);
+      module.bullets?.forEach((bullet, index) =>
+        add(`Bullet ${index + 1}`, ['bullets', index], bullet, 160)
+      );
+      break;
+    case 'dual-use-split':
+      module.panels.forEach((panel, index) => {
+        add(
+          `Panel ${index + 1} label`,
+          ['panels', index, 'label'],
+          panel.label,
+          40
+        );
+        add(
+          `Panel ${index + 1} caption`,
+          ['panels', index, 'caption'],
+          panel.caption,
+          160
+        );
+        add(
+          `Panel ${index + 1} image alt`,
+          ['panels', index, 'image', 'alt'],
+          panel.image.alt,
+          160
+        );
+      });
+      break;
+    case 'icon-row':
+      module.items.forEach((item, index) =>
+        add(
+          `Icon ${index + 1} label`,
+          ['items', index, 'label'],
+          item.label,
+          40
+        )
+      );
+      break;
+  }
+
+  return fields;
+}
+
+/**
+ * Immutably sets one text field on a generated module by descriptor path.
+ * Clearing a field (empty/whitespace value) stores undefined for object keys
+ * and an empty string for array elements (so arrays keep their shape). Editing
+ * a slot's alt text also mirrors the value onto the slot's resolved image, so
+ * an already-generated image keeps matching alt text.
+ */
+export function setModuleTextField<T extends APlusGeneratedModule>(
+  module: T,
+  path: APlusTextFieldPath,
+  value: string
+): T {
+  if (path.length === 0) return module;
+  const next = structuredClone(module);
+  let parent: unknown = next;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (parent === null || typeof parent !== 'object') return module;
+    parent = (parent as Record<string | number, unknown>)[path[i]];
+  }
+  if (parent === null || typeof parent !== 'object') return module;
+
+  const target = parent as Record<string | number, unknown>;
+  const tail = path[path.length - 1];
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    target[tail] = typeof tail === 'number' ? '' : undefined;
+  } else {
+    // Store the raw value (not trimmed) so typing trailing spaces works.
+    target[tail] = value;
+    if (tail === 'alt') {
+      const image = (target as { image?: unknown }).image;
+      if (image !== null && typeof image === 'object' && 'alt' in image) {
+        (image as { alt: string }).alt = value;
+      }
+    }
+  }
+  return next;
 }
 
 export const APLUS_GUARDRAIL_PATTERNS: Array<{
