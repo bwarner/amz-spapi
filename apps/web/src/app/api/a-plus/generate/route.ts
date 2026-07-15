@@ -6,22 +6,31 @@ import {
   APlusCreativitySchema,
   APlusGeneratedModuleSchema,
   APlusGuidanceSchema,
-  RENDERABLE_AMAZON_MODULE_TYPES,
-  type RenderableAmazonModuleType,
-  amazonModuleTypeToKind,
+  KIND_TO_AMAZON,
+  NarrativePlanSchema,
+  fallbackNarrativeBeats,
   generatedModuleSchemaForKind,
   isAplusGenerationModel,
-  isRenderableAmazonModuleType,
+  liftGeneratedPackageToExperience,
   moduleImageSlots,
+  moduleKindForBeat,
+  sanitizeNarrativeBeats,
+  type APlusGeneratedModuleKind,
+  type NarrativeBeat,
+  type NarrativePlan,
 } from '@farvisionllc/models';
 import { auth0 } from '../../../../lib/auth0';
+import { aplusGenerateInputSchema } from '../../../../lib/aplus-generate-request';
 import {
+  FACT_CONSISTENCY_RULE,
   MODULE_FIELD_RULES,
   NO_TIME_SENSITIVE_RULE,
   aplusModuleLimitForTier,
+  buildFactSheetBlock,
   buildModuleCopyGuidanceBlock,
-  buildStrategyGuidanceBlock,
-  buildStrategyPrompt,
+  buildNarrativeContextBlock,
+  buildNarrativePlanPrompt,
+  buildShotBibleBlock,
   compactGenerationInput,
   humanProductName,
 } from '../../../../lib/aplus-generation-prompts';
@@ -32,124 +41,14 @@ import {
 
 export const maxDuration = 120;
 
-const sourceSchema = z.object({
-  id: z.number().optional(),
-  kind: z.string(),
-  url: z.string(),
-});
-
-const assetSchema = z.object({
-  id: z.string(),
-  fileName: z.string(),
-  description: z.string().optional(),
-  asset: z
-    .object({
-      assetId: z.string(),
-      originalFileName: z.string(),
-      mimeType: z.string(),
-      storage: z.object({
-        provider: z.string(),
-        bucket: z.string(),
-        key: z.string(),
-      }),
-    })
-    .optional(),
-  uploadStatus: z.string().optional(),
-});
-
-const requestSchema = z.object({
-  productName: z.string().optional(),
-  asin: z.string().optional(),
+const requestSchema = aplusGenerateInputSchema.extend({
   // Optional generation model override (gateway slug). Validated against the
   // shared allowlist before use; anything else falls back to the server default.
   model: z.string().optional(),
-  contentTier: z.enum(['Basic A+', 'Premium A+']).default('Basic A+'),
   // "Creativity" in the UI — mapped to per-phase sampling temperature.
   creativity: APlusCreativitySchema.default('medium'),
   // Optional advanced-mode seller guidance appended to the prompts.
   guidance: APlusGuidanceSchema.optional(),
-  rawNotes: z.string().optional(),
-  productOneLiner: z.string().optional(),
-  targetCustomer: z.string().optional(),
-  pricePoint: z.string().optional(),
-  keyFeatures: z.string().optional(),
-  differentiators: z.string().optional(),
-  objections: z.string().optional(),
-  brand: z
-    .object({
-      name: z.string().optional(),
-      brandName: z.string().optional(),
-      colors: z.string().optional(),
-      fonts: z.string().optional(),
-      voice: z.string().optional(),
-      logoNotes: z.string().optional(),
-      logoAssetId: z.string().optional(),
-    })
-    .optional(),
-  sources: z.array(sourceSchema).default([]),
-  assets: z.array(assetSchema).default([]),
-});
-
-const strategySchema = z.object({
-  productSummary: z.string(),
-  buyer: z.object({
-    likelyCustomer: z.string(),
-    purchaseContext: z.string(),
-    mainObjections: z.array(z.string()),
-  }),
-  usableAssets: z.array(
-    z.object({
-      fileName: z.string(),
-      likelyUse: z.string(),
-      confidence: z.enum(['low', 'medium', 'high']),
-      notes: z.string(),
-    })
-  ),
-  missingFacts: z.array(
-    z.object({
-      fact: z.string(),
-      whyItMatters: z.string(),
-      canProceedWithoutIt: z.boolean(),
-    })
-  ),
-  modulePlan: z.array(
-    z.object({
-      // Constrained to canonical Amazon module types so each planned module maps
-      // to a DISTINCT renderable layout (free-form labels collapse to the
-      // single-image-text fallback → every module looks identical).
-      moduleType: z.enum(RENDERABLE_AMAZON_MODULE_TYPES),
-      role: z.string(),
-      assetsToUse: z.array(z.string()),
-      reason: z.string(),
-    })
-  ),
-});
-
-const moduleSpecSchema = z.object({
-  order: z.number(),
-  amazonModuleType: z.enum(RENDERABLE_AMAZON_MODULE_TYPES),
-  title: z.string(),
-  objective: z.string(),
-});
-
-const packageOuterSchema = z.object({
-  title: z.string(),
-  executiveSummary: z.string(),
-  creativeDirection: z.object({
-    positioning: z.string(),
-    visualSystem: z.string(),
-    mobilePrinciple: z.string(),
-    imagePlan: z.string(),
-  }),
-  assumptions: z.array(z.string()),
-  moduleSpecs: z.array(moduleSpecSchema).min(1).max(8),
-  sellerCentralBuildSheet: z.array(
-    z.object({
-      step: z.string(),
-      value: z.string(),
-    })
-  ),
-  qualityChecklist: z.array(z.string()),
 });
 
 const packageSchema = z.object({
@@ -172,102 +71,62 @@ const packageSchema = z.object({
   qualityChecklist: z.array(z.string()),
 });
 
-type StrategyOutput = z.infer<typeof strategySchema>;
-type PackageOuterOutput = z.infer<typeof packageOuterSchema>;
+/**
+ * Static Seller Central hand-off notes — previously synthesized by the
+ * deterministic package planner, now route constants.
+ */
+const DEFAULT_BUILD_SHEET = [
+  {
+    step: 'Create module sequence',
+    value: 'Build modules in the generated top-to-bottom order.',
+  },
+  {
+    step: 'Prepare desktop and mobile assets',
+    value:
+      'Export each module image at the requested dimensions and keep source files editable.',
+  },
+  {
+    step: 'Review compliance',
+    value:
+      'Remove price, discount, shipping, stock, time-sensitive, and unsupported claims before upload.',
+  },
+];
 
-function buildPackageOuterFromStrategy(
+const DEFAULT_QUALITY_CHECKLIST = [
+  'Every claim is supported by product facts or conservative assumptions.',
+  'No price, promotion, shipping-speed, stock, or time-sensitive language appears in copy or imagery.',
+  'Desktop and mobile layouts are composed separately, not just resized.',
+  'Alt text describes the visual content without adding unsupported claims.',
+];
+
+/**
+ * Deterministic narrative plan used when the planning call fails or returns
+ * nothing usable — generation never hard-fails on a bad plan.
+ */
+function fallbackNarrativePlan(
   input: z.infer<typeof requestSchema>,
-  strategy: StrategyOutput
-): PackageOuterOutput {
-  const maxModules = aplusModuleLimitForTier(input.contentTier);
-  // Keep only planned modules that map to a real renderable layout, and dedupe
-  // by layout KIND so two modules never render as the same design (the user's
-  // "all modules look the same" complaint). The default sequence below pads up
-  // to the tier target with additional distinct layouts.
-  const seenKinds = new Set<string>();
-  const plannedModules = strategy.modulePlan
-    .filter((module) => isRenderableAmazonModuleType(module.moduleType))
-    .filter((module) => {
-      const kind = amazonModuleTypeToKind(module.moduleType);
-      if (seenKinds.has(kind)) return false;
-      seenKinds.add(kind);
-      return true;
-    })
-    .slice(0, maxModules);
-  // A coherent default A+ story, using only Amazon module types we can render.
-  // Used to pad the AI's plan up to the tier target so Basic always ships a
-  // full set of modules instead of however few the strategy happened to name.
-  const defaultSequence: Array<{
-    moduleType: RenderableAmazonModuleType;
-    role: string;
-    assetsToUse: string[];
-    reason: string;
-  }> = [
-    {
-      moduleType: 'STANDARD_IMAGE_TEXT_OVERLAY',
-      role: 'Introduce the product and primary buyer benefit.',
-      assetsToUse: [],
-      reason: 'Gives shoppers a fast, clear reason to keep reading.',
-    },
-    {
-      moduleType: 'STANDARD_THREE_IMAGE_TEXT',
-      role: 'Explain the strongest features as scannable benefits.',
-      assetsToUse: [],
-      reason: 'Turns product details into an easy-to-scan benefit row.',
-    },
-    {
-      moduleType: 'STANDARD_FOUR_IMAGE_TEXT_QUADRANT',
-      role: 'Show use cases, kit contents, or additional benefits.',
-      assetsToUse: [],
-      reason: 'Adds breadth of benefits without long copy.',
-    },
-    {
-      moduleType: 'STANDARD_COMPARISON_TABLE',
-      role: 'Help shoppers choose the right option or understand positioning.',
-      assetsToUse: [],
-      reason: 'Supports decision speed without promotional claims.',
-    },
-    {
-      moduleType: 'STANDARD_TECH_SPECS',
-      role: 'Clarify dimensions, materials, care, and compatibility.',
-      assetsToUse: [],
-      reason: 'Reduces buyer uncertainty before purchase.',
-    },
-    {
-      moduleType: 'STANDARD_HEADER_IMAGE_TEXT',
-      role: 'Tell the brand or product story.',
-      assetsToUse: [],
-      reason: 'Builds trust and context for the buyer.',
-    },
-  ];
-  const fallbackModules = [...plannedModules];
-  // Rotate the fallback order per product so two different products don't pad
-  // out to the same canonical tail when the AI plan is short.
-  const rot =
-    humanProductName(input).length % Math.max(1, defaultSequence.length);
-  const rotatedDefault = [
-    ...defaultSequence.slice(rot),
-    ...defaultSequence.slice(0, rot),
-  ];
-  for (const candidate of rotatedDefault) {
-    if (fallbackModules.length >= maxModules) break;
-    const kind = amazonModuleTypeToKind(candidate.moduleType);
-    if (seenKinds.has(kind)) continue;
-    seenKinds.add(kind);
-    fallbackModules.push(candidate);
-  }
-
+  beatCount: number
+): NarrativePlan {
+  const productName = humanProductName(input);
   return {
-    title: `${humanProductName(input)} A+ content package`,
-    executiveSummary:
-      strategy.productSummary ||
-      `A practical A+ package for ${humanProductName(
-        input
-      )} focused on durable shopper benefits and clear buying confidence.`,
-    creativeDirection: {
+    productSummary:
+      input.productOneLiner?.trim() ||
+      `A practical A+ package for ${productName} focused on durable shopper benefits and clear buying confidence.`,
+    buyer: {
+      likelyCustomer:
+        input.targetCustomer?.trim() || 'Everyday buyers of this category.',
+      purchaseContext:
+        'Comparing options quickly; needs clear, durable reasons to choose this product.',
+      mainObjections: (input.objections ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean),
+    },
+    usableAssets: [],
+    missingFacts: [],
+    artDirection: {
       positioning:
         input.productOneLiner?.trim() ||
-        strategy.buyer.purchaseContext ||
         'Position the product around durable use-case value and buyer confidence.',
       visualSystem:
         input.brand?.colors?.trim() ||
@@ -276,48 +135,14 @@ function buildPackageOuterFromStrategy(
       mobilePrinciple:
         'Use stacked compositions, short headlines, and fewer callouts so each module scans cleanly on small screens.',
       imagePlan:
-        strategy.usableAssets.length > 0
-          ? `Prioritize uploaded assets: ${strategy.usableAssets
+        input.assets.length > 0
+          ? `Prioritize uploaded assets: ${input.assets
               .slice(0, 4)
               .map((asset) => asset.fileName)
               .join(', ')}.`
           : 'Use generated or newly shot editorial product imagery only where it directly clarifies a benefit.',
     },
-    assumptions: [
-      ...strategy.missingFacts
-        .filter((fact) => fact.canProceedWithoutIt)
-        .map((fact) => `${fact.fact}: ${fact.whyItMatters}`),
-      'Package planning used the fast deterministic planner to avoid long AI planning latency.',
-    ],
-    moduleSpecs: fallbackModules.map((module, index) => ({
-      order: index + 1,
-      amazonModuleType: module.moduleType,
-      title:
-        module.role.split(/[.!?]/)[0]?.slice(0, 80) || `Module ${index + 1}`,
-      objective: module.reason,
-    })),
-    sellerCentralBuildSheet: [
-      {
-        step: 'Create module sequence',
-        value: 'Build modules in the generated top-to-bottom order.',
-      },
-      {
-        step: 'Prepare desktop and mobile assets',
-        value:
-          'Export each module image at the requested dimensions and keep source files editable.',
-      },
-      {
-        step: 'Review compliance',
-        value:
-          'Remove price, discount, shipping, stock, time-sensitive, and unsupported claims before upload.',
-      },
-    ],
-    qualityChecklist: [
-      'Every claim is supported by product facts or conservative assumptions.',
-      'No price, promotion, shipping-speed, stock, or time-sensitive language appears in copy or imagery.',
-      'Desktop and mobile layouts are composed separately, not just resized.',
-      'Alt text describes the visual content without adding unsupported claims.',
-    ],
+    beats: fallbackNarrativeBeats(productName, beatCount),
   };
 }
 
@@ -360,7 +185,10 @@ function prepareGeneratedImagePrompt(
     // The image model sees ONLY this prompt — no shot bible, no module plan —
     // so always restate what the product is or it will invent a subject.
     ...(productContext
-      ? [`THE HERO PRODUCT IN THIS SHOT: ${productContext}`, '']
+      ? [
+          `THE HERO PRODUCT IN THIS SHOT — depict EXACTLY this product; every physical detail listed here (colors, lid color, materials, counts) is MANDATORY and overrides anything else: ${productContext}`,
+          '',
+        ]
       : []),
     prompt,
     '',
@@ -374,7 +202,9 @@ function imageProductContext(input: z.infer<typeof requestSchema>): string {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(0, 4)
+    // Physical appearance facts (e.g. lid color) often sit low in the list —
+    // carry enough lines that the image model actually hears about them.
+    .slice(0, 8)
     .join('; ');
   return [
     humanProductName(input),
@@ -383,7 +213,7 @@ function imageProductContext(input: z.infer<typeof requestSchema>): string {
   ]
     .filter(Boolean)
     .join('. ')
-    .slice(0, 500);
+    .slice(0, 700);
 }
 
 function classifyError(detail: string, phase: string) {
@@ -397,11 +227,9 @@ function classifyError(detail: string, phase: string) {
     return {
       message:
         phase === 'package-modules'
-          ? 'Module generation timed out. This usually clears up on retry.'
-          : phase === 'package-outer'
-          ? 'The package planning step timed out. Please retry.'
-          : phase === 'strategy'
-          ? 'The AI gateway timed out building your strategy. Please retry.'
+          ? 'Section writing timed out. This usually clears up on retry.'
+          : phase === 'narrative'
+          ? 'The AI gateway timed out planning your story. Please retry.'
           : 'Image generation timed out. Please retry.',
       status: 504,
     };
@@ -440,9 +268,19 @@ function isTemperatureRejection(err: unknown): boolean {
   return /temperature/i.test(message);
 }
 
+/** One writing task, derived from a narrative beat. */
+type ModuleSpec = {
+  order: number;
+  kind: APlusGeneratedModuleKind;
+  amazonModuleType: string;
+  job: NarrativeBeat['job'];
+  title: string;
+  objective: string;
+};
+
 type ModuleGenContext = {
   provider: ReturnType<typeof createProvider>;
-  moduleSpecs: z.infer<typeof packageOuterSchema>['moduleSpecs'];
+  moduleSpecs: ModuleSpec[];
   sharedContextBlock: string;
   /** Sampling temperature for module copy (from the creativity level). */
   temperature: number;
@@ -483,9 +321,14 @@ function salvageModulesFromText(
     if (!Array.isArray(parsed.modules)) return null;
     const modules: z.infer<typeof APlusGeneratedModuleSchema>[] = [];
     let invalid = 0;
-    for (const candidate of parsed.modules.slice(0, expected)) {
+    // The single-call writer produces modules in PLAN ORDER, so a module's
+    // position in the raw array is its true beat order — keep it, or the
+    // survivors get renumbered onto the wrong beats.
+    for (const [rawIndex, candidate] of parsed.modules
+      .slice(0, expected)
+      .entries()) {
       const result = APlusGeneratedModuleSchema.safeParse(candidate);
-      if (result.success) modules.push(result.data);
+      if (result.success) modules.push({ ...result.data, order: rawIndex + 1 });
       else invalid++;
     }
     return modules.length ? { modules, invalid } : null;
@@ -505,7 +348,8 @@ async function generateModulesSingle(
   const planForPrompt = moduleSpecs.map((spec) => ({
     order: spec.order,
     amazonModuleType: spec.amazonModuleType,
-    type: amazonModuleTypeToKind(spec.amazonModuleType),
+    type: spec.kind,
+    job: spec.job,
     title: spec.title,
     objective: spec.objective,
   }));
@@ -566,11 +410,11 @@ async function generateModulesSingle(
         // every module that validates on its own.
         const salvaged = salvageModulesFromText(err.text, moduleSpecs.length);
         if (salvaged) {
-          salvaged.modules.forEach((module, index) => {
-            results.push({ ...module, order: index + 1 });
+          salvaged.modules.forEach((module) => {
+            results.push(module);
             emit({
               type: 'module-done',
-              order: index + 1,
+              order: module.order,
               ms: Date.now() - startMs,
             });
           });
@@ -608,11 +452,12 @@ async function generateModulesParallel(
   await Promise.all(
     moduleSpecs.map(async (spec) => {
       const tThisModule = Date.now();
-      const kind = amazonModuleTypeToKind(spec.amazonModuleType);
+      const kind = spec.kind;
       const modulePrompt = [
         'You are SellAvant, producing ONE structured module of an Amazon A+ content package.',
         `This module is the "${kind}" type. Set the "type" field to exactly "${kind}".`,
         `Set order=${spec.order}, amazonModuleType="${spec.amazonModuleType}", and title to a short module label.`,
+        `This section's conversion job is "${spec.job}". Its intent: ${spec.objective}`,
         'Fill EVERY field the schema defines for this module type, and ONLY those fields. Do not invent fields. No bracket placeholders, no "[unknown]".',
         'Match the global creative direction — same positioning, voice, and visual system as the rest of the package.',
         '',
@@ -705,38 +550,6 @@ function ensureLogoBackdrop(
   }
 }
 
-/**
- * Append a brand FOOTER — a clean typographic closing band (`company-logo`
- * with placement 'footer') — so the page has a clear bookend. Reuses the
- * opening logo module's logo + tagline when present; idempotent and capped so
- * we never exceed a sane module count. Deliberately has NO backdrop slot: the
- * footer renders as a typographic band on brand paper, so a generated photo
- * would be ignored (and would waste an image credit).
- */
-function ensureBrandFooter(
-  modules: z.infer<typeof APlusGeneratedModuleSchema>[]
-): void {
-  if (!modules.length || modules.length >= 7) return;
-  const last = modules[modules.length - 1];
-  if (last.type === 'company-logo' && last.placement === 'footer') return;
-  const header = modules.find((m) => m.type === 'company-logo');
-  const logo = header?.logo ?? {
-    role: 'logo',
-    brief: 'Brand logo (seller-supplied, never generated).',
-    size: '1024x1024' as const,
-    alt: 'Brand logo',
-  };
-  modules.push({
-    order: modules.length + 1,
-    type: 'company-logo',
-    amazonModuleType: 'STANDARD_COMPANY_LOGO',
-    title: 'Brand footer',
-    placement: 'footer',
-    logo,
-    tagline: header?.tagline,
-  });
-}
-
 export async function POST(request: Request) {
   const session = await auth0.getSession();
   if (!session?.user?.sub) {
@@ -768,17 +581,12 @@ export async function POST(request: Request) {
       };
 
       const tStart = Date.now();
-      let phase: 'strategy' | 'package-outer' | 'package-modules' | 'images' =
-        'strategy';
+      let phase: 'narrative' | 'package-modules' | 'images' = 'narrative';
 
       console.log(
         '[a-plus-generate] start',
         JSON.stringify({
-          strategyModel: provider.modelId('fast'),
-          packageOuterModel:
-            process.env['A_PLUS_USE_AI_PACKAGE_PLANNER'] === 'true'
-              ? provider.modelId('fast')
-              : 'deterministic',
+          narrativeModel: provider.modelId('fast'),
           packageModuleModel: provider.modelId('fast'),
           contextChars: context.length,
         })
@@ -786,144 +594,108 @@ export async function POST(request: Request) {
       send({ type: 'start', contextChars: context.length });
 
       try {
-        send({ type: 'phase', phase: 'strategy' });
-        const tStrategy = Date.now();
-        const strategyPrompt = buildStrategyPrompt({
+        send({ type: 'phase', phase: 'narrative' });
+        const tNarrative = Date.now();
+        const beatCount = aplusModuleLimitForTier(input.contentTier);
+        const narrativePrompt = buildNarrativePlanPrompt({
           contextJson: context,
-          moduleCount: aplusModuleLimitForTier(input.contentTier),
+          beatCount,
           guidance: input.guidance?.strategy,
         });
-        const runStrategy = (temperature: number | undefined) =>
+        const runNarrative = (temperature: number | undefined) =>
           generateText({
             model: provider.languageModel('fast'),
             abortSignal: AbortSignal.timeout(120_000),
             temperature,
             providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
             output: Output.object({
-              schema: strategySchema,
-              name: 'a_plus_content_strategy',
+              schema: NarrativePlanSchema,
+              name: 'a_plus_narrative_plan',
             }),
-            prompt: strategyPrompt,
+            prompt: narrativePrompt,
           });
-        const strategyResult = await runStrategy(strategyTemperature).catch(
-          (err: unknown) => {
+        // Planning must never hard-fail the run — a bad/failed plan falls back
+        // to the deterministic default story.
+        const plan: NarrativePlan = await runNarrative(strategyTemperature)
+          .catch((err: unknown) => {
             // Some models reject a non-default temperature — retry without it.
-            if (isTemperatureRejection(err)) return runStrategy(undefined);
+            if (isTemperatureRejection(err)) return runNarrative(undefined);
             throw err;
-          }
-        );
-        const strategyMs = Date.now() - tStrategy;
-        console.log(
-          `[a-plus-generate] strategy: ${(strategyMs / 1000).toFixed(1)}s`
-        );
-        send({ type: 'phase-done', phase: 'strategy', ms: strategyMs });
-
-        phase = 'package-outer';
-        send({ type: 'phase', phase: 'package-outer' });
-        const tPackageOuter = Date.now();
-        const useAiPackagePlanner =
-          process.env['A_PLUS_USE_AI_PACKAGE_PLANNER'] === 'true';
-        const runAiPlanner = (temperature: number | undefined) =>
-          generateText({
-            model: provider.languageModel('fast'),
-            abortSignal: AbortSignal.timeout(45_000),
-            temperature,
-            providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
-            output: Output.object({
-              schema: packageOuterSchema,
-              name: 'a_plus_content_package_outer',
-            }),
-            prompt: [
-              'You are SellAvant, an expert Amazon A+ content producer.',
-              'Decide the high-level shape of an A+ content package. DO NOT write per-module copy yet — that comes in a follow-up step.',
-              'Return: title, executiveSummary, creativeDirection (positioning, visualSystem, mobilePrinciple, imagePlan), assumptions, sellerCentralBuildSheet, qualityChecklist, and a list of moduleSpecs.',
-              'Each moduleSpec is JUST: order (1..N), amazonModuleType (e.g. STANDARD_IMAGE_TEXT_OVERLAY, STANDARD_COMPARISON_TABLE), title (short module label), objective (1 sentence on what the module must accomplish).',
-              'Choose 4–6 moduleSpecs that combine to tell a coherent product story. Order them as they will appear top-to-bottom on the listing.',
-              'Choose the Amazon module combination yourself. The user is an ecommerce operator, not a UI designer.',
-              'Do not include bracket placeholders. If a fact is absent, make a conservative assumption and list it in assumptions, or omit the claim.',
-              NO_TIME_SENSITIVE_RULE,
-              ...(input.guidance?.strategy?.trim()
-                ? [buildStrategyGuidanceBlock(input.guidance.strategy)]
-                : []),
-              'Use the strategy below, but improve it when needed.',
-              '',
-              'INPUT',
-              context,
-              '',
-              'STRATEGY',
-              JSON.stringify(strategyResult.output, null, 2),
-            ].join('\n'),
+          })
+          .then((result) => result.output)
+          .catch((err: unknown) => {
+            const detail = err instanceof Error ? err.message : String(err);
+            console.error(
+              `[a-plus-generate] narrative planning failed — using fallback plan: ${detail.slice(
+                0,
+                300
+              )}`
+            );
+            return fallbackNarrativePlan(input, beatCount);
           });
-        const packageOuterResult = useAiPackagePlanner
-          ? await runAiPlanner(strategyTemperature).catch((err: unknown) => {
-              // Some models reject a non-default temperature — retry without.
-              if (isTemperatureRejection(err)) return runAiPlanner(undefined);
-              throw err;
-            })
-          : {
-              output: buildPackageOuterFromStrategy(
-                input,
-                strategyResult.output
-              ),
-            };
-        const outerMs = Date.now() - tPackageOuter;
+        const beats = sanitizeNarrativeBeats(plan.beats, {
+          maxBeats: beatCount,
+          productName: humanProductName(input),
+        });
+        plan.beats = beats;
+        const narrativeMs = Date.now() - tNarrative;
         console.log(
-          `[a-plus-generate] package outer: ${(outerMs / 1000).toFixed(1)}s (${
-            packageOuterResult.output.moduleSpecs.length
-          } module specs, planner=${
-            useAiPackagePlanner ? 'ai' : 'deterministic'
-          })`
+          `[a-plus-generate] narrative: ${(narrativeMs / 1000).toFixed(1)}s (${
+            beats.length
+          } beats)`
         );
-        const outer = packageOuterResult.output;
         send({
           type: 'phase-done',
-          phase: 'package-outer',
-          ms: outerMs,
-          planner: useAiPackagePlanner ? 'ai' : 'deterministic',
-          moduleSpecs: outer.moduleSpecs.map((s) => ({
-            order: s.order,
-            amazonModuleType: s.amazonModuleType,
-            title: s.title,
+          phase: 'narrative',
+          ms: narrativeMs,
+          beats: beats.map((beat) => ({
+            order: beat.order,
+            job: beat.job,
+            archetype: beat.archetype,
+            intent: beat.intent,
           })),
         });
 
         phase = 'package-modules';
-        send({
-          type: 'phase',
-          phase: 'package-modules',
-          total: outer.moduleSpecs.length,
-        });
+        send({ type: 'phase', phase: 'package-modules', total: beats.length });
         const tModules = Date.now();
-        // Shared "shot bible" so every module's image brief depicts the SAME
-        // product in the SAME look — the page reads as one photoshoot, not a
-        // pile of unrelated AI images (the biggest "this is AI" tell).
-        const shotBible = [
-          'VISUAL CONTINUITY — SHOT BIBLE (applies to EVERY image brief in this package):',
-          `  • SAME HERO PRODUCT in every image: ${humanProductName(
-            input
-          )}. Describe its material, color, finish, shape, and proportions IDENTICALLY across all modules so it is unmistakably the same physical product.`,
-          '  • Base the product’s appearance ONLY on OUR product facts. Competitor/Reference sources are DIFFERENT products — NEVER borrow their colors, lids, sizes, materials, or finishes (e.g. a competitor’s brown cups must not turn our product brown).',
-          `  • ONE consistent look everywhere: ${outer.creativeDirection.visualSystem} Keep the same color palette, the same lighting direction & quality (e.g. soft warm window light from one side), the same lens/perspective character, and the same mood in every shot.`,
-          '  • Treat all module images as frames from ONE cohesive premium photoshoot — never disparate stock photos with different products, lighting, or color grading.',
-        ].join('\n');
+        const moduleSpecs: ModuleSpec[] = beats.map((beat) => {
+          const kind = moduleKindForBeat(beat);
+          return {
+            order: beat.order,
+            kind,
+            amazonModuleType: KIND_TO_AMAZON[kind],
+            job: beat.job,
+            title: beat.headlineAngle ?? beat.intent.slice(0, 80),
+            objective: beat.intent,
+          };
+        });
+        const assumptions = plan.missingFacts
+          .filter((fact) => fact.canProceedWithoutIt)
+          .map((fact) => `${fact.fact}: ${fact.whyItMatters}`);
         const moduleCopyGuidance = input.guidance?.moduleCopy?.trim();
         const sharedContextBlock = [
-          shotBible,
+          buildShotBibleBlock({
+            productName: humanProductName(input),
+            visualSystem: plan.artDirection.visualSystem,
+          }),
           '',
           ...(moduleCopyGuidance
             ? [buildModuleCopyGuidanceBlock(moduleCopyGuidance), '']
             : []),
-          'GLOBAL CREATIVE DIRECTION',
-          JSON.stringify(outer.creativeDirection, null, 2),
+          'GLOBAL ART DIRECTION',
+          JSON.stringify(plan.artDirection, null, 2),
+          '',
+          buildFactSheetBlock(input),
+          FACT_CONSISTENCY_RULE,
+          '',
+          buildNarrativeContextBlock(beats),
           '',
           'ASSUMPTIONS',
-          JSON.stringify(outer.assumptions, null, 2),
+          JSON.stringify(assumptions, null, 2),
           '',
           'INPUT',
           context,
-          '',
-          'STRATEGY',
-          JSON.stringify(strategyResult.output, null, 2),
         ].join('\n');
 
         // A/B: PostHog flag `aplus-generation-mode` chooses how modules are
@@ -938,7 +710,7 @@ export async function POST(request: Request) {
         );
         const moduleGenContext: ModuleGenContext = {
           provider,
-          moduleSpecs: outer.moduleSpecs,
+          moduleSpecs,
           sharedContextBlock,
           temperature: moduleCopyTemperature,
           emit: send,
@@ -958,17 +730,42 @@ export async function POST(request: Request) {
           ({ results: moduleResults, failures: moduleFailures } =
             await generateModulesParallel(moduleGenContext));
         }
+        // Partial recovery: rewrite ONLY the missing beats via the per-module
+        // writer, so a flaky whole-package call never ships a thin page.
+        if (
+          moduleResults.length > 0 &&
+          moduleResults.length < moduleSpecs.length
+        ) {
+          const written = new Set(moduleResults.map((module) => module.order));
+          const missing = moduleSpecs.filter(
+            (spec) => !written.has(spec.order)
+          );
+          console.error(
+            `[a-plus-generate] ${missing.length} section(s) missing after primary write — topping up via parallel writer`
+          );
+          const topUp = await generateModulesParallel({
+            ...moduleGenContext,
+            moduleSpecs: missing,
+          });
+          moduleResults.push(...topUp.results);
+          moduleFailures = moduleFailures
+            .filter(
+              (failure) =>
+                !topUp.results.some((module) => module.order === failure.order)
+            )
+            .concat(topUp.failures);
+        }
 
         moduleResults.sort((a, b) => a.order - b.order);
         // Brand header renders as a hero only with a backdrop — guarantee one.
+        // (No auto-footer: every module slot costs conversion space, so brand
+        // bands exist only when the narrative PLANS a brand beat.)
         ensureLogoBackdrop(moduleResults, humanProductName(input));
-        // Close the page with a brand footer band (bookend).
-        ensureBrandFooter(moduleResults);
         const modulesMs = Date.now() - tModules;
         console.log(
           `[a-plus-generate] package modules: ${(modulesMs / 1000).toFixed(
             1
-          )}s (${moduleResults.length}/${outer.moduleSpecs.length} succeeded)`
+          )}s (${moduleResults.length}/${moduleSpecs.length} succeeded)`
         );
         send({
           type: 'phase-done',
@@ -981,7 +778,7 @@ export async function POST(request: Request) {
         if (moduleResults.length === 0) {
           throw new Error(
             `All ${
-              outer.moduleSpecs.length
+              moduleSpecs.length
             } module generations failed. First error: ${
               moduleFailures[0]?.reason || 'unknown'
             }`
@@ -989,7 +786,7 @@ export async function POST(request: Request) {
         }
 
         const assemblyAssumptions = [
-          ...outer.assumptions,
+          ...assumptions,
           ...moduleFailures.map(
             (f) =>
               `Module ${f.order} could not be generated and was skipped — retry to fill it in. (${f.reason})`
@@ -997,13 +794,13 @@ export async function POST(request: Request) {
         ];
 
         const assembledPackage = packageSchema.parse({
-          title: outer.title,
-          executiveSummary: outer.executiveSummary,
-          creativeDirection: outer.creativeDirection,
+          title: `${humanProductName(input)} A+ content package`,
+          executiveSummary: plan.productSummary,
+          creativeDirection: plan.artDirection,
           assumptions: assemblyAssumptions,
           modules: moduleResults,
-          sellerCentralBuildSheet: outer.sellerCentralBuildSheet,
-          qualityChecklist: outer.qualityChecklist,
+          sellerCentralBuildSheet: DEFAULT_BUILD_SHEET,
+          qualityChecklist: DEFAULT_QUALITY_CHECKLIST,
         });
 
         phase = 'images';
@@ -1061,6 +858,13 @@ export async function POST(request: Request) {
           });
         }
 
+        // Lift AFTER eager image generation so resolved slot images flow into
+        // the experience — the ONLY document shape the editor consumes.
+        const experience = liftGeneratedPackageToExperience(assembledPackage, {
+          productId: input.asin?.trim() || undefined,
+          beats,
+        });
+
         const totalMs = Date.now() - tStart;
         console.log(`[a-plus-generate] total: ${(totalMs / 1000).toFixed(1)}s`);
 
@@ -1068,8 +872,11 @@ export async function POST(request: Request) {
           type: 'final',
           totalMs,
           payload: {
-            strategy: strategyResult.output,
-            package: assembledPackage,
+            narrativePlan: plan,
+            experience,
+            assumptions: assemblyAssumptions,
+            sellerCentralBuildSheet: DEFAULT_BUILD_SHEET,
+            qualityChecklist: DEFAULT_QUALITY_CHECKLIST,
             // Which A/B paths actually ran, so the UI can show it.
             runConfig: {
               generationMode,
@@ -1083,16 +890,9 @@ export async function POST(request: Request) {
             },
             modelRuns: [
               {
-                role: 'strategy',
+                role: 'narrative',
                 provider: provider.providerName,
                 modelId: provider.modelId('fast'),
-              },
-              {
-                role: 'package-outer',
-                provider: useAiPackagePlanner ? provider.providerName : 'local',
-                modelId: useAiPackagePlanner
-                  ? provider.modelId('fast')
-                  : 'deterministic-planner',
               },
               {
                 role: 'package-modules',
