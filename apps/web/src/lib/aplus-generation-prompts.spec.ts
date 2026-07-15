@@ -1,9 +1,15 @@
-import { RENDERABLE_AMAZON_MODULE_TYPES } from '@farvisionllc/models';
+import {
+  APLUS_PLANNABLE_ARCHETYPES,
+  CONVERSION_JOBS,
+} from '@farvisionllc/models';
 import {
   aplusModuleLimitForTier,
+  buildFactSheetBlock,
   buildModuleCopyGuidanceBlock,
   buildModuleCopyRulesPreview,
-  buildStrategyPrompt,
+  buildNarrativeContextBlock,
+  buildNarrativePlanPrompt,
+  buildShotBibleBlock,
   compactGenerationInput,
   humanProductName,
   type APlusGenerateInputForPrompt,
@@ -29,40 +35,114 @@ const input: APlusGenerateInputForPrompt = {
   ],
 };
 
-describe('buildStrategyPrompt', () => {
-  it('embeds the module count and the renderable type list', () => {
-    const prompt = buildStrategyPrompt({
+describe('buildNarrativePlanPrompt', () => {
+  it('embeds the beat count, jobs, archetypes, skeleton, and footer rule', () => {
+    const prompt = buildNarrativePlanPrompt({
       contextJson: '{"product":{}}',
-      moduleCount: 5,
+      beatCount: 5,
     });
-    expect(prompt).toContain('exactly 5 modulePlan entries');
-    for (const type of RENDERABLE_AMAZON_MODULE_TYPES) {
-      expect(prompt).toContain(type);
+    expect(prompt).toContain('Plan EXACTLY 5 beats');
+    expect(prompt).toContain('never spend a slot on a bare logo band');
+    expect(prompt).toContain('NEVER echo supplier listing titles');
+    expect(prompt).toContain('NEVER open with comparison-table');
+    expect(prompt).toContain(
+      'never use the same archetype in two consecutive beats'
+    );
+    expect(prompt).toContain('hook \u2192 (problem) \u2192 benefits');
+    for (const job of CONVERSION_JOBS) {
+      expect(prompt).toContain(job);
     }
-    expect(prompt).not.toContain('STANDARD_DUAL_USE_SPLIT');
-    expect(prompt).not.toContain('STANDARD_ICON_ROW');
+    for (const archetype of APLUS_PLANNABLE_ARCHETYPES) {
+      expect(prompt).toContain(archetype);
+    }
+    expect(prompt).not.toContain('stat-band');
     expect(prompt.endsWith('{"product":{}}')).toBe(true);
   });
 
   it('appends guidance after the compliance rules, only when provided', () => {
-    const without = buildStrategyPrompt({ contextJson: '{}', moduleCount: 5 });
+    const without = buildNarrativePlanPrompt({
+      contextJson: '{}',
+      beatCount: 5,
+    });
     expect(without).not.toContain('SELLER GUIDANCE');
 
-    const withGuidance = buildStrategyPrompt({
+    const withGuidance = buildNarrativePlanPrompt({
       contextJson: '{}',
-      moduleCount: 5,
+      beatCount: 5,
       guidance: 'Lean into eco-friendly angles.',
     });
-    expect(withGuidance).toContain('SELLER GUIDANCE — STRATEGY');
+    expect(withGuidance).toContain('SELLER GUIDANCE \u2014 STRATEGY');
     expect(withGuidance).toContain('Lean into eco-friendly angles.');
     // Compliance rules stay ahead of (and win over) guidance.
-    expect(
-      withGuidance.indexOf('NEVER plan modules around price')
-    ).toBeLessThan(withGuidance.indexOf('SELLER GUIDANCE'));
+    expect(withGuidance.indexOf('NEVER plan beats around price')).toBeLessThan(
+      withGuidance.indexOf('SELLER GUIDANCE')
+    );
     // Blank guidance is dropped entirely.
     expect(
-      buildStrategyPrompt({ contextJson: '{}', moduleCount: 5, guidance: '  ' })
+      buildNarrativePlanPrompt({
+        contextJson: '{}',
+        beatCount: 5,
+        guidance: '  ',
+      })
     ).not.toContain('SELLER GUIDANCE');
+  });
+});
+
+describe('fact discipline', () => {
+  it('fact sheet carries seller lines verbatim', () => {
+    const block = buildFactSheetBlock({
+      keyFeatures: 'Double-wall ripple construction\n50 cups + 50 black lids',
+      differentiators: 'Thicker than typical single-wall cups',
+    });
+    expect(block).toContain('FACT SHEET');
+    expect(block).toContain('\u2022 Double-wall ripple construction');
+    expect(block).toContain('\u2022 50 cups + 50 black lids');
+    expect(block).toContain('\u2022 Thicker than typical single-wall cups');
+  });
+
+  it('rules preview includes the consistency rule', () => {
+    const preview = buildModuleCopyRulesPreview();
+    expect(preview).toContain('FACT DISCIPLINE');
+    expect(preview).toContain('never paraphrase upward');
+  });
+});
+
+describe('buildNarrativeContextBlock', () => {
+  const beats = [
+    {
+      order: 1,
+      job: 'hook' as const,
+      archetype: 'full-bleed-hero' as const,
+      intent: 'Open strong.',
+    },
+    {
+      order: 2,
+      job: 'proof' as const,
+      archetype: 'spec-sheet' as const,
+      intent: 'Answer questions.',
+    },
+  ];
+
+  it('names the target beat and lists siblings', () => {
+    const block = buildNarrativeContextBlock(beats, 2);
+    expect(block).toContain('ONLY beat #2');
+    expect(block).toContain('Open strong.');
+    expect(block).toContain('add NEW information');
+  });
+
+  it('whole-package variant has no target', () => {
+    expect(buildNarrativeContextBlock(beats)).not.toContain('ONLY beat');
+  });
+});
+
+describe('buildShotBibleBlock', () => {
+  it('names the product and the visual system', () => {
+    const block = buildShotBibleBlock({
+      productName: 'Kraft Cups',
+      visualSystem: 'Warm kraft palette.',
+    });
+    expect(block).toContain('SAME HERO PRODUCT in every image: Kraft Cups');
+    expect(block).toContain('Warm kraft palette.');
   });
 });
 

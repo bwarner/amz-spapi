@@ -1,6 +1,8 @@
 import {
   APLUS_GUIDANCE_MAX_LENGTH,
-  RENDERABLE_AMAZON_MODULE_TYPES,
+  APLUS_PLANNABLE_ARCHETYPES,
+  CONVERSION_JOBS,
+  type NarrativeBeat,
 } from '@farvisionllc/models';
 
 /**
@@ -131,29 +133,119 @@ function guidanceBlock(scope: string, text: string): string {
   ].join('\n');
 }
 
-/** The Phase-1 strategy prompt — exactly what the generator runs. */
-export function buildStrategyPrompt(options: {
+/** The Phase-1 narrative planning prompt — exactly what the generator runs. */
+export function buildNarrativePlanPrompt(options: {
   contextJson: string;
-  moduleCount: number;
+  beatCount: number;
   guidance?: string;
 }): string {
   const guidance = options.guidance?.trim();
   return [
-    'You are an ecommerce content strategist for Amazon A+ content.',
-    'Create a practical strategy from the provided product facts, links, brand guide, and uploaded assets.',
-    'Do not use placeholder strings. If information is missing, make a safe assumption or add it to missingFacts.',
-    'The user is an ecommerce operator, not a designer. Choose modules and asset usage for them.',
-    `For each modulePlan entry, set moduleType to one of these exact Amazon module types: ${RENDERABLE_AMAZON_MODULE_TYPES.join(
+    'You are an ecommerce conversion strategist planning an Amazon A+ content page as a BUYER-JOURNEY NARRATIVE.',
+    'Analyze the buyer first, then plan an ordered list of narrative BEATS. Each beat is ONE section of the page carrying exactly ONE conversion job and ONE idea — split or cut anything that needs two.',
+    `For each beat set: order (1..N), job (one of: ${CONVERSION_JOBS.join(
       ', '
-    )}.`,
-    `Plan the COMPLETE package: choose and ORDER exactly ${options.moduleCount} modulePlan entries that tell THIS product's story end to end. This is the final module sequence.`,
-    'STRUCTURE MUST BE DYNAMIC, not a fixed template: decide the opening, the mix of module types, and their order based on what THIS specific product needs to persuade its buyer. Two different products should produce noticeably different structures — vary which modules appear and in what sequence. Do not default to one canonical order.',
-    'Use a VARIETY of distinct module types (each renders as a different layout). Open with a strong hero or brand moment, then sequence the rest into the most persuasive narrative for this product (features, real-life use cases, proof/specs, comparison, brand story) — in whatever order fits best. Avoid repeating the same moduleType.',
-    'NEVER plan modules around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them.',
+    )}), archetype (one of: ${APLUS_PLANNABLE_ARCHETYPES.join(
+      ', '
+    )}), intent (ONE sentence: what this section must make the buyer believe or feel), headlineAngle (optional short angle, not final copy), assetsToUse (fileNames of uploaded assets to feature).`,
+    'DERIVE THE ARC FROM THIS PRODUCT’S STRATEGY — NOT A TEMPLATE:',
+    '  • Every major objection you list in buyer.mainObjections must be answered by a beat (proof, comparison, how-it-works, or spec-sheet).',
+    '  • The top benefits drive benefit / use-cases beats, weighted by how much they matter to THIS buyer.',
+    '  • Soft skeleton to select, order, and weight per product (do NOT include every step): hook → (problem) → benefits → differentiation → proof → use-cases → brand → cta. A commodity leans differentiation+comparison; a premium brand leans brand+proof; a technical product leans how-it-works+spec-sheet.',
+    `Plan EXACTLY ${options.beatCount} beats. Every beat costs one of the page's few Amazon module slots — spend each one on conversion. Include a brand beat (brand-story-band) ONLY when brand trust is genuinely central to this purchase decision; never spend a slot on a bare logo band.`,
+    'The FIRST beat is the above-the-fold opener — use a visual archetype (full-bleed-hero, lifestyle-immersion, split-LR, or brand-story-band). NEVER open with comparison-table, spec-sheet, or icon-row.',
+    'LAYOUT DIVERSITY: never use the same archetype in two consecutive beats; vary layouts across the page.',
+    'Also return artDirection: positioning (the one persuasive frame), visualSystem (palette/lighting/mood in one paragraph), mobilePrinciple, imagePlan (how uploaded assets vs generated imagery will be used).',
+    'Write productSummary, every intent, and every headlineAngle in clean buyer-facing language. NEVER echo supplier listing titles, SEO keyword strings, factory/company names, or document names from the sources — an Alibaba listing title is raw material to learn facts from, not copy.',
+    'Do not use placeholder strings. If information is missing, make a safe assumption or add it to missingFacts.',
+    'NEVER plan beats around price points, discounts, promotions, delivery times, shipping speed, stock levels, or any time-sensitive claim. A+ Content stays live indefinitely; these go stale fast and Amazon rejects them.',
     'Competitor/Reference/Supplier sources are DIFFERENT products. Use them only to inform comparison and positioning — NEVER let their attributes (color, size, materials, pack count, finishes) define our product’s appearance or the visual system.',
     ...(guidance ? ['', guidanceBlock('STRATEGY', guidance)] : []),
     '',
     options.contextJson,
+  ].join('\n');
+}
+
+/**
+ * The FACT SHEET: the only product-construction facts copy may state,
+ * verbatim from the seller. Included in every writing context (full
+ * generation AND per-section regeneration) alongside FACT_CONSISTENCY_RULE.
+ */
+export function buildFactSheetBlock(
+  input: Pick<
+    APlusGenerateInputForPrompt,
+    'keyFeatures' | 'differentiators' | 'objections'
+  >
+): string {
+  const lines = (value: string | undefined, label: string) => {
+    const items = (value ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return items.length
+      ? [`${label}:`, ...items.map((item) => `  • ${item}`)]
+      : [];
+  };
+  return [
+    'FACT SHEET — the ONLY product-construction facts you may state (verbatim from the seller):',
+    ...lines(input.keyFeatures, 'Product facts'),
+    ...lines(input.differentiators, 'Differentiators'),
+    ...lines(input.objections, 'Buyer objections to answer'),
+  ].join('\n');
+}
+
+/** Fact discipline appended to every writing prompt (and the overlay preview). */
+export const FACT_CONSISTENCY_RULE = [
+  'FACT DISCIPLINE — the FACT SHEET is the only source of physical-product truth:',
+  '  • State materials, wall/layer construction, counts, sizes, and certifications EXACTLY as written — never paraphrase upward (e.g. "double-wall" must NEVER become "triple-layer" or "triple-insulated"), never invent counts, materials, or construction claims.',
+  '  • If the FACT SHEET does not state a fact, do not claim it.',
+  '  • When the INPUT context, source notes, or supplier listings CONTRADICT the FACT SHEET, the FACT SHEET wins — ignore the conflicting source text entirely.',
+  '  • Every section describes the SAME physical product — sections must never contradict each other.',
+].join('\n');
+
+/**
+ * The full page plan, given to every writing call so each section knows what
+ * its siblings cover — the cross-section redundancy killer.
+ */
+export function buildNarrativeContextBlock(
+  beats: Array<
+    Pick<NarrativeBeat, 'order' | 'job' | 'archetype' | 'intent'> &
+      Partial<Pick<NarrativeBeat, 'headlineAngle'>>
+  >,
+  targetOrder?: number
+): string {
+  return [
+    targetOrder === undefined
+      ? 'NARRATIVE — the full page plan. Every section carries ONE job and ONE idea; sections must not repeat each other’s message, facts, or headline angle.'
+      : `NARRATIVE — the full page plan. You are writing ONLY beat #${targetOrder}. Sibling beats cover the other angles: do NOT repeat their message, facts, or headline angle — your section must add NEW information.`,
+    JSON.stringify(
+      beats.map((beat) => ({
+        order: beat.order,
+        job: beat.job,
+        archetype: beat.archetype,
+        intent: beat.intent,
+        ...(beat.headlineAngle ? { headlineAngle: beat.headlineAngle } : {}),
+      })),
+      null,
+      2
+    ),
+  ].join('\n');
+}
+
+/**
+ * Visual continuity shot bible (one photoshoot, one product) shared by the
+ * generate route and per-section regeneration.
+ */
+export function buildShotBibleBlock(options: {
+  productName: string;
+  visualSystem: string;
+}): string {
+  return [
+    'VISUAL CONTINUITY — SHOT BIBLE (applies to EVERY image brief in this package):',
+    `  • SAME HERO PRODUCT in every image: ${options.productName}. Describe its material, color, finish, shape, and proportions IDENTICALLY across all modules so it is unmistakably the same physical product.`,
+    '  • Base the product’s appearance ONLY on OUR product facts. Competitor/Reference sources are DIFFERENT products — NEVER borrow their colors, lids, sizes, materials, or finishes (e.g. a competitor’s brown cups must not turn our product brown).',
+    `  • ONE consistent look everywhere: ${options.visualSystem} Keep the same color palette, the same lighting direction & quality (e.g. soft warm window light from one side), the same lens/perspective character, and the same mood in every shot.`,
+    '  • Treat all module images as frames from ONE cohesive premium photoshoot — never disparate stock photos with different products, lighting, or color grading.',
   ].join('\n');
 }
 
@@ -169,9 +261,13 @@ export function buildStrategyGuidanceBlock(text: string): string {
 
 /**
  * Read-only preview of the fixed module-copy rules for the guidance overlay.
- * (Product context, module plan, and shot bible are appended at generation
- * time — they depend on the strategy result.)
+ * (Product context, fact sheet, narrative plan, and shot bible are appended
+ * at generation time — they depend on the planning result.)
  */
 export function buildModuleCopyRulesPreview(): string {
-  return [...MODULE_FIELD_RULES, NO_TIME_SENSITIVE_RULE].join('\n');
+  return [
+    ...MODULE_FIELD_RULES,
+    NO_TIME_SENSITIVE_RULE,
+    FACT_CONSISTENCY_RULE,
+  ].join('\n');
 }
