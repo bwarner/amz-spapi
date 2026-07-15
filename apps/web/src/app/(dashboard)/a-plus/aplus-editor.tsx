@@ -27,7 +27,10 @@ import {
 } from 'lucide-react';
 import {
   APLUS_GENERATION_MODELS,
+  ARCHETYPE_LABELS,
+  CONVERSION_JOB_LABELS,
   applyAPlusGuardrails,
+  beatsFromExperience,
   compileExperienceToAplus,
   liftGeneratedPackageToExperience,
   moduleImageSlots,
@@ -39,12 +42,14 @@ import {
   type APlusGeneratedModule as GeneratedModule,
   type APlusGuidance,
   type APlusTextFieldPath,
+  type ConversionJob,
   type Experience,
+  type LayoutArchetype,
 } from '@farvisionllc/models';
 import {
   aplusModuleLimitForTier,
   buildModuleCopyRulesPreview,
-  buildStrategyPrompt,
+  buildNarrativePlanPrompt,
   compactGenerationInput,
 } from '@/lib/aplus-generation-prompts';
 import { slotJobId } from './components/a-plus-modules';
@@ -321,14 +326,14 @@ type DraftPayload = {
   sources?: SourceLink[];
   assets?: AssetLibraryItem[];
   /**
-   * The authoritative document (redesign §4). Older drafts carry only
-   * `generatedPackage`, which is lifted into an Experience on load; newer
-   * drafts persist both (generatedPackage = the compiled deployment, kept so
-   * older app versions can still open the draft).
+   * The authoritative document (redesign §4). Legacy drafts carry only
+   * `generatedPackage`; they are CONVERTED one-way on load (normalize + lift)
+   * and re-saved as experience-only.
    */
   experience?: Experience;
   generationMeta?: GenerationMeta;
-  generatedPackage?: GeneratedAPlusResponse;
+  /** Legacy key — read for one-way conversion only, never written. */
+  generatedPackage?: LegacyGeneratedPackage;
   /** "Creativity" level sent to generation (temperature under the hood). */
   creativity?: APlusCreativity;
   /** Advanced-mode seller guidance appended to the generation prompts. */
@@ -355,51 +360,54 @@ type GeneratedAPlusPackage = {
   qualityChecklist: string[];
 };
 
+type RunConfig = {
+  generationMode: string;
+  imageVariant: string;
+  model: string;
+  creativity?: string;
+};
+type ModelRun = { role: string; provider: string; modelId: string };
+type ImageGenerationSummary = { enabled: boolean; results: unknown[] };
+
 /**
  * Generation-run artifacts that aren't part of the editable Experience:
  * model/run reporting plus package-level notes shown in the rationale panel.
  */
 type GenerationMeta = {
+  /** The narrative plan for new runs; the legacy strategy for converted drafts. */
   strategy?: unknown;
-  runConfig?: GeneratedAPlusResponse['runConfig'];
-  imageGeneration?: GeneratedAPlusResponse['imageGeneration'];
-  modelRuns?: GeneratedAPlusResponse['modelRuns'];
+  runConfig?: RunConfig;
+  imageGeneration?: ImageGenerationSummary;
+  modelRuns?: ModelRun[];
   assumptions?: string[];
   sellerCentralBuildSheet?: Array<{ step: string; value: string }>;
   qualityChecklist?: string[];
 };
 
-type GeneratedAPlusResponse = {
-  strategy: unknown;
+/** Legacy draft payload shape — read for one-way conversion only. */
+type LegacyGeneratedPackage = {
+  strategy?: unknown;
   package: GeneratedAPlusPackage;
-  /** Which A/B paths actually ran for this generation. */
-  runConfig?: {
-    generationMode: string;
-    imageVariant: string;
-    model: string;
-    creativity?: string;
-  };
-  imageGeneration: {
-    enabled: boolean;
-    results: unknown[];
-  };
-  modelRuns: Array<{
-    role: string;
-    provider: string;
-    modelId: string;
-  }>;
+  runConfig?: RunConfig;
+  imageGeneration?: ImageGenerationSummary;
+  modelRuns?: ModelRun[];
 };
 
-/**
- * Rewrites legacy app-invented Amazon module type codes (STANDARD_DUAL_USE_SPLIT,
- * STANDARD_ICON_ROW) to a real Seller Central type on draft load. The render
- * kind (`type`) is untouched, so legacy layouts still render and PNG-export.
- * Never throws — a malformed package is returned as-is rather than blocking
- * the draft from loading.
- */
+/** The generate stream's `final` payload. */
+type GenerateFinalPayload = {
+  narrativePlan: unknown;
+  experience: Experience;
+  assumptions: string[];
+  sellerCentralBuildSheet: Array<{ step: string; value: string }>;
+  qualityChecklist: string[];
+  runConfig?: RunConfig;
+  imageGeneration: ImageGenerationSummary;
+  modelRuns: ModelRun[];
+};
+
 function normalizeGeneratedPackage(
-  response: GeneratedAPlusResponse
-): GeneratedAPlusResponse {
+  response: LegacyGeneratedPackage
+): LegacyGeneratedPackage {
   try {
     return {
       ...response,
@@ -704,7 +712,10 @@ function prepareGeneratedImagePrompt(
     // context, so always restate WHAT the product is — without this the image
     // model invents a subject (famously: an office printer for coffee cups).
     ...(productContext
-      ? [`THE HERO PRODUCT IN THIS SHOT: ${productContext}`, '']
+      ? [
+          `THE HERO PRODUCT IN THIS SHOT — depict EXACTLY this product; every physical detail listed here (colors, lid color, materials, counts) is MANDATORY and overrides anything else: ${productContext}`,
+          '',
+        ]
       : []),
     prompt,
     '',
@@ -761,16 +772,12 @@ export function APlusEditor({
   >('idle');
   const [generateError, setGenerateError] = useState('');
   const [generationProgress, setGenerationProgress] = useState<{
-    phase?:
-      | 'strategy'
-      | 'package-outer'
-      | 'package-modules'
-      | 'images'
-      | 'finalizing';
-    moduleSpecs?: Array<{
+    phase?: 'narrative' | 'package-modules' | 'images' | 'finalizing';
+    beats?: Array<{
       order: number;
-      amazonModuleType: string;
-      title: string;
+      job: ConversionJob;
+      archetype: LayoutArchetype;
+      intent: string;
     }>;
     moduleStatus?: Record<number, 'pending' | 'done' | 'failed'>;
     startedAt?: number;
@@ -795,6 +802,10 @@ export function APlusEditor({
   const [guidanceModuleCopy, setGuidanceModuleCopy] = useState('');
   // True once generated module copy has been hand-edited (regenerate warns).
   const [hasManualEdits, setHasManualEdits] = useState(false);
+  // Section currently being rewritten by /api/a-plus/section-regenerate.
+  const [regeneratingSectionId, setRegeneratingSectionId] = useState<
+    string | null
+  >(null);
   const [imageJobResults, setImageJobResults] = useState<
     Record<string, ImageJobResult>
   >({});
@@ -847,7 +858,9 @@ export function APlusEditor({
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
-      .slice(0, 4)
+      // Physical appearance facts (e.g. lid color) often sit low in the list —
+      // carry enough lines that the image model actually hears about them.
+      .slice(0, 8)
       .join('; ');
     return [
       productName.trim() || 'the product described below',
@@ -856,7 +869,7 @@ export function APlusEditor({
     ]
       .filter(Boolean)
       .join('. ')
-      .slice(0, 500);
+      .slice(0, 700);
   }, [keyFeatures, productName, productOneLiner]);
 
   const brandGuideFontsToPreview = useMemo(
@@ -899,30 +912,6 @@ export function APlusEditor({
     [contentTier, experience]
   );
 
-  // Back/forward-compat view of the generated package: older app versions
-  // read payload.generatedPackage, so keep writing it from the compiled state.
-  const compatGeneratedPackage = useMemo<GeneratedAPlusResponse | null>(() => {
-    if (!experience || !deployment) return null;
-    return {
-      strategy: generationMeta?.strategy ?? null,
-      package: {
-        title: experience.title,
-        executiveSummary: experience.goal,
-        creativeDirection: experience.artDirection,
-        assumptions: generationMeta?.assumptions ?? [],
-        modules: deployment.modules,
-        sellerCentralBuildSheet: generationMeta?.sellerCentralBuildSheet ?? [],
-        qualityChecklist: generationMeta?.qualityChecklist ?? [],
-      },
-      runConfig: generationMeta?.runConfig,
-      imageGeneration: generationMeta?.imageGeneration ?? {
-        enabled: false,
-        results: [],
-      },
-      modelRuns: generationMeta?.modelRuns ?? [],
-    };
-  }, [deployment, experience, generationMeta]);
-
   const currentDraftPayload = useMemo<DraftPayload>(
     () => ({
       builderMode,
@@ -946,7 +935,6 @@ export function APlusEditor({
       assets: assetLibrary,
       experience: experience ?? undefined,
       generationMeta: generationMeta ?? undefined,
-      generatedPackage: compatGeneratedPackage ?? undefined,
       creativity,
       guidance: {
         strategy: guidanceStrategy.trim() || undefined,
@@ -960,7 +948,6 @@ export function APlusEditor({
       brandFontNotes,
       brandVoice,
       builderMode,
-      compatGeneratedPackage,
       contentTier,
       creativity,
       differentiators,
@@ -1042,13 +1029,14 @@ export function APlusEditor({
     ]
   );
 
-  // The real Phase-1 strategy prompt the generator runs (shown read-only in
-  // the guidance overlay), built from the same request body it will receive.
+  // The real Phase-1 narrative planning prompt the generator runs (shown
+  // read-only in the guidance overlay), built from the same request body it
+  // will receive.
   const strategyPromptPreview = useMemo(
     () =>
-      buildStrategyPrompt({
+      buildNarrativePlanPrompt({
         contextJson: compactGenerationInput(generateRequestBody),
-        moduleCount: aplusModuleLimitForTier(contentTier),
+        beatCount: aplusModuleLimitForTier(contentTier),
         guidance: guidanceStrategy,
       }),
     [contentTier, generateRequestBody, guidanceStrategy]
@@ -1599,6 +1587,98 @@ export function APlusEditor({
     setHasManualEdits(true);
   }
 
+  /**
+   * Rewrites ONE section via the narrative writer, honoring sibling locks and
+   * the section's notes. Already-generated images carry over by slot role
+   * (same archetype only) so regeneration never re-spends image credits.
+   */
+  async function regenerateSection(sectionId: string) {
+    if (!experience || regeneratingSectionId) return;
+    const sections = [...experience.sections].sort((a, b) => a.order - b.order);
+    const section = sections.find((s) => s.id === sectionId);
+    if (!section || section.locked) return;
+    const beats = beatsFromExperience(experience);
+    const targetBeat = beats.find((beat) => beat.order === section.order);
+    if (!targetBeat) return;
+    const lockedSiblingSummaries = sections
+      .filter((s) => s.locked && s.id !== sectionId)
+      .slice(0, 10)
+      .map((s) =>
+        `#${s.order} [${s.job}/${s.visual.layout.archetype}] ${
+          s.headline ?? s.intent
+        }: ${s.subcopy?.slice(0, 160) ?? ''}`.slice(0, 300)
+      );
+
+    setRegeneratingSectionId(sectionId);
+    try {
+      const {
+        model,
+        creativity: requestCreativity,
+        guidance,
+        ...input
+      } = generateRequestBody;
+      const response = await fetch('/api/a-plus/section-regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input,
+          model,
+          creativity: requestCreativity,
+          guidance,
+          artDirection: experience.artDirection,
+          beats,
+          targetBeat,
+          sectionNotes: section.notes,
+          lockedSiblingSummaries,
+        }),
+      });
+      const body = (await response.json()) as {
+        section?: Experience['sections'][number];
+        error?: string;
+      };
+      if (!response.ok || !body.section) {
+        throw new Error(body.error || 'Could not regenerate this section.');
+      }
+      const fresh = body.section;
+      updateSection(sectionId, (current) => {
+        let next: typeof fresh = {
+          ...fresh,
+          id: current.id,
+          order: current.order,
+          notes: current.notes,
+          locked: false,
+        };
+        if (current.visual.layout.archetype === next.visual.layout.archetype) {
+          const resolvedByRole = new Map(
+            current.visual.images
+              .filter((slot) => slot.resolved)
+              .map((slot) => [slot.role, slot.resolved] as const)
+          );
+          next = {
+            ...next,
+            visual: {
+              ...next.visual,
+              images: next.visual.images.map((slot) => ({
+                ...slot,
+                resolved: slot.resolved ?? resolvedByRole.get(slot.role),
+              })),
+            },
+          };
+        }
+        return next;
+      });
+    } catch (error) {
+      setGenerateError(
+        error instanceof Error
+          ? error.message
+          : 'Could not regenerate this section.'
+      );
+      setGenerateStatus('error');
+    } finally {
+      setRegeneratingSectionId(null);
+    }
+  }
+
   function addSource() {
     setSources((current) => [
       ...current,
@@ -1882,6 +1962,66 @@ export function APlusEditor({
     );
   }
 
+  /**
+   * Pins one of the seller's uploaded photos into an image slot — the manual
+   * override for when generation can't match reality (a real packaging photo
+   * always beats an AI imitation of it). No generation cost.
+   */
+  function placeAssetInSlot(jobId: string, assetId: string) {
+    const url = `/api/a-plus/assets/${assetId}`;
+    writeSlotImageIntoPackage(jobId, url);
+    setImageJobResults((current) => ({
+      ...current,
+      [jobId]: { status: 'done', url, assetId, fromAsset: true },
+    }));
+    setHasManualEdits(true);
+  }
+
+  // The best real product photos, auto-attached as image-to-image references
+  // to EVERY generation so the depicted product matches reality (shape, wall
+  // texture, lid color) instead of a text-only approximation.
+  const productReferenceAssetIds = useMemo(() => {
+    const candidates: Array<{ assetId: string; score: number }> = [];
+    for (const item of assetLibrary) {
+      if (!item.asset || !item.profile) continue;
+      if (
+        item.uploadStatus !== 'uploaded' &&
+        item.uploadStatus !== 'duplicate'
+      ) {
+        continue;
+      }
+      const score =
+        item.profile.role === 'product-iso'
+          ? 2
+          : item.profile.role === 'product-in-scene'
+          ? 1
+          : 0;
+      if (score > 0) candidates.push({ assetId: item.asset.assetId, score });
+    }
+    return candidates
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 2)
+      .map((candidate) => candidate.assetId);
+  }, [assetLibrary]);
+
+  // Uploaded (non-generated) library photos available for manual placement.
+  const placeableAssets = useMemo(
+    () =>
+      assetLibrary
+        .filter(
+          (item) =>
+            item.asset &&
+            (item.uploadStatus === 'uploaded' ||
+              item.uploadStatus === 'duplicate')
+        )
+        .map((item) => ({
+          assetId: item.asset ? item.asset.assetId : '',
+          fileName: item.fileName,
+        }))
+        .filter((item) => item.assetId),
+    [assetLibrary]
+  );
+
   async function generateImageForJob(
     jobId: string,
     prompt: string,
@@ -1905,6 +2045,9 @@ export function APlusEditor({
           // Draft mode generates cheap, low-quality images for fast iteration;
           // finals are full quality. Only gpt-image-1 honors this.
           quality: draftImages ? 'low' : undefined,
+          // Reference-generate: the seller's real product photos steer the
+          // image model so the depicted product matches reality.
+          referenceAssetIds: productReferenceAssetIds,
         }),
       });
       const body = (await response.json()) as {
@@ -2064,7 +2207,7 @@ export function APlusEditor({
     }
     setGenerateStatus('generating');
     setGenerateError('');
-    setGenerationProgress({ startedAt: Date.now(), phase: 'strategy' });
+    setGenerationProgress({ startedAt: Date.now(), phase: 'narrative' });
 
     try {
       const response = await fetch('/api/a-plus/generate', {
@@ -2087,7 +2230,7 @@ export function APlusEditor({
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let finalPayload: GeneratedAPlusResponse | null = null;
+      let finalPayload: GenerateFinalPayload | null = null;
       let serverError: string | null = null;
 
       while (true) {
@@ -2118,20 +2261,21 @@ export function APlusEditor({
               }));
               break;
             case 'phase-done':
-              if (event['phase'] === 'package-outer') {
-                const specs = event['moduleSpecs'] as Array<{
+              if (event['phase'] === 'narrative') {
+                const beats = event['beats'] as Array<{
                   order: number;
-                  amazonModuleType: string;
-                  title: string;
+                  job: ConversionJob;
+                  archetype: LayoutArchetype;
+                  intent: string;
                 }>;
                 const initialStatus: Record<
                   number,
                   'pending' | 'done' | 'failed'
                 > = {};
-                for (const s of specs) initialStatus[s.order] = 'pending';
+                for (const beat of beats) initialStatus[beat.order] = 'pending';
                 setGenerationProgress((p) => ({
                   ...p,
-                  moduleSpecs: specs,
+                  beats,
                   moduleStatus: initialStatus,
                 }));
               }
@@ -2156,7 +2300,7 @@ export function APlusEditor({
               break;
             case 'final':
               setGenerationProgress((p) => ({ ...p, phase: 'finalizing' }));
-              finalPayload = event['payload'] as GeneratedAPlusResponse;
+              finalPayload = event['payload'] as GenerateFinalPayload;
               break;
             case 'error':
               serverError =
@@ -2173,21 +2317,17 @@ export function APlusEditor({
         throw new Error('Generation finished without producing a package.');
       }
 
-      // Lift the generated package into the Experience model — the editor's
-      // single source of truth; the deployment view recompiles from it.
-      setExperience(
-        liftGeneratedPackageToExperience(finalPayload.package, {
-          productId: asin.trim() || undefined,
-        })
-      );
+      // The server ships the Experience directly — the editor's single source
+      // of truth; the deployment view recompiles from it.
+      setExperience(finalPayload.experience);
       setGenerationMeta({
-        strategy: finalPayload.strategy,
+        strategy: finalPayload.narrativePlan,
         runConfig: finalPayload.runConfig,
         imageGeneration: finalPayload.imageGeneration,
         modelRuns: finalPayload.modelRuns,
-        assumptions: finalPayload.package.assumptions,
-        sellerCentralBuildSheet: finalPayload.package.sellerCentralBuildSheet,
-        qualityChecklist: finalPayload.package.qualityChecklist,
+        assumptions: finalPayload.assumptions,
+        sellerCentralBuildSheet: finalPayload.sellerCentralBuildSheet,
+        qualityChecklist: finalPayload.qualityChecklist,
       });
       setHasManualEdits(false);
       setGenerateStatus('generated');
@@ -3671,9 +3811,9 @@ export function APlusEditor({
                 <div className="flex flex-wrap gap-2">
                   {(generationMeta?.modelRuns ?? []).map((run) => (
                     <Badge key={`${run.role}-${run.modelId}`} variant="outline">
-                      {run.role === 'strategy'
-                        ? 'Strategy model'
-                        : 'Package model'}
+                      {run.role === 'narrative' || run.role === 'strategy'
+                        ? 'Narrative model'
+                        : 'Section model'}
                       : {run.provider} / {run.modelId}
                     </Badge>
                   ))}
@@ -3765,9 +3905,15 @@ export function APlusEditor({
               onEditSectionNotes={updateSectionNotes}
               onToggleSectionLock={toggleSectionLock}
               onMoveSection={moveSection}
+              onRegenerateSection={(sectionId) =>
+                void regenerateSection(sectionId)
+              }
+              regeneratingSectionId={regeneratingSectionId}
               onGenerateImage={(jobId, brief, size) =>
                 generateImageForJob(jobId, brief, size)
               }
+              placeableAssets={placeableAssets}
+              onPlaceAsset={placeAssetInSlot}
             />
           </div>
         </CardContent>
@@ -4233,18 +4379,14 @@ export function APlusEditor({
                         <div className="flex items-center gap-2">
                           <Loader2 className="h-4 w-4 animate-spin" />
                           <span className="font-medium">
-                            {generationProgress.phase === 'strategy'
-                              ? 'Building strategy…'
-                              : generationProgress.phase === 'package-outer'
-                              ? 'Planning module structure…'
+                            {generationProgress.phase === 'narrative'
+                              ? 'Planning the story…'
                               : generationProgress.phase === 'package-modules'
-                              ? `Writing modules (${
+                              ? `Writing sections (${
                                   Object.values(
                                     generationProgress.moduleStatus ?? {}
                                   ).filter((s) => s !== 'pending').length
-                                }/${
-                                  generationProgress.moduleSpecs?.length ?? '?'
-                                })…`
+                                }/${generationProgress.beats?.length ?? '?'})…`
                               : generationProgress.phase === 'images'
                               ? 'Generating preview images…'
                               : generationProgress.phase === 'finalizing'
@@ -4259,15 +4401,15 @@ export function APlusEditor({
                           s
                         </span>
                       </div>
-                      {generationProgress.moduleSpecs?.length ? (
+                      {generationProgress.beats?.length ? (
                         <ul className="mt-3 space-y-1">
-                          {generationProgress.moduleSpecs.map((spec) => {
+                          {generationProgress.beats.map((beat) => {
                             const status =
-                              generationProgress.moduleStatus?.[spec.order] ??
+                              generationProgress.moduleStatus?.[beat.order] ??
                               'pending';
                             return (
                               <li
-                                key={spec.order}
+                                key={beat.order}
                                 className="flex items-center gap-2 text-xs"
                               >
                                 {status === 'done' ? (
@@ -4277,11 +4419,14 @@ export function APlusEditor({
                                 ) : (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500" />
                                 )}
-                                <span className="font-mono text-[10px] text-sky-700">
-                                  M{spec.order}
+                                <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">
+                                  {CONVERSION_JOB_LABELS[beat.job]}
+                                </span>
+                                <span className="text-[10px] text-sky-600">
+                                  {ARCHETYPE_LABELS[beat.archetype]}
                                 </span>
                                 <span className="truncate text-sky-900">
-                                  {spec.title}
+                                  {beat.intent}
                                 </span>
                               </li>
                             );

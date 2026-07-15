@@ -61,15 +61,21 @@ function downloadNameFor(moduleOrder: number, role: string): string {
   );
 }
 
+export type PlaceableAsset = { assetId: string; fileName: string };
+
 /** Compact per-slot generate/download controls against the compiled module. */
 function SectionImageSlots({
   module,
   slotResults,
   onGenerateImage,
+  placeableAssets,
+  onPlaceAsset,
 }: {
   module: APlusGeneratedModule;
   slotResults?: Record<string, SlotImageResult>;
   onGenerateImage: (jobId: string, brief: string, size: string) => void;
+  placeableAssets: PlaceableAsset[];
+  onPlaceAsset: (jobId: string, assetId: string) => void;
 }) {
   const slots = moduleImageSlots(module);
   if (!slots.length) return null;
@@ -160,6 +166,27 @@ function SectionImageSlots({
                   {result.message}
                 </p>
               ) : null}
+              {placeableAssets.length ? (
+                <select
+                  aria-label={`Place an uploaded photo into ${slot.role}`}
+                  value=""
+                  onChange={(event) => {
+                    if (event.target.value) {
+                      onPlaceAsset(jobId, event.target.value);
+                    }
+                  }}
+                  className="mt-2 h-8 w-full rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="">
+                    Use one of your photos instead (no AI)…
+                  </option>
+                  {placeableAssets.map((asset) => (
+                    <option key={asset.assetId} value={asset.assetId}>
+                      {asset.fileName}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
             </div>
           );
         })}
@@ -184,7 +211,11 @@ export function APlusSectionsPanel({
   onEditSectionNotes,
   onToggleSectionLock,
   onMoveSection,
+  onRegenerateSection,
+  regeneratingSectionId,
   onGenerateImage,
+  placeableAssets,
+  onPlaceAsset,
 }: {
   experience: Experience;
   deployment: AplusDeployment;
@@ -200,7 +231,13 @@ export function APlusSectionsPanel({
   onEditSectionNotes: (sectionId: string, value: string) => void;
   onToggleSectionLock: (sectionId: string) => void;
   onMoveSection: (sectionId: string, direction: -1 | 1) => void;
+  /** Rewrite one section via the narrative writer (locks/notes honored). */
+  onRegenerateSection: (sectionId: string) => void;
+  regeneratingSectionId?: string | null;
   onGenerateImage: (jobId: string, brief: string, size: string) => void;
+  /** Uploaded photos the seller can pin into any slot (no generation cost). */
+  placeableAssets: PlaceableAsset[];
+  onPlaceAsset: (jobId: string, assetId: string) => void;
 }) {
   const budget =
     tier === 'Premium A+'
@@ -331,6 +368,23 @@ export function APlusSectionsPanel({
                   ) : null}
                 </div>
                 <div className="flex items-center gap-1.5">
+                  {!section.locked ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title="Rewrite this section (uses your notes; locked sections stay untouched)"
+                      disabled={regeneratingSectionId !== null}
+                      onClick={() => onRegenerateSection(section.id)}
+                    >
+                      {regeneratingSectionId === section.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <WandSparkles className="h-4 w-4" />
+                      )}
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
@@ -400,6 +454,8 @@ export function APlusSectionsPanel({
                     module={compiledModule}
                     slotResults={slotResults}
                     onGenerateImage={onGenerateImage}
+                    placeableAssets={placeableAssets}
+                    onPlaceAsset={onPlaceAsset}
                   />
                 ) : null}
                 <div className="space-y-1.5">

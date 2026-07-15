@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import { auth0 } from '../../../../lib/auth0';
 import { resolveImageModelVariant } from '../../../../lib/image-model-flag';
@@ -8,6 +8,7 @@ import {
   createAssetId,
   createAssetKey,
   createAssetS3Client,
+  getAsset,
   getAssetBucket,
   getDuplicateAsset,
   upsertAsset,
@@ -39,8 +40,14 @@ function pickImageSize(requested: string | undefined): ImageSize {
   return '1024x1024';
 }
 
-function prepareImagePrompt(prompt: string): string {
+function prepareImagePrompt(prompt: string, hasReferences = false): string {
   return [
+    ...(hasReferences
+      ? [
+          'Reference photo(s) of the ACTUAL product are attached. Depict THIS exact product — same shape, wall texture, colors, rim, and LID COLOR as in the reference photos — recreating the scene described below around it. Never substitute a generic look-alike.',
+          '',
+        ]
+      : []),
     prompt,
     '',
     // Hard realism override — enforced on EVERY image regardless of the brief,
@@ -57,12 +64,18 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { prompt?: unknown; size?: unknown; quality?: unknown };
+  let body: {
+    prompt?: unknown;
+    size?: unknown;
+    quality?: unknown;
+    referenceAssetIds?: unknown;
+  };
   try {
     body = (await request.json()) as {
       prompt?: unknown;
       size?: unknown;
       quality?: unknown;
+      referenceAssetIds?: unknown;
     };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
@@ -100,12 +113,45 @@ export async function POST(request: Request) {
     typeof body.size === 'string' ? body.size : undefined
   );
 
+  // Reference-generate: fetch the seller's real product photos (ownership
+  // checked) so the image model depicts THIS exact product, not a text-only
+  // approximation. Unreadable/foreign assets are skipped, never fatal.
+  const referenceAssetIds = Array.isArray(body.referenceAssetIds)
+    ? body.referenceAssetIds
+        .filter((id): id is string => typeof id === 'string')
+        .slice(0, 2)
+    : [];
+  const referenceImages: Uint8Array[] = [];
+  if (referenceAssetIds.length) {
+    const s3 = createAssetS3Client();
+    for (const assetId of referenceAssetIds) {
+      try {
+        const refAsset = await getAsset(assetId);
+        if (!refAsset || refAsset.userId !== session.user.sub) continue;
+        const obj = await s3.send(
+          new GetObjectCommand({
+            Bucket: refAsset.storage.bucket,
+            Key: refAsset.storage.key,
+          })
+        );
+        const bytes = await obj.Body?.transformToByteArray();
+        if (bytes) referenceImages.push(bytes);
+      } catch {
+        // Skip unreadable references — text-only generation still works.
+      }
+    }
+    console.log(
+      `[a-plus-image-generate] references: ${referenceImages.length}/${referenceAssetIds.length} usable`
+    );
+  }
+
   let generated: { url: string; mediaType: string; revisedPrompt?: string };
   try {
     const results = await imageGenerator.generate({
-      prompt: prepareImagePrompt(body.prompt),
+      prompt: prepareImagePrompt(body.prompt, referenceImages.length > 0),
       size,
       quality,
+      referenceImages: referenceImages.length ? referenceImages : undefined,
     });
     const first = results[0];
     if (!first?.url) {
@@ -118,6 +164,11 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Image generation failed.';
+    console.error(
+      `[a-plus-image-generate] FAILED (variant=${variant}, refs=${
+        referenceImages.length
+      }): ${message.slice(0, 300)}`
+    );
     return Response.json({ error: message }, { status: 500 });
   }
 
