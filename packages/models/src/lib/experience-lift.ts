@@ -12,6 +12,7 @@ import type {
   Section,
   VisualConcept,
 } from './experience.js';
+import { moduleKindForBeat, type NarrativeBeat } from './narrative.js';
 
 // ---------------------------------------------------------------------------
 // Lift: today's generated A+ package → an Experience (redesign §4 reuse
@@ -93,6 +94,8 @@ function liftModule(
   ): Omit<Section, 'id' | 'order' | 'locked'> => ({
     job,
     intent: module.title,
+    // The written module title is the short buyer-facing section label.
+    label: module.title,
     visual,
     ...fields,
   });
@@ -257,21 +260,80 @@ function liftModule(
 }
 
 /**
+ * Lifts one module into a Section. When a narrative `beat` is provided (the
+ * Narrative Engine planned this section), the beat's job and intent OVERRIDE
+ * the kind-based inference — the arc is chosen by strategy, not layouts. The
+ * only archetype re-tag is the shape-compatible problem-solution case (it
+ * writes as image-header-with-text, which otherwise lifts to
+ * lifestyle-immersion).
+ */
+export function liftModuleToSection(
+  module: APlusGeneratedModule,
+  opts: {
+    id: string;
+    order: number;
+    beat?: NarrativeBeat;
+    locked?: boolean;
+    notes?: string;
+    isFirst?: boolean;
+  }
+): Section {
+  const section: Section = {
+    id: opts.id,
+    order: opts.order,
+    locked: opts.locked ?? false,
+    notes: opts.notes,
+    ...liftModule(module, opts.isFirst ?? false),
+  };
+  const beat = opts.beat;
+  // A beat only applies to the module KIND it planned — this keeps
+  // beats-by-order from mislabeling e.g. the auto-appended brand footer when
+  // some planned sections failed to write.
+  if (!beat || moduleKindForBeat(beat) !== module.type) return section;
+
+  section.job = beat.job;
+  section.intent = beat.intent;
+  const layout = section.visual.layout;
+  if (
+    beat.archetype === 'problem-solution' &&
+    layout.archetype === 'lifestyle-immersion'
+  ) {
+    section.visual.layout = {
+      archetype: 'problem-solution',
+      badge: layout.badge,
+    };
+  }
+  return section;
+}
+
+/**
  * Lifts a generated A+ package into an Experience (deterministic section ids,
  * order preserved). `resolved` images and briefs survive so a subsequent
- * compile reproduces the package losslessly.
+ * compile reproduces the package losslessly. `opts.beats` (matched to modules
+ * by module.order) carries the planned narrative into the sections; modules
+ * without a beat — e.g. the auto-appended brand footer — keep the inference.
  */
 export function liftGeneratedPackageToExperience(
   pkg: LiftablePackage,
-  opts?: { id?: string; productId?: string; goal?: string }
+  opts?: {
+    id?: string;
+    productId?: string;
+    goal?: string;
+    beats?: NarrativeBeat[];
+  }
 ): Experience {
   const ordered = [...pkg.modules].sort((a, b) => a.order - b.order);
-  const sections: Section[] = ordered.map((module, index) => ({
-    id: `section-${index + 1}`,
-    order: index + 1,
-    locked: false,
-    ...liftModule(module, index === 0),
-  }));
+  const beatByOrder = new Map(
+    (opts?.beats ?? []).map((beat) => [beat.order, beat] as const)
+  );
+  const sections: Section[] = ordered.map((module, index) =>
+    liftModuleToSection(module, {
+      id: `section-${index + 1}`,
+      order: index + 1,
+      beat: beatByOrder.get(module.order),
+      isFirst: index === 0,
+    })
+  );
 
   return {
     id: opts?.id ?? 'experience-1',

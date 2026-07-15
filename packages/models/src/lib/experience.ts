@@ -371,6 +371,11 @@ export const SectionSchema = z.object({
   job: ConversionJobSchema,
   /** 1 sentence: what this section must accomplish. */
   intent: z.string().max(200),
+  /**
+   * Short buyer-facing section label (the module SectionTitle) — NOT the
+   * intent, which is planner instruction-prose and must never render.
+   */
+  label: z.string().max(120).optional(),
   headline: z.string().max(160).optional(),
   subcopy: z.string().max(1200).optional(),
   bullets: z.array(z.string().max(160)).max(6).optional(),

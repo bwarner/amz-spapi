@@ -27,6 +27,7 @@ export function sectionTextFieldDescriptors(
     multiline = false
   ) => fields.push({ label, path, value: value ?? '', maxLength, multiline });
 
+  add('Section label', ['label'], section.label, 120);
   add('Headline', ['headline'], section.headline, 160);
   add('Body', ['subcopy'], section.subcopy, 1200, true);
   section.bullets?.forEach((bullet, index) =>

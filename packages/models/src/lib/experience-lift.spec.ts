@@ -72,6 +72,76 @@ describe('liftGeneratedPackageToExperience', () => {
     expect(backdrop?.intent.orientation).toBe('landscape');
   });
 
+  it('beats override job/intent; the beat-less footer keeps inference', () => {
+    const withBeats = liftGeneratedPackageToExperience(REPRESENTATIVE_PACKAGE, {
+      beats: [
+        {
+          order: 2,
+          job: 'differentiation',
+          archetype: 'full-bleed-hero',
+          intent: 'Stand apart from flimsy single-wall cups.',
+          assetsToUse: [],
+        },
+      ],
+    });
+    const overridden = withBeats.sections.find((s) => s.order === 2);
+    expect(overridden).toMatchObject({
+      job: 'differentiation',
+      intent: 'Stand apart from flimsy single-wall cups.',
+      visual: { layout: { archetype: 'full-bleed-hero' } },
+    });
+    // Module 1 (company-logo header) had no beat → inference applies.
+    expect(withBeats.sections[0].job).toBe('hook');
+  });
+
+  it('a beat never mislabels a module of a different kind (auto-footer case)', () => {
+    // Only 1 of 2 planned sections got written; the auto-footer took order 2.
+    // Beat 2 (split-LR) must NOT override the footer's inferred brand job.
+    const withFooter = liftGeneratedPackageToExperience(
+      {
+        ...REPRESENTATIVE_PACKAGE,
+        modules: [
+          REPRESENTATIVE_PACKAGE.modules[1], // image-text-overlay, order 2
+          {
+            order: 2,
+            amazonModuleType: 'STANDARD_COMPANY_LOGO',
+            title: 'Brand footer',
+            type: 'company-logo',
+            logo: {
+              role: 'logo',
+              brief: 'Brand logo.',
+              size: '1024x1024',
+              alt: 'Brand logo',
+            },
+            placement: 'footer',
+          },
+        ].map((module, index) => ({ ...module, order: index + 1 })),
+      },
+      {
+        beats: [
+          {
+            order: 1,
+            job: 'hook',
+            archetype: 'full-bleed-hero',
+            intent: 'Open strong.',
+            assetsToUse: [],
+          },
+          {
+            order: 2,
+            job: 'differentiation',
+            archetype: 'split-LR',
+            intent: 'Prove the advantage.',
+            assetsToUse: [],
+          },
+        ],
+      }
+    );
+    expect(withFooter.sections[0].job).toBe('hook');
+    // Footer keeps its inferred brand job — beat 2's kind doesn't match.
+    expect(withFooter.sections[1].job).toBe('brand');
+    expect(withFooter.sections[1].intent).not.toBe('Prove the advantage.');
+  });
+
   it('never throws on a minimal module', () => {
     const experience = liftGeneratedPackageToExperience({
       title: 't',

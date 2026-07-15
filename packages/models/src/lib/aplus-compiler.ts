@@ -126,7 +126,8 @@ function firstSlot(section: Section, fallbackRole: string): APlusImageSlot {
   return slotByRole(section, section.visual.images[0]?.role, fallbackRole);
 }
 
-const KIND_TO_AMAZON: Record<string, string> = {
+/** Module kind → the Amazon Seller Central type it deploys as. */
+export const KIND_TO_AMAZON: Record<string, string> = {
   'company-logo': 'STANDARD_COMPANY_LOGO',
   'image-text-overlay': 'STANDARD_IMAGE_TEXT_OVERLAY',
   'image-header-with-text': 'STANDARD_HEADER_IMAGE_TEXT',
@@ -149,7 +150,11 @@ type CompiledSection = {
 
 function compileSection(section: Section): CompiledSection {
   const layout = section.visual.layout;
-  const title = section.intent.slice(0, 120) || `Section ${section.order}`;
+  // NEVER the intent — that's planner instruction-prose, not display copy.
+  const title =
+    section.label?.slice(0, 120) ||
+    section.headline?.slice(0, 120) ||
+    `Section ${section.order}`;
   // order is re-assigned by the caller; 0 is a placeholder.
   const common = { order: 0, title };
   const warn = (code: string, message: string): DeploymentValidation => ({

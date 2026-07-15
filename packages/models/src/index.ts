@@ -2,6 +2,7 @@ export * from './lib/models.js';
 export * from './lib/credentials.js';
 export * from './lib/aplus.js';
 export * from './lib/experience.js';
+export * from './lib/narrative.js';
 export * from './lib/experience-fields.js';
 export * from './lib/experience-lift.js';
 export * from './lib/aplus-compiler.js';
