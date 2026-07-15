@@ -26,6 +26,12 @@ export interface ImageGenerator {
      * Falls back to the provider/env default when omitted.
      */
     quality?: 'low' | 'medium' | 'high';
+    /**
+     * Reference photos of the REAL product (image-to-image). Backends that
+     * support image inputs (gpt-image-1) generate the scene with THIS exact
+     * product; others ignore them and fall back to text-only.
+     */
+    referenceImages?: Uint8Array[];
   }): Promise<
     {
       url: string;
