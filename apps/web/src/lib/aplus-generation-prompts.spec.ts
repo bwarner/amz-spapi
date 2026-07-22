@@ -1,6 +1,7 @@
 import {
   APLUS_PLANNABLE_ARCHETYPES,
   CONVERSION_JOBS,
+  PREMIUM_PLANNABLE_ARCHETYPES,
 } from '@farvisionllc/models';
 import {
   aplusModuleLimitForTier,
@@ -86,6 +87,36 @@ describe('buildNarrativePlanPrompt', () => {
       })
     ).not.toContain('SELLER GUIDANCE');
   });
+
+  it('Basic prompt never mentions premium archetypes or the premium block', () => {
+    const prompt = buildNarrativePlanPrompt({
+      contextJson: '{}',
+      beatCount: 5,
+      tier: 'Basic A+',
+    });
+    expect(prompt).not.toContain('PREMIUM A+ ARCHETYPES');
+    expect(prompt).not.toContain('qna');
+    expect(prompt).not.toContain('hotspots');
+    expect(prompt).not.toContain('carousel');
+  });
+
+  it('Premium tier lists all 13 archetypes and the premium guidance block', () => {
+    const prompt = buildNarrativePlanPrompt({
+      contextJson: '{}',
+      beatCount: 7,
+      tier: 'Premium A+',
+    });
+    expect(PREMIUM_PLANNABLE_ARCHETYPES).toHaveLength(13);
+    for (const archetype of PREMIUM_PLANNABLE_ARCHETYPES) {
+      expect(prompt).toContain(archetype);
+    }
+    expect(prompt).toContain('PREMIUM A+ ARCHETYPES');
+    expect(prompt).toContain('AT MOST ONCE per page');
+    expect(prompt).toContain('buyer.mainObjections has substantive entries');
+    expect(prompt).toContain('3–6 labeled feature callouts');
+    expect(prompt).toContain('2–6 slides, one idea per slide');
+    expect(prompt).toContain('Plan EXACTLY 7 beats');
+  });
 });
 
 describe('fact discipline', () => {
@@ -162,12 +193,14 @@ describe('compactGenerationInput', () => {
 });
 
 describe('module copy prompt pieces', () => {
-  it('rules preview includes compliance and no legacy module rules', () => {
+  it('rules preview includes compliance and the icon allowlist', () => {
     const preview = buildModuleCopyRulesPreview();
     expect(preview).toContain('NO TIME-SENSITIVE CLAIMS');
     expect(preview).toContain('SUBJECT PRODUCT ONLY');
     expect(preview).not.toContain('dual-use-split');
-    expect(preview).not.toContain('icon-row');
+    // Writers must pick icons from the supported glyph set (unknown names
+    // render as fallback shapes).
+    expect(preview).toContain('icon MUST be one of exactly: coffee,');
   });
 
   it('wraps module-copy guidance with the precedence note', () => {

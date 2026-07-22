@@ -6,8 +6,10 @@ import {
   APlusCreativitySchema,
   APlusGeneratedModuleSchema,
   APlusGuidanceSchema,
-  KIND_TO_AMAZON,
+  APLUS_PLANNABLE_ARCHETYPES,
   NarrativePlanSchema,
+  PREMIUM_PLANNABLE_ARCHETYPES,
+  amazonModuleTypeForKind,
   fallbackNarrativeBeats,
   generatedModuleSchemaForKind,
   isAplusGenerationModel,
@@ -186,7 +188,7 @@ function prepareGeneratedImagePrompt(
     // so always restate what the product is or it will invent a subject.
     ...(productContext
       ? [
-          `THE HERO PRODUCT IN THIS SHOT — depict EXACTLY this product; every physical detail listed here (colors, lid color, materials, counts) is MANDATORY and overrides anything else: ${productContext}`,
+          `THE HERO PRODUCT IN THIS SHOT — depict EXACTLY this product; every physical detail listed here (colors of every component, materials, construction, counts) is MANDATORY and overrides anything else: ${productContext}`,
           '',
         ]
       : []),
@@ -601,6 +603,7 @@ export async function POST(request: Request) {
           contextJson: context,
           beatCount,
           guidance: input.guidance?.strategy,
+          tier: input.contentTier,
         });
         const runNarrative = (temperature: number | undefined) =>
           generateText({
@@ -636,6 +639,10 @@ export async function POST(request: Request) {
         const beats = sanitizeNarrativeBeats(plan.beats, {
           maxBeats: beatCount,
           productName: humanProductName(input),
+          allowedArchetypes:
+            input.contentTier === 'Premium A+'
+              ? PREMIUM_PLANNABLE_ARCHETYPES
+              : APLUS_PLANNABLE_ARCHETYPES,
         });
         plan.beats = beats;
         const narrativeMs = Date.now() - tNarrative;
@@ -664,7 +671,7 @@ export async function POST(request: Request) {
           return {
             order: beat.order,
             kind,
-            amazonModuleType: KIND_TO_AMAZON[kind],
+            amazonModuleType: amazonModuleTypeForKind(kind, input.contentTier),
             job: beat.job,
             title: beat.headlineAngle ?? beat.intent.slice(0, 80),
             objective: beat.intent,

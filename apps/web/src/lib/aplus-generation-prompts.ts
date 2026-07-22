@@ -2,6 +2,8 @@ import {
   APLUS_GUIDANCE_MAX_LENGTH,
   APLUS_PLANNABLE_ARCHETYPES,
   CONVERSION_JOBS,
+  ICON_ROW_ICONS,
+  PREMIUM_PLANNABLE_ARCHETYPES,
   type NarrativeBeat,
 } from '@farvisionllc/models';
 
@@ -27,12 +29,18 @@ export const NO_TIME_SENSITIVE_RULE = [
 export const MODULE_FIELD_RULES: string[] = [
   'SUBJECT PRODUCT ONLY: describe and depict OUR product (the "Product listing" source / product facts). Competitor, Supplier, and Reference sources are DIFFERENT products — use them ONLY for comparison-table contrasts and positioning. NEVER attribute their color, size, materials, pack count, lids, or features to our product, in copy OR in image briefs.',
   'NEVER mention price, discounts, or promotions anywhere — A+ content stays live indefinitely and Amazon rejects time-sensitive claims.',
+  'NEVER echo supplier listing titles, SEO keyword strings, factory/company names, or document/file names from the sources into ANY customer-facing field (titles, headlines, column labels, captions, alt text). Source text is raw material to learn facts from, never copy.',
   'TEXT FIELDS — write real CUSTOMER-FACING copy the buyer reads. Not design notes, not descriptions of the layout.',
   '  • headline: ≤8 words, a concrete benefit. body: 1–3 sentences of durable benefit/use-case copy. bullets: ≤90 chars each, benefit statements.',
   '  • company-logo: a full-bleed brand HERO. Set headline to the brand name plus a short product descriptor — the hero line, ≤8 words (e.g. “<Brand> <Product Category>”). Set tagline to a short (≤10 words) durable benefit/brand-promise subhead. Both must suit THIS product (any category — never assume a specific one). No price/claims. ALSO choose a hero TREATMENT that best fits this product so pages do not all look identical: set heroVariant to one of overlay | split | plate | glass, and (only for overlay) set logoCorner to bottom-left or bottom-right. Vary this choice per product based on the brand mood — do NOT default every product to the same one.',
   '  • hero modules (image-header-with-text / image-text-overlay / single-image-text / image-and-text): set badge to a SHORT spec/size pill (≤12 chars, e.g. “16 OZ”, “50-PACK”, “BPA-FREE”) when an obvious size/spec applies; omit otherwise. Never price or promo.',
-  '  • comparison-table: products[].title are the column labels; rows[] are spec/benefit rows with exactly one value per product (same order). Set highlight=true on the seller’s own product.',
+  '  • comparison-table: products[].title are the column labels; rows[] are spec/benefit rows with exactly one value per product (same order). Set highlight=true on the seller’s own product. The own-product column title is a SHORT buyer-facing product name (≤4 words) derived from the product facts (e.g. the product’s category name); competitor columns get generic category descriptors. NEVER use supplier listing titles, factory/company names, or document/file names as a column title.',
   '  • tech-specs: rows[] are {label, value} product facts (dimensions, materials, care, compatibility, package contents).',
+  `  • icon-row: each item's icon MUST be one of exactly: ${ICON_ROW_ICONS.join(', ')}. Any other name renders as a generic fallback glyph — pick the closest supported one.`,
+  '  • PREMIUM COPY BUDGETS: on Premium A+ pages the copy is typed into Amazon’s native fields with HARD caps. For single-image / image-and-text modules keep body + bullets ≤450 characters COMBINED (the native text field holds 500). For full-bleed hero / image-header / brand-hero modules keep the body ≤280 characters (native description holds 300) and the headline ≤60 characters. Prefer 2–3 tight bullets over 4 long ones.',
+  '  • qna (Premium): items[] are REAL buyer objections, each question ≤120 chars ending with "?", answered in 1–3 factual sentences backed by the FACT SHEET. Never open an answer with filler like “Great question”.',
+  '  • hotspots (Premium): ONE wide base image (size 1792x1024) showing the WHOLE product with every callout-worthy feature clearly visible. Each hotspot: position {x, y} as fractions 0..1 placed ON the pictured feature (spread the markers apart — never cluster), label ≤50 chars naming the feature, copy one factual sentence.',
+  '  • carousel (Premium): slides[] tell ONE sequential story — each slide a visually DISTINCT scene carrying one idea (never crops or variations of the same photo). Per slide: a short headline (≤100 chars) and/or caption (≤200 chars). All slide briefs follow the SHOT BIBLE so the sequence reads as one shoot.',
   '',
   'IMAGE SLOTS — every image slot describes a PHOTOGRAPH to be generated or uploaded later. For each slot provide role, size, alt, and brief. DO NOT output an "image" field; slots are filled downstream.',
   '  • role: short stable id (e.g. "hero", "column-1", "comparison-thumb-1").',
@@ -138,16 +146,30 @@ export function buildNarrativePlanPrompt(options: {
   contextJson: string;
   beatCount: number;
   guidance?: string;
+  /** 'Premium A+' unlocks the EBC-native archetypes; defaults to Basic. */
+  tier?: string;
 }): string {
   const guidance = options.guidance?.trim();
+  const premium = options.tier === 'Premium A+';
+  const archetypes = premium
+    ? PREMIUM_PLANNABLE_ARCHETYPES
+    : APLUS_PLANNABLE_ARCHETYPES;
   return [
     'You are an ecommerce conversion strategist planning an Amazon A+ content page as a BUYER-JOURNEY NARRATIVE.',
     'Analyze the buyer first, then plan an ordered list of narrative BEATS. Each beat is ONE section of the page carrying exactly ONE conversion job and ONE idea — split or cut anything that needs two.',
     `For each beat set: order (1..N), job (one of: ${CONVERSION_JOBS.join(
       ', '
-    )}), archetype (one of: ${APLUS_PLANNABLE_ARCHETYPES.join(
+    )}), archetype (one of: ${archetypes.join(
       ', '
     )}), intent (ONE sentence: what this section must make the buyer believe or feel), headlineAngle (optional short angle, not final copy), assetsToUse (fileNames of uploaded assets to feature).`,
+    ...(premium
+      ? [
+          'PREMIUM A+ ARCHETYPES — this page deploys as Premium A+ (EBC), so the interactive showcase archetypes are available. Use each AT MOST ONCE per page, and only where it out-converts a static layout:',
+          '  • hotspots: best for feature-dense products — one wide hero photo carrying 3–6 labeled feature callouts. Choose it when several physical features deserve pointing at on ONE image.',
+          '  • qna: ONLY when buyer.mainObjections has substantive entries — each Q&A pair resolves one real objection with facts. Skip it for objection-light products.',
+          '  • carousel: best for range/variety stories (use cases, settings, steps) — 2–6 slides, one idea per slide.',
+        ]
+      : []),
     'DERIVE THE ARC FROM THIS PRODUCT’S STRATEGY — NOT A TEMPLATE:',
     '  • Every major objection you list in buyer.mainObjections must be answered by a beat (proof, comparison, how-it-works, or spec-sheet).',
     '  • The top benefits drive benefit / use-cases beats, weighted by how much they matter to THIS buyer.',

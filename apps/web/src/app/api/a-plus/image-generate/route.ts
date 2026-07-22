@@ -44,7 +44,7 @@ function prepareImagePrompt(prompt: string, hasReferences = false): string {
   return [
     ...(hasReferences
       ? [
-          'Reference photo(s) of the ACTUAL product are attached. Depict THIS exact product — same shape, wall texture, colors, rim, and LID COLOR as in the reference photos — recreating the scene described below around it. Never substitute a generic look-alike.',
+          'Reference photo(s) of the ACTUAL product are attached. Depict THIS exact product — same shape, proportions, materials, surface texture, and the EXACT color of every component and part as in the reference photos — recreating the scene described below around it. Never substitute a generic look-alike.',
           '',
         ]
       : []),
@@ -54,6 +54,10 @@ function prepareImagePrompt(prompt: string, hasReferences = false): string {
     // because conceptual cell labels (e.g. "Cross-Section Proof", "Insulation
     // Engineering") otherwise push the model toward unrealistic diagram/CGI art.
     'Important image rule: render a realistic, natural-light PHOTOGRAPH of the real physical product in a believable real-world setting. Absolutely NO cutaways, cross-sections, exploded or see-through/x-ray views, technical or engineering diagrams, schematics, blueprints, infographics, heat-maps, arrows/annotations, 3D or CGI renders, or abstract concept art. If the description implies an internal or technical detail, instead show the real product in a natural context that implies it (e.g. a hand holding it, a tidy stack on a counter) — never a depiction OF the concept.',
+    // Color/material drift is the #1 reference-generate failure (component
+    // colors invented, contents ghosting through solid parts) — restate it as
+    // a hard rule on EVERY image, not only when references are attached.
+    'Important image rule: component COLORS and MATERIALS are factual, not stylistic. Every part of the product (e.g. lids, caps, handles, closures, trims, straps, cables) keeps the EXACT color stated in the product facts or shown in the reference photos, in every unit visible in the frame — never recolor parts to match the scene palette. All solid parts are fully OPAQUE: never show liquid, contents, or light through a closed or solid component, and never render a solid part as translucent.',
     'Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, readable brand marks, or any other text, callouts, or numbers anywhere in the image. Leave any brand/logo placement as an empty logo-safe area for later editing.',
   ].join('\n');
 }

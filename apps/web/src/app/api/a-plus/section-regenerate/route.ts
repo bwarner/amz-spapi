@@ -6,8 +6,8 @@ import {
   APlusCreativitySchema,
   APlusGuidanceSchema,
   ArtDirectionSchema,
-  KIND_TO_AMAZON,
   NarrativeBeatSchema,
+  amazonModuleTypeForKind,
   generatedModuleSchemaForKind,
   isAplusGenerationModel,
   liftModuleToSection,
@@ -98,6 +98,7 @@ export async function POST(request: Request) {
           },
         });
   const kind = moduleKindForBeat(targetBeat);
+  const amazonModuleType = amazonModuleTypeForKind(kind, input.contentTier);
   const productName = humanProductName(input);
   const moduleCopyGuidance = body.guidance?.moduleCopy?.trim();
   const sectionNotes = body.sectionNotes?.trim();
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
   const prompt = [
     'You are SellAvant, REWRITING one section of an existing Amazon A+ content package. The rest of the page is already written — your section must fit it, not restart it.',
     `This module is the "${kind}" type. Set the "type" field to exactly "${kind}".`,
-    `Set order=${targetBeat.order}, amazonModuleType="${KIND_TO_AMAZON[kind]}", and title to a short module label.`,
+    `Set order=${targetBeat.order}, amazonModuleType="${amazonModuleType}", and title to a short module label.`,
     `This section's conversion job is "${targetBeat.job}". Its intent: ${targetBeat.intent}`,
     'Fill EVERY field the schema defines for this module type, and ONLY those fields. Do not invent fields. No bracket placeholders, no "[unknown]".',
     '',
@@ -162,7 +163,7 @@ export async function POST(request: Request) {
       const module = {
         ...res.output,
         order: targetBeat.order,
-        amazonModuleType: KIND_TO_AMAZON[kind],
+        amazonModuleType,
         type: kind,
       } as APlusGeneratedModule;
       ensureLogoBackdrop(module, productName);
