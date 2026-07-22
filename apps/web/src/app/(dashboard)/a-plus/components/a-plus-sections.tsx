@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import {
   AlertCircle,
   ArrowDown,
@@ -216,6 +217,7 @@ export function APlusSectionsPanel({
   onGenerateImage,
   placeableAssets,
   onPlaceAsset,
+  focusRequest,
 }: {
   experience: Experience;
   deployment: AplusDeployment;
@@ -238,7 +240,37 @@ export function APlusSectionsPanel({
   /** Uploaded photos the seller can pin into any slot (no generation cost). */
   placeableAssets: PlaceableAsset[];
   onPlaceAsset: (jobId: string, assetId: string) => void;
+  /**
+   * One-click evaluation fixes: expand a section and scroll to it (or to one
+   * of its fields, by DOM id `aplus-field-{sectionId}-{path.join('-')}`).
+   * Bump `nonce` per request so repeat clicks re-fire.
+   */
+  focusRequest?: {
+    sectionId: string;
+    fieldDomId?: string;
+    nonce: number;
+  } | null;
 }) {
+  const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (!focusRequest) return;
+    setOpenIds((current) => {
+      if (current.has(focusRequest.sectionId)) return current;
+      const next = new Set(current);
+      next.add(focusRequest.sectionId);
+      return next;
+    });
+    // Wait a tick for the collapsible to mount its content before scrolling.
+    const timer = setTimeout(() => {
+      const target =
+        (focusRequest.fieldDomId &&
+          document.getElementById(focusRequest.fieldDomId)) ||
+        document.getElementById(`aplus-section-${focusRequest.sectionId}`);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [focusRequest]);
+
   const budget =
     tier === 'Premium A+'
       ? APLUS_SLICE_CONSTANTS.moduleBudget.premium
@@ -327,12 +359,23 @@ export function APlusSectionsPanel({
         return (
           <article
             key={section.id}
+            id={`aplus-section-${section.id}`}
             className={cn(
               'rounded-md border bg-background',
               section.locked ? 'border-stone-400/60' : ''
             )}
           >
-            <Collapsible>
+            <Collapsible
+              open={openIds.has(section.id)}
+              onOpenChange={(open) =>
+                setOpenIds((current) => {
+                  const next = new Set(current);
+                  if (open) next.add(section.id);
+                  else next.delete(section.id);
+                  return next;
+                })
+              }
+            >
               <div className="flex flex-wrap items-start justify-between gap-3 p-4">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -440,13 +483,17 @@ export function APlusSectionsPanel({
                 </p>
                 <div className="grid gap-2 md:grid-cols-2">
                   {sectionTextFieldDescriptors(section).map((field) => (
-                    <EditableTextField
+                    <div
                       key={JSON.stringify(field.path)}
-                      field={field}
-                      onEdit={(path, value) =>
-                        onEditSectionField(section.id, path, value)
-                      }
-                    />
+                      id={`aplus-field-${section.id}-${field.path.join('-')}`}
+                    >
+                      <EditableTextField
+                        field={field}
+                        onEdit={(path, value) =>
+                          onEditSectionField(section.id, path, value)
+                        }
+                      />
+                    </div>
                   ))}
                 </div>
                 {compiledModule ? (

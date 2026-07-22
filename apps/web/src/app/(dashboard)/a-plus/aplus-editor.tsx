@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   Clipboard,
   FileImage,
   FileText,
+  History,
   ImagePlus,
   Link as LinkIcon,
   Loader2,
@@ -29,22 +30,29 @@ import {
   APLUS_GENERATION_MODELS,
   ARCHETYPE_LABELS,
   CONVERSION_JOB_LABELS,
+  PREMIUM_PLANNABLE_ARCHETYPES,
   applyAPlusGuardrails,
   beatsFromExperience,
   compileExperienceToAplus,
+  composeScore,
+  evaluationContentHash,
+  lintAplusExperience,
   liftGeneratedPackageToExperience,
   moduleImageSlots,
   moduleTextFields,
   normalizeAmazonModuleType,
+  sellerCentralModuleName,
   setSectionResolvedImage,
   setSectionTextField,
   type APlusCreativity,
   type APlusGeneratedModule as GeneratedModule,
   type APlusGuidance,
   type APlusTextFieldPath,
+  type AplusTier,
   type ConversionJob,
   type Experience,
   type LayoutArchetype,
+  type PremiumPlannableArchetype,
 } from '@farvisionllc/models';
 import {
   aplusModuleLimitForTier,
@@ -54,6 +62,12 @@ import {
 } from '@/lib/aplus-generation-prompts';
 import { slotJobId } from './components/a-plus-modules';
 import { APlusSectionsPanel } from './components/a-plus-sections';
+import { APlusEvaluationCard } from './components/a-plus-evaluation';
+import {
+  APlusHistorySheet,
+  type DraftVersionSummary,
+} from './components/a-plus-history';
+import type { AplusJudgeResult } from '@/lib/aplus-evaluate-request';
 import {
   brandThemeFrom,
   DESIGN_STYLE_KEYS,
@@ -79,7 +93,7 @@ import { cn } from '@/lib/utils';
 import { matchAssetToSlot, type MatcherCandidate } from '@/lib/asset-matcher';
 
 type SourceKind = 'Product listing' | 'Competitor' | 'Supplier' | 'Reference';
-type ContentTier = 'Basic A+' | 'Premium A+';
+type ContentTier = AplusTier;
 type BuilderMode = 'simple' | 'advanced';
 type WizardStep = 'basics' | 'sources' | 'assets' | 'review';
 type PreviewViewport = 'desktop' | 'mobile';
@@ -270,7 +284,8 @@ type DraftSummary = {
   brandGuideId?: string;
   name: string;
   productName?: string;
-  asin?: string;
+  /** Deploy-target ASINs (first = primary). */
+  asins?: string[];
   contentTier?: ContentTier;
   updatedAt: number;
 };
@@ -309,6 +324,9 @@ type DraftPayload = {
   builderMode?: BuilderMode;
   wizardStep?: WizardStep;
   productName?: string;
+  /** Deploy-target ASINs (first = primary, used for catalog lookups). */
+  asins?: string[];
+  /** Legacy single-ASIN payloads — converted one-way to `asins` on load. */
   asin?: string;
   contentTier?: ContentTier;
   productOneLiner?: string;
@@ -340,6 +358,16 @@ type DraftPayload = {
   guidance?: APlusGuidance;
   /** True once the user hand-edits generated content (regenerate warns). */
   hasManualEdits?: boolean;
+  /** Last AI quality evaluation (lint findings are recomputed live). */
+  evaluation?: SavedEvaluation;
+};
+
+type SavedEvaluation = {
+  judge: AplusJudgeResult;
+  /** evaluationContentHash at judge time — mismatch = stale. */
+  contentHash: string;
+  modelId?: string;
+  evaluatedAt: number;
 };
 
 type GeneratedAPlusPackage = {
@@ -617,10 +645,6 @@ const SELECT_CLASSNAME = cn(
   'h-10 w-full rounded-md border px-3 text-sm',
   FIELD_CLASSNAME
 );
-const COMPACT_SELECT_CLASSNAME = cn(
-  'h-10 min-w-0 rounded-md border px-3 text-sm',
-  FIELD_CLASSNAME
-);
 const TEXTAREA_CLASSNAME = cn(
   'border-border/80 bg-card shadow-sm transition-colors focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20'
 );
@@ -630,13 +654,14 @@ function extractFirstUrl(text: string): string | null {
   return match?.[0] ?? null;
 }
 
-function formatDraftOption(draft: DraftSummary): string {
-  const product = draft.productName?.trim() || draft.asin?.trim();
-  const date = new Date(draft.updatedAt).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
-  return [draft.name, product, date].filter(Boolean).join(' · ');
+function isInspectableUrl(url: string) {
+  if (!/^https?:\/\//i.test(url.trim())) return false;
+  try {
+    new URL(url.trim());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function sha256File(file: File): Promise<string> {
@@ -713,7 +738,7 @@ function prepareGeneratedImagePrompt(
     // model invents a subject (famously: an office printer for coffee cups).
     ...(productContext
       ? [
-          `THE HERO PRODUCT IN THIS SHOT — depict EXACTLY this product; every physical detail listed here (colors, lid color, materials, counts) is MANDATORY and overrides anything else: ${productContext}`,
+          `THE HERO PRODUCT IN THIS SHOT — depict EXACTLY this product; every physical detail listed here (colors of every component, materials, construction, counts) is MANDATORY and overrides anything else: ${productContext}`,
           '',
         ]
       : []),
@@ -734,7 +759,29 @@ export function APlusEditor({
   const [builderMode, setBuilderMode] = useState<BuilderMode>('simple');
   const [wizardStep, setWizardStep] = useState<WizardStep>('basics');
   const [productName, setProductName] = useState('');
-  const [asin, setAsin] = useState('');
+  // Deploy-target ASINs (first = primary). One design applies to many ASINs
+  // (e.g. a variation family); generation/catalog lookups use the primary.
+  const [asins, setAsins] = useState<string[]>([]);
+  const [asinInput, setAsinInput] = useState('');
+  const asin = asins[0] ?? '';
+
+  /** Adds the typed ASIN(s) — supports comma/space-separated paste. */
+  function commitAsinInput() {
+    const entries = [
+      ...new Set(
+        asinInput
+          .split(/[\s,]+/)
+          .map((item) => item.trim().toUpperCase())
+          .filter(Boolean)
+      ),
+    ];
+    if (!entries.length) return;
+    setAsins((current) => [
+      ...current,
+      ...entries.filter((item) => !current.includes(item)),
+    ]);
+    setAsinInput('');
+  }
   const [contentTier, setContentTier] = useState<ContentTier>('Basic A+');
   const [productOneLiner, setProductOneLiner] = useState('');
   const [targetCustomer, setTargetCustomer] = useState('');
@@ -753,7 +800,6 @@ export function APlusEditor({
   const [draftId, setDraftId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('Untitled A+ draft');
   const [brandGuideId, setBrandGuideId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [brandGuides, setBrandGuides] = useState<BrandGuide[]>([]);
   const [saveStatus, setSaveStatus] = useState<
     'idle' | 'loading' | 'saving' | 'saved' | 'error'
@@ -765,6 +811,10 @@ export function APlusEditor({
   const [sourceExtractions, setSourceExtractions] = useState<
     Record<number, SourceExtraction>
   >({});
+  const sourceAutoInspectTimersRef = useRef<Record<number, number>>({});
+  const lastInspectedSourceUrlsRef = useRef<Record<number, string>>({});
+  const sourceCheckRequestUrlsRef = useRef<Record<number, string>>({});
+  const sourceExtractRequestUrlsRef = useRef<Record<number, string>>({});
   const [copied, setCopied] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
   const [generateStatus, setGenerateStatus] = useState<
@@ -901,6 +951,9 @@ export function APlusEditor({
   const productListingExtraction = productListingSource
     ? sourceExtractions[productListingSource.id]
     : undefined;
+  const isSourceParsing = Object.values(sourceExtractions).some(
+    (source) => source.status === 'extracting'
+  );
 
   // The Amazon deployment is a pure derivation of the Experience — recompiled
   // live on every edit/reorder (the compiler is framework-free and cheap).
@@ -912,12 +965,86 @@ export function APlusEditor({
     [contentTier, experience]
   );
 
+  // ---- Evaluation: lint is a LIVE derivation (never stale, never persisted);
+  // only the on-demand AI judge result is stored, staleness-tracked by hash.
+  const [evaluation, setEvaluation] = useState<SavedEvaluation | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluateError, setEvaluateError] = useState<string | null>(null);
+
+  // ---- Version history: protective snapshots + backtracking.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [versions, setVersions] = useState<DraftVersionSummary[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionBusyId, setVersionBusyId] = useState<string | null>(null);
+  const [snapshotting, setSnapshotting] = useState(false);
+  const [sectionFocusRequest, setSectionFocusRequest] = useState<{
+    sectionId: string;
+    fieldDomId?: string;
+    nonce: number;
+  } | null>(null);
+
+  // Freshly generated images live only in editor state until saved — tell the
+  // lint about them so it doesn't flag those slots as missing.
+  const resolvedSlotKeys = useMemo(() => {
+    if (!deployment) return [];
+    const keys: string[] = [];
+    for (const module of deployment.modules) {
+      for (const slot of moduleImageSlots(module)) {
+        if (slot.image?.url) continue;
+        const result = imageJobResults[slotJobId(module.order, slot.role)];
+        if (result?.status === 'done')
+          keys.push(`${module.order}:${slot.role}`);
+      }
+    }
+    return keys;
+  }, [deployment, imageJobResults]);
+
+  const lintFindings = useMemo(
+    () =>
+      experience && deployment
+        ? lintAplusExperience(experience, deployment, contentTier, {
+            asins,
+            hasBrandLogo: Boolean(
+              brandLogoAssetId || selectedBrandGuide?.logoAsset
+            ),
+            objections,
+            resolvedSlotKeys,
+          })
+        : [],
+    [
+      asins,
+      brandLogoAssetId,
+      contentTier,
+      deployment,
+      experience,
+      objections,
+      resolvedSlotKeys,
+      selectedBrandGuide?.logoAsset,
+    ]
+  );
+
+  const evaluationHash = useMemo(
+    () => (deployment ? evaluationContentHash(deployment, contentTier) : ''),
+    [contentTier, deployment]
+  );
+  const evaluationStale = Boolean(
+    evaluation && evaluation.contentHash !== evaluationHash
+  );
+  const evaluationScore = useMemo(
+    () =>
+      composeScore(
+        lintFindings,
+        evaluation && !evaluationStale ? evaluation.judge.dimensions : undefined
+      ),
+    [evaluation, evaluationStale, lintFindings]
+  );
+
   const currentDraftPayload = useMemo<DraftPayload>(
     () => ({
       builderMode,
       wizardStep,
       productName,
-      asin,
+      asins,
       contentTier,
       productOneLiner,
       targetCustomer,
@@ -941,9 +1068,11 @@ export function APlusEditor({
         moduleCopy: guidanceModuleCopy.trim() || undefined,
       },
       hasManualEdits: hasManualEdits || undefined,
+      evaluation: evaluation ?? undefined,
     }),
     [
-      asin,
+      asins,
+      evaluation,
       brandColors,
       brandFontNotes,
       brandVoice,
@@ -1038,6 +1167,7 @@ export function APlusEditor({
         contextJson: compactGenerationInput(generateRequestBody),
         beatCount: aplusModuleLimitForTier(contentTier),
         guidance: guidanceStrategy,
+        tier: contentTier,
       }),
     [contentTier, generateRequestBody, guidanceStrategy]
   );
@@ -1049,7 +1179,7 @@ export function APlusEditor({
         contentType: 'EMC',
         tier: contentTier,
         locale: 'en-US',
-        asinSet: asin ? [asin] : [],
+        asinSet: asins,
         sourceLinks: sources.filter((source) => source.url.trim()),
         brandVoice,
         rawNotes,
@@ -1133,7 +1263,7 @@ export function APlusEditor({
       },
     }),
     [
-      asin,
+      asins,
       brandColors,
       brandFontNotes,
       brandVoice,
@@ -1165,24 +1295,14 @@ export function APlusEditor({
     async function loadSavedWork() {
       setSaveStatus('loading');
       try {
-        const [draftResponse, brandGuideResponse] = await Promise.all([
-          fetch('/api/a-plus/drafts'),
-          fetch('/api/a-plus/brand-guides'),
-        ]);
-
-        if (!draftResponse.ok || !brandGuideResponse.ok) {
+        const brandGuideResponse = await fetch('/api/a-plus/brand-guides');
+        if (!brandGuideResponse.ok) {
           throw new Error('Could not load saved A+ work.');
         }
-
-        const draftBody = (await draftResponse.json()) as {
-          drafts?: DraftSummary[];
-        };
         const brandGuideBody = (await brandGuideResponse.json()) as {
           brandGuides?: BrandGuide[];
         };
-
         if (!cancelled) {
-          setDrafts(draftBody.drafts || []);
           setBrandGuides(brandGuideBody.brandGuides || []);
           setSaveStatus('idle');
         }
@@ -1207,6 +1327,54 @@ export function APlusEditor({
       newDraft();
     }
   }, [initialDraftId, isNew]);
+
+  // Manual URL entry should behave like drag/drop and paste, but with a small
+  // debounce so we do not fetch half-typed URLs.
+  useEffect(() => {
+    const liveSourceIds = new Set(sources.map((source) => source.id));
+
+    for (const [sourceId, timer] of Object.entries(
+      sourceAutoInspectTimersRef.current
+    )) {
+      if (!liveSourceIds.has(Number(sourceId))) {
+        window.clearTimeout(timer);
+        delete sourceAutoInspectTimersRef.current[Number(sourceId)];
+      }
+    }
+
+    for (const source of sources) {
+      const trimmedUrl = source.url.trim();
+      const existingTimer = sourceAutoInspectTimersRef.current[source.id];
+
+      if (
+        !trimmedUrl ||
+        !isInspectableUrl(trimmedUrl) ||
+        lastInspectedSourceUrlsRef.current[source.id] === trimmedUrl
+      ) {
+        if (existingTimer) {
+          window.clearTimeout(existingTimer);
+          delete sourceAutoInspectTimersRef.current[source.id];
+        }
+        continue;
+      }
+
+      if (existingTimer) {
+        window.clearTimeout(existingTimer);
+      }
+
+      sourceAutoInspectTimersRef.current[source.id] = window.setTimeout(() => {
+        delete sourceAutoInspectTimersRef.current[source.id];
+        inspectSource({ ...source, url: trimmedUrl });
+      }, 900);
+    }
+
+    return () => {
+      for (const timer of Object.values(sourceAutoInspectTimersRef.current)) {
+        window.clearTimeout(timer);
+      }
+      sourceAutoInspectTimersRef.current = {};
+    };
+  }, [sources]);
 
   // Debounced autosave of the current inputs to localStorage.
   useEffect(() => {
@@ -1591,15 +1759,42 @@ export function APlusEditor({
    * Rewrites ONE section via the narrative writer, honoring sibling locks and
    * the section's notes. Already-generated images carry over by slot role
    * (same archetype only) so regeneration never re-spends image credits.
+   *
+   * `overrides` powers one-click evaluation fixes: `notes` is sent DIRECTLY
+   * (state set in the same handler would be stale in this closure) and also
+   * written back so the panel shows what was sent; `archetype` retargets the
+   * beat — the writer derives the module kind from it, so this is how a
+   * section switches layout.
    */
-  async function regenerateSection(sectionId: string) {
+  async function regenerateSection(
+    sectionId: string,
+    overrides?: { notes?: string; archetype?: LayoutArchetype }
+  ) {
     if (!experience || regeneratingSectionId) return;
     const sections = [...experience.sections].sort((a, b) => a.order - b.order);
     const section = sections.find((s) => s.id === sectionId);
     if (!section || section.locked) return;
     const beats = beatsFromExperience(experience);
-    const targetBeat = beats.find((beat) => beat.order === section.order);
+    let targetBeat = beats.find((beat) => beat.order === section.order);
     if (!targetBeat) return;
+    if (
+      overrides?.archetype &&
+      (PREMIUM_PLANNABLE_ARCHETYPES as readonly string[]).includes(
+        overrides.archetype
+      )
+    ) {
+      targetBeat = {
+        ...targetBeat,
+        archetype: overrides.archetype as PremiumPlannableArchetype,
+      };
+    }
+    const sectionNotes = overrides?.notes ?? section.notes;
+    if (overrides?.notes) {
+      updateSection(sectionId, (current) => ({
+        ...current,
+        notes: overrides.notes,
+      }));
+    }
     const lockedSiblingSummaries = sections
       .filter((s) => s.locked && s.id !== sectionId)
       .slice(0, 10)
@@ -1628,7 +1823,7 @@ export function APlusEditor({
           artDirection: experience.artDirection,
           beats,
           targetBeat,
-          sectionNotes: section.notes,
+          sectionNotes,
           lockedSiblingSummaries,
         }),
       });
@@ -1679,6 +1874,75 @@ export function APlusEditor({
     }
   }
 
+  /**
+   * One AI-judge call scoring the page copy against the fact sheet (quality
+   * 0–60). Judging rewards a strong model, runs on demand, and the result is
+   * persisted with the draft, staleness-tracked by content hash.
+   */
+  async function runEvaluation() {
+    if (!experience || !deployment || evaluating) return;
+    setEvaluating(true);
+    setEvaluateError(null);
+    try {
+      // Strip generation-only knobs; the judge takes the same input facts.
+      const { creativity, guidance, ...input } = generateRequestBody;
+      void creativity;
+      void guidance;
+      const moduleCopy = deployment.modules.map((module) => ({
+        order: module.order,
+        moduleName: sellerCentralModuleName(module.amazonModuleType),
+        fields: moduleTextFields(module).map((field) => ({
+          label: field.label,
+          value: field.value.slice(0, 2000),
+        })),
+      }));
+      const response = await fetch('/api/a-plus/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input,
+          model: input.model,
+          beats: beatsFromExperience(experience),
+          moduleCopy,
+          lintSummary: lintFindings
+            .slice(0, 30)
+            .map((finding) => finding.message.slice(0, 300)),
+        }),
+      });
+      const body = (await response.json()) as {
+        result?: AplusJudgeResult;
+        modelId?: string;
+        error?: string;
+      };
+      if (!response.ok || !body.result) {
+        throw new Error(body.error || 'Could not evaluate the content.');
+      }
+      setEvaluation({
+        judge: body.result,
+        contentHash: evaluationHash,
+        modelId: body.modelId,
+        evaluatedAt: Date.now(),
+      });
+    } catch (error) {
+      setEvaluateError(
+        error instanceof Error
+          ? error.message
+          : 'Could not evaluate the content.'
+      );
+    } finally {
+      setEvaluating(false);
+    }
+  }
+
+  /** Expand a section card and scroll to it (or a specific field within it). */
+  function focusSection(sectionId: string, fieldDomId?: string) {
+    setSectionFocusRequest((current) => ({
+      sectionId,
+      fieldDomId,
+      nonce: (current?.nonce ?? 0) + 1,
+    }));
+  }
+
   function addSource() {
     setSources((current) => [
       ...current,
@@ -1695,6 +1959,7 @@ export function APlusEditor({
   async function checkSource(source: SourceLink) {
     const trimmedUrl = source.url.trim();
     if (!trimmedUrl) return;
+    sourceCheckRequestUrlsRef.current[source.id] = trimmedUrl;
 
     setSourceChecks((current) => ({
       ...current,
@@ -1708,11 +1973,13 @@ export function APlusEditor({
         body: JSON.stringify({ url: trimmedUrl }),
       });
       const result = (await response.json()) as SourceCheck;
+      if (sourceCheckRequestUrlsRef.current[source.id] !== trimmedUrl) return;
       setSourceChecks((current) => ({
         ...current,
         [source.id]: result,
       }));
     } catch {
+      if (sourceCheckRequestUrlsRef.current[source.id] !== trimmedUrl) return;
       setSourceChecks((current) => ({
         ...current,
         [source.id]: {
@@ -1736,8 +2003,13 @@ export function APlusEditor({
       if ((!productName.trim() || overwrite) && facts.productName) {
         setProductName(facts.productName);
       }
-      if ((!asin.trim() || overwrite) && facts.asin) {
-        setAsin(facts.asin);
+      if ((asins.length === 0 || overwrite) && facts.asin) {
+        // Fill/replace the PRIMARY ASIN only; extra deploy targets stay.
+        const extracted = facts.asin.trim().toUpperCase();
+        setAsins((current) => [
+          extracted,
+          ...current.slice(1).filter((item) => item !== extracted),
+        ]);
       }
     }
 
@@ -1815,6 +2087,7 @@ export function APlusEditor({
   async function extractSource(source: SourceLink) {
     const trimmedUrl = source.url.trim();
     if (!trimmedUrl) return;
+    sourceExtractRequestUrlsRef.current[source.id] = trimmedUrl;
 
     setSourceExtractions((current) => ({
       ...current,
@@ -1836,6 +2109,10 @@ export function APlusEditor({
         httpStatus?: number;
         cacheHit?: boolean;
       };
+
+      if (sourceExtractRequestUrlsRef.current[source.id] !== trimmedUrl) {
+        return;
+      }
 
       if (!response.ok || body.error || !body.facts) {
         setSourceExtractions((current) => ({
@@ -1872,6 +2149,9 @@ export function APlusEditor({
         },
       }));
     } catch {
+      if (sourceExtractRequestUrlsRef.current[source.id] !== trimmedUrl) {
+        return;
+      }
       setSourceExtractions((current) => ({
         ...current,
         [source.id]: {
@@ -1883,6 +2163,9 @@ export function APlusEditor({
   }
 
   function inspectSource(source: SourceLink) {
+    const trimmedUrl = source.url.trim();
+    if (!isInspectableUrl(trimmedUrl)) return;
+    lastInspectedSourceUrlsRef.current[source.id] = trimmedUrl;
     void checkSource(source);
     void extractSource(source);
   }
@@ -1938,7 +2221,7 @@ export function APlusEditor({
     setTimeout(() => setPromptCopied(false), 2000);
   }
 
-  function writeSlotImageIntoPackage(jobId: string, url: string) {
+  function writeSlotImageIntoPackage(jobId: string, url: string, alt?: string) {
     const match = /^img-(\d+)-(.+)$/.exec(jobId);
     if (!match) return;
     // Only persist real asset references (e.g. /api/a-plus/assets/<id>). A
@@ -1958,8 +2241,35 @@ export function APlusEditor({
     )?.sectionIds[0];
     if (!sectionId) return;
     updateSection(sectionId, (section) =>
-      setSectionResolvedImage(section, role, { url })
+      setSectionResolvedImage(section, role, { url, alt })
     );
+  }
+
+  /**
+   * Alt text describing an UPLOADED asset — vision-profile description first,
+   * then the seller's own description, then a humanized filename. Placed
+   * photos must carry THEIR OWN description, not the planned AI scene's.
+   * Kept SHORT: alt is a label, not a caption — first sentence, ≤100 chars,
+   * cut on a word boundary.
+   */
+  function assetAltText(assetId: string): string | undefined {
+    const item = assetLibrary.find(
+      (candidate) => candidate.asset?.assetId === assetId
+    );
+    if (!item) return undefined;
+    const source =
+      item.profile?.description?.trim() ||
+      item.description?.trim() ||
+      item.fileName
+        .replace(/\.[^.]+$/, '')
+        .replace(/[-_]+/g, ' ')
+        .trim();
+    if (!source) return undefined;
+    const sentence = source.split(/(?<=[.!?])\s/)[0] ?? source;
+    if (sentence.length <= 100) return sentence.replace(/[.,;:\s]+$/, '');
+    const cut = sentence.slice(0, 100);
+    const atWord = cut.includes(' ') ? cut.slice(0, cut.lastIndexOf(' ')) : cut;
+    return atWord.replace(/[.,;:\s]+$/, '');
   }
 
   /**
@@ -1969,7 +2279,7 @@ export function APlusEditor({
    */
   function placeAssetInSlot(jobId: string, assetId: string) {
     const url = `/api/a-plus/assets/${assetId}`;
-    writeSlotImageIntoPackage(jobId, url);
+    writeSlotImageIntoPackage(jobId, url, assetAltText(assetId));
     setImageJobResults((current) => ({
       ...current,
       [jobId]: { status: 'done', url, assetId, fromAsset: true },
@@ -2177,7 +2487,11 @@ export function APlusEditor({
         // Use the seller's real photo directly — no generation, no cost.
         const url = `/api/a-plus/assets/${decision.assetId}`;
         usedAssetIds.add(decision.assetId);
-        writeSlotImageIntoPackage(job.jobId, url);
+        writeSlotImageIntoPackage(
+          job.jobId,
+          url,
+          assetAltText(decision.assetId)
+        );
         setImageJobResults((current) => ({
           ...current,
           [job.jobId]: {
@@ -2205,6 +2519,12 @@ export function APlusEditor({
     ) {
       return;
     }
+    // Protective snapshot: archive the current content BEFORE generation
+    // replaces it (the payload memo still holds the old state here).
+    if (experience && draftId) {
+      await snapshotVersion('pre-generation');
+    }
+
     setGenerateStatus('generating');
     setGenerateError('');
     setGenerationProgress({ startedAt: Date.now(), phase: 'narrative' });
@@ -2347,7 +2667,13 @@ export function APlusEditor({
     if (payload.builderMode) setBuilderMode(payload.builderMode);
     if (payload.wizardStep) setWizardStep(payload.wizardStep);
     if (payload.productName !== undefined) setProductName(payload.productName);
-    if (payload.asin !== undefined) setAsin(payload.asin);
+    if (payload.asins !== undefined) {
+      setAsins(payload.asins);
+    } else if (payload.asin !== undefined) {
+      // One-way conversion of legacy single-ASIN payloads.
+      setAsins(payload.asin.trim() ? [payload.asin.trim().toUpperCase()] : []);
+    }
+    if (payload.evaluation !== undefined) setEvaluation(payload.evaluation);
     if (payload.contentTier) setContentTier(payload.contentTier);
     if (payload.productOneLiner !== undefined)
       setProductOneLiner(payload.productOneLiner);
@@ -2432,7 +2758,10 @@ export function APlusEditor({
     setBuilderMode('simple');
     setWizardStep('basics');
     setProductName('');
-    setAsin('');
+    setAsins([]);
+    setAsinInput('');
+    setEvaluation(null);
+    setEvaluateError(null);
     setContentTier('Basic A+');
     setProductOneLiner('');
     setTargetCustomer('');
@@ -2471,7 +2800,7 @@ export function APlusEditor({
           brandGuideId,
           name: draftName,
           productName,
-          asin,
+          asins,
           contentTier,
           payload: currentDraftPayload,
           packageJson,
@@ -2486,10 +2815,6 @@ export function APlusEditor({
       }
       setDraftId(body.draft.draftId);
       if (!silent) setDraftName(body.draft.name);
-      setDrafts((current) => [
-        body.draft as DraftSummary,
-        ...current.filter((draft) => draft.draftId !== body.draft?.draftId),
-      ]);
       if (!silent) {
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus('idle'), 1800);
@@ -2497,6 +2822,106 @@ export function APlusEditor({
     } catch {
       if (!silent) setSaveStatus('error');
     }
+  }
+
+  // ---- Version history --------------------------------------------------
+
+  async function loadVersions() {
+    if (!draftId) return;
+    setVersionsLoading(true);
+    try {
+      const response = await fetch(`/api/a-plus/drafts/${draftId}/versions`);
+      const body = (await response.json()) as {
+        versions?: DraftVersionSummary[];
+      };
+      if (response.ok) setVersions(body.versions ?? []);
+    } catch {
+      // Leave the previous list; the sheet shows what it has.
+    } finally {
+      setVersionsLoading(false);
+    }
+  }
+
+  /**
+   * Archives the CURRENT editor state. Best-effort by design: a failed
+   * protective snapshot must never block the generation/restore it precedes.
+   */
+  async function snapshotVersion(
+    origin: 'pre-generation' | 'pre-restore' | 'manual',
+    label?: string
+  ): Promise<void> {
+    if (!draftId || !experience) return;
+    if (origin === 'manual') setSnapshotting(true);
+    try {
+      await fetch(`/api/a-plus/drafts/${draftId}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payload: currentDraftPayload,
+          packageJson,
+          origin,
+          label,
+          name: draftName,
+        }),
+      });
+      if (historyOpen) void loadVersions();
+    } catch {
+      // Best-effort — never block the action this snapshot protects.
+    } finally {
+      if (origin === 'manual') setSnapshotting(false);
+    }
+  }
+
+  /** Swap the editor to an older version — after archiving the current state. */
+  async function restoreVersion(versionId: string) {
+    if (!draftId || versionBusyId || snapshotting) return;
+    setVersionBusyId(versionId);
+    try {
+      await snapshotVersion('pre-restore');
+      const response = await fetch(
+        `/api/a-plus/drafts/${draftId}/versions/${versionId}`
+      );
+      const body = (await response.json()) as {
+        version?: { payload?: unknown };
+        error?: string;
+      };
+      if (!response.ok || !body.version) {
+        throw new Error(body.error || 'Could not load that version.');
+      }
+      hydrateDraft((body.version.payload ?? {}) as DraftPayload);
+      setHistoryOpen(false);
+      await saveDraft({ silent: true });
+      void loadVersions();
+    } catch (error) {
+      setGenerateError(
+        error instanceof Error ? error.message : 'Could not restore version.'
+      );
+      setGenerateStatus('error');
+    } finally {
+      setVersionBusyId(null);
+    }
+  }
+
+  async function deleteVersion(versionId: string) {
+    if (!draftId || versionBusyId) return;
+    setVersionBusyId(versionId);
+    try {
+      await fetch(`/api/a-plus/drafts/${draftId}/versions/${versionId}`, {
+        method: 'DELETE',
+      });
+      setVersions((current) =>
+        current.filter((version) => version.versionId !== versionId)
+      );
+    } catch {
+      // The list simply keeps the row; user can retry.
+    } finally {
+      setVersionBusyId(null);
+    }
+  }
+
+  function openHistory() {
+    setHistoryOpen(true);
+    void loadVersions();
   }
 
   function applyBrandGuide(nextBrandGuideId: string) {
@@ -2553,28 +2978,29 @@ export function APlusEditor({
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Designs
           </Button>
-          <select
-            value={draftId || ''}
-            onChange={(event) => {
-              if (event.target.value)
-                router.push(`/a-plus/${event.target.value}`);
-            }}
-            className={cn(COMPACT_SELECT_CLASSNAME, 'flex-1')}
-          >
-            <option value="">Current unsaved draft</option>
-            {drafts.map((draft) => (
-              <option key={draft.draftId} value={draft.draftId}>
-                {draft.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => router.push('/a-plus/new')}
-          >
-            New
-          </Button>
+          {draftId ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              title="Version history — restore an earlier state"
+              onClick={openHistory}
+            >
+              <History className="mr-1.5 h-3.5 w-3.5" />
+              History
+            </Button>
+          ) : null}
+          {draftId ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              title="Start a new design"
+              onClick={() => router.push('/a-plus/new')}
+            >
+              New
+            </Button>
+          ) : null}
         </div>
         <div className="space-y-2">
           <Label htmlFor="draft-name">Draft name</Label>
@@ -2788,7 +3214,19 @@ export function APlusEditor({
           Product details
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4" aria-busy={isSourceParsing}>
+        {isSourceParsing ? (
+          <div
+            className="flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800"
+            aria-live="polite"
+          >
+            <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin" />
+            <span>
+              Reading page and filling product fields. Inputs are locked until
+              parsing finishes.
+            </span>
+          </div>
+        ) : null}
         <div className="space-y-2">
           <Label htmlFor="product-name">Product name</Label>
           <Input
@@ -2796,19 +3234,65 @@ export function APlusEditor({
             value={productName}
             onChange={(event) => setProductName(event.target.value)}
             placeholder="Stainless tea infuser"
+            disabled={isSourceParsing}
             className={FIELD_CLASSNAME}
           />
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="asin">ASIN</Label>
+            <Label htmlFor="asin">ASINs</Label>
+            {asins.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {asins.map((item, index) => (
+                  <Badge
+                    key={item}
+                    variant={index === 0 ? 'default' : 'secondary'}
+                    className="gap-1 font-mono"
+                    title={
+                      index === 0
+                        ? 'Primary ASIN — used for catalog lookups'
+                        : 'Additional deploy target'
+                    }
+                  >
+                    {item}
+                    <button
+                      type="button"
+                      aria-label={`Remove ASIN ${item}`}
+                      disabled={isSourceParsing}
+                      className="ml-0.5 rounded-full opacity-70 hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      onClick={() =>
+                        setAsins((current) =>
+                          current.filter((candidate) => candidate !== item)
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
             <Input
               id="asin"
-              value={asin}
-              onChange={(event) => setAsin(event.target.value.toUpperCase())}
-              placeholder="B0..."
+              value={asinInput}
+              onChange={(event) =>
+                setAsinInput(event.target.value.toUpperCase())
+              }
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ',') {
+                  event.preventDefault();
+                  commitAsinInput();
+                }
+              }}
+              onBlur={commitAsinInput}
+              placeholder={asins.length ? 'Add another ASIN…' : 'B0...'}
+              disabled={isSourceParsing}
               className={FIELD_CLASSNAME}
             />
+            <p className="text-xs text-muted-foreground">
+              One A+ design can be applied to several ASINs (e.g. a variation
+              family). The first is the primary.
+            </p>
           </div>
           <div className="space-y-2">
             <Label>Package type</Label>
@@ -2824,6 +3308,7 @@ export function APlusEditor({
             >
               <ToggleGroupItem
                 value="Basic A+"
+                disabled={isSourceParsing}
                 className="h-auto min-h-14 flex-col items-start px-3 py-2 text-left"
                 aria-label="Basic A plus package"
               >
@@ -2834,6 +3319,7 @@ export function APlusEditor({
               </ToggleGroupItem>
               <ToggleGroupItem
                 value="Premium A+"
+                disabled={isSourceParsing}
                 className="h-auto min-h-14 flex-col items-start px-3 py-2 text-left"
                 aria-label="Premium A plus package"
               >
@@ -2852,6 +3338,7 @@ export function APlusEditor({
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault();
+              if (isSourceParsing) return;
               const url =
                 event.dataTransfer.getData('text/uri-list') ||
                 extractFirstUrl(event.dataTransfer.getData('text/plain'));
@@ -2913,6 +3400,7 @@ export function APlusEditor({
                 if (productSource) inspectSource(productSource);
               }}
               placeholder="Drag or paste product listing URL"
+              disabled={isSourceParsing}
               className={cn('pl-7 text-sm', FIELD_CLASSNAME)}
             />
           </div>
@@ -3000,7 +3488,9 @@ export function APlusEditor({
               size="sm"
               onClick={() => void rebuildFromSources()}
               disabled={
-                rebuildingNotes || !sources.some((source) => source.url.trim())
+                isSourceParsing ||
+                rebuildingNotes ||
+                !sources.some((source) => source.url.trim())
               }
               title="Clear these notes and re-read every linked source with the current extraction rules"
             >
@@ -3017,6 +3507,7 @@ export function APlusEditor({
             value={rawNotes}
             onChange={(event) => setRawNotes(event.target.value)}
             placeholder="Paste rough notes, bullets, customer reviews, supplier claims, dimensions, or anything the AI should learn from."
+            disabled={isSourceParsing}
             className={cn('min-h-24', TEXTAREA_CLASSNAME)}
           />
           <p className="text-xs leading-5 text-muted-foreground">
@@ -3071,6 +3562,7 @@ export function APlusEditor({
                     value={brandVoice}
                     onChange={(event) => setBrandVoice(event.target.value)}
                     placeholder="Tone, writing style, words to lean into or avoid..."
+                    disabled={isSourceParsing}
                     className={cn('min-h-20', TEXTAREA_CLASSNAME)}
                   />
                 </div>
@@ -3089,6 +3581,7 @@ export function APlusEditor({
                     value={brandColors}
                     onChange={(event) => setBrandColors(event.target.value)}
                     placeholder="Primary foreground #..., Secondary foreground #..., Background #..."
+                    disabled={isSourceParsing}
                     className={cn('min-h-16', TEXTAREA_CLASSNAME)}
                   />
                 </div>
@@ -3110,6 +3603,7 @@ export function APlusEditor({
                         setBrandFontNotes(event.target.value)
                       }
                       placeholder="Primary ..., Secondary ..., Accent ..."
+                      disabled={isSourceParsing}
                       className={cn('min-h-16', TEXTAREA_CLASSNAME)}
                     />
                   </div>
@@ -3129,6 +3623,7 @@ export function APlusEditor({
                       value={logoNotes}
                       onChange={(event) => setLogoNotes(event.target.value)}
                       placeholder="Safe area, placement, reversed logo rules, do not redraw..."
+                      disabled={isSourceParsing}
                       className={cn('min-h-16', TEXTAREA_CLASSNAME)}
                     />
                   </div>
@@ -3143,6 +3638,7 @@ export function APlusEditor({
                 value={productOneLiner}
                 onChange={(event) => setProductOneLiner(event.target.value)}
                 placeholder="One sentence. Usually AI-filled from sources."
+                disabled={isSourceParsing}
                 className={cn('min-h-16', TEXTAREA_CLASSNAME)}
               />
             </div>
@@ -3154,6 +3650,7 @@ export function APlusEditor({
                   value={targetCustomer}
                   onChange={(event) => setTargetCustomer(event.target.value)}
                   placeholder="Who buys it, why now, what they care about."
+                  disabled={isSourceParsing}
                   className={cn('min-h-20', TEXTAREA_CLASSNAME)}
                 />
               </div>
@@ -3164,6 +3661,7 @@ export function APlusEditor({
                   value={pricePoint}
                   onChange={(event) => setPricePoint(event.target.value)}
                   placeholder="Budget, mid-market, premium..."
+                  disabled={isSourceParsing}
                   className={FIELD_CLASSNAME}
                 />
               </div>
@@ -3175,6 +3673,7 @@ export function APlusEditor({
                 value={keyFeatures}
                 onChange={(event) => setKeyFeatures(event.target.value)}
                 placeholder="Top features with buyer benefit for each."
+                disabled={isSourceParsing}
                 className={cn('min-h-24', TEXTAREA_CLASSNAME)}
               />
             </div>
@@ -3185,6 +3684,7 @@ export function APlusEditor({
                 value={differentiators}
                 onChange={(event) => setDifferentiators(event.target.value)}
                 placeholder="Materials, bundle, proof, compatibility, patents, certifications..."
+                disabled={isSourceParsing}
                 className={cn('min-h-20', TEXTAREA_CLASSNAME)}
               />
             </div>
@@ -3195,6 +3695,7 @@ export function APlusEditor({
                 value={objections}
                 onChange={(event) => setObjections(event.target.value)}
                 placeholder="What might stop a buyer from purchasing?"
+                disabled={isSourceParsing}
                 className={cn('min-h-20', TEXTAREA_CLASSNAME)}
               />
             </div>
@@ -3211,9 +3712,11 @@ export function APlusEditor({
       </CardHeader>
       <CardContent
         className="space-y-3"
+        aria-busy={isSourceParsing}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();
+          if (isSourceParsing) return;
           const url =
             event.dataTransfer.getData('text/uri-list') ||
             extractFirstUrl(event.dataTransfer.getData('text/plain'));
@@ -3227,6 +3730,18 @@ export function APlusEditor({
           here. SellAvant will flag sources that look gated, paywalled, or
           blocked.
         </div>
+        {isSourceParsing ? (
+          <div
+            className="flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800"
+            aria-live="polite"
+          >
+            <Loader2 className="mt-0.5 h-3.5 w-3.5 animate-spin" />
+            <span>
+              Reading a linked page. Source fields are locked until parsing
+              finishes.
+            </span>
+          </div>
+        ) : null}
         {sources.map((source) => (
           <div key={source.id} className="grid grid-cols-[116px_1fr] gap-2">
             <select
@@ -3235,6 +3750,7 @@ export function APlusEditor({
                 const kind = event.target.value as SourceKind;
                 updateSource(source.id, { kind });
               }}
+              disabled={isSourceParsing}
               className={cn('rounded-md border px-2 text-xs', FIELD_CLASSNAME)}
             >
               {SOURCE_KINDS.map((kind) => (
@@ -3251,7 +3767,7 @@ export function APlusEditor({
                   const url = event.target.value;
                   updateSource(source.id, { url });
                 }}
-                onBlur={() => checkSource(source)}
+                onBlur={() => inspectSource(source)}
                 onPaste={(event) => {
                   const url = extractFirstUrl(
                     event.clipboardData.getData('text')
@@ -3264,6 +3780,7 @@ export function APlusEditor({
                 }}
                 onDrop={(event) => {
                   event.preventDefault();
+                  if (isSourceParsing) return;
                   const url =
                     event.dataTransfer.getData('text/uri-list') ||
                     extractFirstUrl(event.dataTransfer.getData('text/plain'));
@@ -3274,6 +3791,7 @@ export function APlusEditor({
                   }
                 }}
                 placeholder="https://..."
+                disabled={isSourceParsing}
                 className={cn('pl-7 text-sm', FIELD_CLASSNAME)}
               />
             </div>
@@ -3379,7 +3897,13 @@ export function APlusEditor({
               )}
           </div>
         ))}
-        <Button type="button" variant="outline" size="sm" onClick={addSource}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={addSource}
+          disabled={isSourceParsing}
+        >
           <Plus className="mr-2 h-4 w-4" />
           Add source
         </Button>
@@ -3689,6 +4213,64 @@ export function APlusEditor({
             </p>
           ) : null}
 
+          <APlusEvaluationCard
+            score={evaluationScore}
+            findings={lintFindings}
+            judge={evaluationStale ? undefined : evaluation?.judge}
+            judgeModelId={evaluation?.modelId}
+            stale={evaluationStale}
+            evaluating={evaluating}
+            regenerating={regeneratingSectionId !== null}
+            lockedSectionIds={
+              new Set(
+                experience.sections
+                  .filter((section) => section.locked)
+                  .map((section) => section.id)
+              )
+            }
+            sectionLabelByOrder={
+              new Map(
+                deployment.modules.map(
+                  (module) => [module.order, module.title] as const
+                )
+              )
+            }
+            sectionIdByOrder={
+              new Map(
+                deployment.moduleMapping.map(
+                  (entry) => [entry.order, entry.sectionIds[0]] as const
+                )
+              )
+            }
+            onEvaluate={() => void runEvaluation()}
+            handlers={{
+              onRegenerateSection: (sectionId, overrides) =>
+                void regenerateSection(sectionId, {
+                  notes: overrides?.notes,
+                  archetype: overrides?.archetype as
+                    | LayoutArchetype
+                    | undefined,
+                }),
+              onFocusSection: focusSection,
+              onGenerateImage: (order, role, brief, size) =>
+                generateImageForJob(slotJobId(order, role), brief, size),
+              onReorder: (sectionId, direction) =>
+                moveSection(sectionId, direction),
+              onToggleTier: () =>
+                applyContentTier(
+                  contentTier === 'Premium A+' ? 'Basic A+' : 'Premium A+'
+                ),
+              onAddAsins: () => {
+                setWizardStep('basics');
+                setTimeout(() => document.getElementById('asin')?.focus(), 200);
+              },
+              onAddBrandLogo: () => setWizardStep('basics'),
+            }}
+          />
+          {evaluateError ? (
+            <p className="text-xs text-destructive">{evaluateError}</p>
+          ) : null}
+
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -3781,6 +4363,10 @@ export function APlusEditor({
               theme={designTheme}
               viewport={previewViewport}
               slotResults={imageJobResults}
+              tier={contentTier}
+              moduleMapping={deployment.moduleMapping}
+              title={draftName}
+              asins={asins}
               onRegenerate={(jobId, brief, size) =>
                 generateImageForJob(jobId, brief, size)
               }
@@ -3895,6 +4481,7 @@ export function APlusEditor({
 
           <div className="space-y-3">
             <APlusSectionsPanel
+              focusRequest={sectionFocusRequest}
               experience={experience}
               deployment={deployment}
               tier={contentTier}
@@ -3995,6 +4582,19 @@ export function APlusEditor({
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] bg-background">
+      <APlusHistorySheet
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        versions={versions}
+        loading={versionsLoading}
+        busyVersionId={versionBusyId}
+        snapshotting={snapshotting}
+        onSnapshot={(label) =>
+          void snapshotVersion('manual', label || undefined)
+        }
+        onRestore={(versionId) => void restoreVersion(versionId)}
+        onDelete={(versionId) => void deleteVersion(versionId)}
+      />
       <div className="border-b bg-card">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -4090,42 +4690,34 @@ export function APlusEditor({
                     <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
                     Designs
                   </Button>
-                  <select
-                    aria-label="Open a saved design"
-                    value={draftId || ''}
-                    onChange={(event) => {
-                      if (event.target.value)
-                        router.push(`/a-plus/${event.target.value}`);
-                    }}
-                    className={cn(
-                      COMPACT_SELECT_CLASSNAME,
-                      'min-w-[200px] max-w-[320px]'
-                    )}
-                  >
-                    <option value="">
-                      {drafts.length
-                        ? 'Open a saved design…'
-                        : 'No saved designs yet'}
-                    </option>
-                    {drafts.map((draft) => (
-                      <option key={draft.draftId} value={draft.draftId}>
-                        {formatDraftOption(draft)}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => router.push('/a-plus/new')}
-                  >
-                    New
-                  </Button>
+                  {draftId ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      title="Version history — restore an earlier state"
+                      onClick={openHistory}
+                    >
+                      <History className="mr-1.5 h-3.5 w-3.5" />
+                      History
+                    </Button>
+                  ) : null}
+                  {draftId ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      title="Start a new design"
+                      onClick={() => router.push('/a-plus/new')}
+                    >
+                      New
+                    </Button>
+                  ) : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {draftId
-                    ? `Saved as “${draftName}” · auto-saving`
-                    : 'New designs auto-save to your library once generated.'}
+                    ? `“${draftName}” · auto-saving`
+                    : 'Auto-saves to your library once generated.'}
                 </p>
               </div>
             </div>
