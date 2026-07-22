@@ -6,4 +6,5 @@ export * from './lib/narrative.js';
 export * from './lib/experience-fields.js';
 export * from './lib/experience-lift.js';
 export * from './lib/aplus-compiler.js';
+export * from './lib/aplus-evaluate.js';
 export * from './lib/product.js';
