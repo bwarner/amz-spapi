@@ -1,7 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * Image URLs come in three shapes: absolute http(s), data URLs (in-memory
+ * generations), and the app's own ROOT-RELATIVE asset routes
+ * (`/api/a-plus/assets/<id>`). `z.string().url()` rejects relative paths —
+ * which silently 400'd every module round-trip once images persisted — so
+ * validate the union explicitly.
+ */
+const imageUrlSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => value.startsWith('/') || /^(https?:|data:)/i.test(value),
+    'Must be an absolute URL, data URL, or root-relative asset path'
+  );
+
 export const APlusImageSchema = z.object({
-  url: z.string().url(),
+  url: imageUrlSchema,
   alt: z.string().min(1).max(160),
 });
 export type APlusImage = z.infer<typeof APlusImageSchema>;
@@ -295,6 +310,66 @@ const iconRowModule = z.object({
     .max(6),
 });
 
+// ---------------------------------------------------------------------------
+// Premium A+ (EBC) native module kinds. These exist ONLY on the Premium tier —
+// the Basic compiler degrades their archetypes (see aplus-compiler.ts). Limits
+// mirror Seller Central's Premium module fields (web-researched 2026-07 —
+// VERIFY against the live Premium A+ Content Manager).
+// ---------------------------------------------------------------------------
+
+const qnaModule = z.object({
+  ...moduleBase,
+  type: z.literal('qna'),
+  headline: genHeadline,
+  // Premium Q&A: up to 5 pairs, questions ≤120 chars (VERIFY).
+  items: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(120),
+        answer: z.string().min(1).max(800),
+      })
+    )
+    .min(1)
+    .max(5),
+});
+const hotspotsModule = z.object({
+  ...moduleBase,
+  type: z.literal('hotspots'),
+  headline: genHeadline,
+  /** ONE wide base band showing the whole product; markers land on features. */
+  image: APlusImageSlotSchema,
+  // Premium Hotspots: up to 6 callouts, labels ≤50 chars (VERIFY).
+  hotspots: z
+    .array(
+      z.object({
+        /** Marker position as fractions of the base image (0..1). */
+        position: z.object({
+          x: z.number().min(0).max(1),
+          y: z.number().min(0).max(1),
+        }),
+        label: z.string().min(1).max(50),
+        copy: z.string().max(200),
+      })
+    )
+    .min(1)
+    .max(6),
+});
+const carouselModule = z.object({
+  ...moduleBase,
+  type: z.literal('carousel'),
+  // Premium Simple Image Carousel: 2–6 slides, short per-slide copy (VERIFY).
+  slides: z
+    .array(
+      z.object({
+        image: APlusImageSlotSchema,
+        headline: z.string().max(100).optional(),
+        caption: z.string().max(200).optional(),
+      })
+    )
+    .min(2)
+    .max(6),
+});
+
 export const APlusGeneratedModuleSchema = z.discriminatedUnion('type', [
   companyLogoModule,
   iconRowModule,
@@ -308,6 +383,9 @@ export const APlusGeneratedModuleSchema = z.discriminatedUnion('type', [
   techSpecsModule,
   textOnlyModule,
   dualUseSplitModule,
+  qnaModule,
+  hotspotsModule,
+  carouselModule,
 ]);
 export type APlusGeneratedModule = z.infer<typeof APlusGeneratedModuleSchema>;
 export type APlusGeneratedModuleKind = APlusGeneratedModule['type'];
@@ -328,6 +406,13 @@ export const BASIC_A_PLUS_MODULE_TYPES = [
   'icon-row',
 ] as const satisfies readonly APlusGeneratedModuleKind[];
 
+/** Module kinds that exist ONLY on the Premium A+ (EBC) tier. */
+export const PREMIUM_A_PLUS_MODULE_TYPES = [
+  'qna',
+  'hotspots',
+  'carousel',
+] as const satisfies readonly APlusGeneratedModuleKind[];
+
 /** Per-kind schema, so callers can constrain generation to one module type. */
 export const APLUS_GENERATED_MODULE_SCHEMA_BY_KIND = {
   'company-logo': companyLogoModule,
@@ -342,6 +427,9 @@ export const APLUS_GENERATED_MODULE_SCHEMA_BY_KIND = {
   'text-only': textOnlyModule,
   'dual-use-split': dualUseSplitModule,
   'icon-row': iconRowModule,
+  qna: qnaModule,
+  hotspots: hotspotsModule,
+  carousel: carouselModule,
 } as const satisfies Record<APlusGeneratedModuleKind, z.ZodTypeAny>;
 
 export function generatedModuleSchemaForKind(
@@ -382,6 +470,21 @@ export const AMAZON_MODULE_TYPE_TO_KIND: Record<
   // normalizeAmazonModuleType() rewrites them to a real type on draft load.
   STANDARD_DUAL_USE_SPLIT: 'dual-use-split', // legacy
   STANDARD_ICON_ROW: 'icon-row', // legacy
+  // Premium A+ (EBC). App-invented identifiers — the SP-API A+ Content API is
+  // STANDARD-only and Premium pages are built manually in Seller Central, so
+  // no official enum exists. Build-sheet keys only; sellerCentralModuleName()
+  // carries the seller-facing truth (VERIFY names against Seller Central).
+  PREMIUM_QA: 'qna',
+  PREMIUM_HOTSPOTS_1: 'hotspots',
+  PREMIUM_SIMPLE_IMAGE_CAROUSEL: 'carousel',
+  PREMIUM_FULL_IMAGE: 'image-header-with-text',
+  PREMIUM_BACKGROUND_IMAGE_TEXT: 'image-text-overlay',
+  PREMIUM_SINGLE_IMAGE_TEXT: 'single-image-text',
+  PREMIUM_DUAL_IMAGES_TEXT: 'dual-use-split',
+  PREMIUM_FOUR_IMAGES_TEXT: 'four-image-text-quadrant',
+  PREMIUM_TEXT: 'text-only',
+  PREMIUM_TECH_SPECS: 'tech-specs',
+  PREMIUM_COMPARISON_TABLE_1: 'comparison-table',
 };
 
 export function amazonModuleTypeToKind(
@@ -531,6 +634,18 @@ export const SELLER_CENTRAL_MODULE_NAMES: Record<string, string> = {
   STANDARD_THREE_IMAGE_TEXT: 'Standard Three Image & Text',
   STANDARD_DUAL_USE_SPLIT: 'Standard Image (two-scenario split)', // legacy
   STANDARD_ICON_ROW: 'Standard Image (icon highlights strip)', // legacy
+  // Premium A+ module picker names (VERIFY against Seller Central).
+  PREMIUM_QA: 'Premium Q&A',
+  PREMIUM_HOTSPOTS_1: 'Premium Hotspots 1',
+  PREMIUM_SIMPLE_IMAGE_CAROUSEL: 'Premium Simple Image Carousel',
+  PREMIUM_FULL_IMAGE: 'Premium Full Image',
+  PREMIUM_BACKGROUND_IMAGE_TEXT: 'Premium Background Image with Text',
+  PREMIUM_SINGLE_IMAGE_TEXT: 'Premium Single Image with Text',
+  PREMIUM_DUAL_IMAGES_TEXT: 'Premium Dual Images & Text',
+  PREMIUM_FOUR_IMAGES_TEXT: 'Premium Four Images & Text',
+  PREMIUM_TEXT: 'Premium Text',
+  PREMIUM_TECH_SPECS: 'Premium Technical Specifications',
+  PREMIUM_COMPARISON_TABLE_1: 'Premium Comparison Table 1',
 };
 
 /** Seller Central A+ module picker name for a given module type. */
@@ -602,9 +717,17 @@ export function moduleImageSlotEntries(
           ? [{ slot: product.image, path: ['products', index, 'image'] }]
           : []
       );
+    case 'hotspots':
+      return [{ slot: module.image, path: ['image'] }];
+    case 'carousel':
+      return module.slides.map((slide, index) => ({
+        slot: slide.image,
+        path: ['slides', index, 'image'],
+      }));
     case 'tech-specs':
     case 'text-only':
     case 'icon-row':
+    case 'qna':
       return [];
     default:
       return [];
@@ -682,6 +805,26 @@ export function moduleTextFields(
       module.items.forEach((item, index) =>
         push(`Icon ${index + 1} label`, item.label)
       );
+      break;
+    case 'qna':
+      push('Headline', module.headline);
+      module.items.forEach((item, index) => {
+        push(`Question ${index + 1}`, item.question);
+        push(`Answer ${index + 1}`, item.answer);
+      });
+      break;
+    case 'hotspots':
+      push('Headline', module.headline);
+      module.hotspots.forEach((spot, index) => {
+        push(`Hotspot ${index + 1} label`, spot.label);
+        push(`Hotspot ${index + 1} copy`, spot.copy);
+      });
+      break;
+    case 'carousel':
+      module.slides.forEach((slide, index) => {
+        push(`Slide ${index + 1} headline`, slide.headline);
+        push(`Slide ${index + 1} caption`, slide.caption);
+      });
       break;
   }
 
@@ -883,6 +1026,66 @@ export function moduleTextFieldDescriptors(
           40
         )
       );
+      break;
+    case 'qna':
+      add('Headline', ['headline'], module.headline, 160);
+      module.items.forEach((item, index) => {
+        add(
+          `Question ${index + 1}`,
+          ['items', index, 'question'],
+          item.question,
+          120
+        );
+        add(
+          `Answer ${index + 1}`,
+          ['items', index, 'answer'],
+          item.answer,
+          800,
+          true
+        );
+      });
+      break;
+    case 'hotspots':
+      add('Headline', ['headline'], module.headline, 160);
+      module.hotspots.forEach((spot, index) => {
+        add(
+          `Hotspot ${index + 1} label`,
+          ['hotspots', index, 'label'],
+          spot.label,
+          50
+        );
+        add(
+          `Hotspot ${index + 1} copy`,
+          ['hotspots', index, 'copy'],
+          spot.copy,
+          200,
+          true
+        );
+      });
+      add('Image alt text', ['image', 'alt'], module.image.alt, 160);
+      break;
+    case 'carousel':
+      module.slides.forEach((slide, index) => {
+        add(
+          `Slide ${index + 1} headline`,
+          ['slides', index, 'headline'],
+          slide.headline,
+          100
+        );
+        add(
+          `Slide ${index + 1} caption`,
+          ['slides', index, 'caption'],
+          slide.caption,
+          200,
+          true
+        );
+        add(
+          `Slide ${index + 1} image alt`,
+          ['slides', index, 'image', 'alt'],
+          slide.image.alt,
+          160
+        );
+      });
       break;
   }
 

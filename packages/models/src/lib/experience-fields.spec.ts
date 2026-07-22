@@ -93,6 +93,55 @@ describe('setSectionTextField', () => {
   });
 });
 
+describe('carousel slide descriptors', () => {
+  const carousel: Parameters<typeof sectionTextFieldDescriptors>[0] = {
+    id: 'carousel-1',
+    order: 1,
+    job: 'use-cases',
+    intent: 'Show the range.',
+    locked: false,
+    visual: {
+      medium: 'static',
+      layout: {
+        archetype: 'carousel',
+        slides: [
+          { imageRole: 's1', headline: 'Morning', caption: 'First pour.' },
+          { imageRole: 's2', caption: 'On the move.' },
+        ],
+      },
+      desktop: { aspect: '970:600', focalHierarchy: [], textZones: [] },
+      images: [],
+    },
+  };
+
+  it('enumerates per-slide headline/caption and round-trips edits', () => {
+    const descriptors = sectionTextFieldDescriptors(carousel);
+    const headline = descriptors.find(
+      (descriptor) => descriptor.label === 'Slide 1 headline'
+    );
+    expect(headline).toMatchObject({ value: 'Morning', maxLength: 100 });
+    const caption2 = descriptors.find(
+      (descriptor) => descriptor.label === 'Slide 2 caption'
+    );
+    expect(caption2).toMatchObject({
+      value: 'On the move.',
+      maxLength: 200,
+      multiline: true,
+    });
+    if (!headline || !caption2) throw new Error('descriptor');
+
+    const edited = setSectionTextField(
+      setSectionTextField(carousel, headline.path, 'Slow mornings'),
+      caption2.path,
+      'Commute-proof.'
+    );
+    if (edited.visual.layout.archetype !== 'carousel')
+      throw new Error('archetype');
+    expect(edited.visual.layout.slides[0].headline).toBe('Slow mornings');
+    expect(edited.visual.layout.slides[1].caption).toBe('Commute-proof.');
+  });
+});
+
 describe('setSectionResolvedImage', () => {
   it('writes into the matching role and no other', () => {
     const hero = experience.sections[1];
@@ -103,7 +152,25 @@ describe('setSectionResolvedImage', () => {
       url: 'https://example.com/hero.png',
       alt: 'hero image',
     });
+    // No alt provided → the slot's own alt is untouched.
+    expect(next.visual.images[0].alt).toBe(hero.visual.images[0].alt);
     // Unknown role → unchanged reference.
     expect(setSectionResolvedImage(hero, 'nope', { url: 'x' })).toBe(hero);
+  });
+
+  it('a provided alt (pinned real photo) mirrors onto the slot alt', () => {
+    // Regression: pinning a real photo kept the AI-planned scene description,
+    // so instructions/exports described an image the slot no longer showed.
+    const hero = experience.sections[1];
+    const next = setSectionResolvedImage(hero, 'hero', {
+      url: '/api/a-plus/assets/asset_x',
+      alt: 'Supplier photo: 8oz kraft ripple cup with black lid',
+    });
+    expect(next.visual.images[0].resolved?.alt).toBe(
+      'Supplier photo: 8oz kraft ripple cup with black lid'
+    );
+    expect(next.visual.images[0].alt).toBe(
+      'Supplier photo: 8oz kraft ripple cup with black lid'
+    );
   });
 });

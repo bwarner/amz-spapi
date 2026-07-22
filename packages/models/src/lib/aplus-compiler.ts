@@ -1,14 +1,17 @@
-import type {
-  APlusGeneratedModule,
-  APlusImageSize,
-  APlusImageSlot,
+import {
+  moduleImageSlotEntries,
+  type APlusGeneratedModule,
+  type APlusImageSize,
+  type APlusImageSlot,
 } from './aplus.js';
 import {
   APLUS_SLICE_CONSTANTS,
   type AplusDeployment,
+  type AplusTier,
   type DeploymentValidation,
   type Experience,
   type ExperienceImageSlot,
+  type ModuleImageSpec,
   type ModuleMappingEntry,
   type Section,
   type SliceSpec,
@@ -31,7 +34,10 @@ import {
  */
 export function planSliceStack(
   sceneHeightPx: number,
-  constants = APLUS_SLICE_CONSTANTS
+  constants: {
+    sliceUnitPx: number;
+    tallSlicePx: number;
+  } = APLUS_SLICE_CONSTANTS
 ): SliceSpec[] {
   const unit = constants.sliceUnitPx;
   const tall = constants.tallSlicePx;
@@ -142,13 +148,100 @@ export const KIND_TO_AMAZON: Record<string, string> = {
   'icon-row': 'STANDARD_HEADER_IMAGE_TEXT',
 };
 
+/**
+ * Module kind → Premium A+ (EBC) deployment target — NATIVE-FIRST: premium
+ * image+text modules carry real text fields, so copy goes into Amazon's fields
+ * (accessible, editable in Seller Central) and images ship as raw photos
+ * cover-cropped to exact slot dims. Baked-text designed PNGs remain only where
+ * no native module fits (icon-row, sliced scenes → PREMIUM_FULL_IMAGE).
+ * Identifiers are app-invented (the SP-API A+ API is STANDARD-only; Premium is
+ * built manually) — sellerCentralModuleName() carries the seller-facing names.
+ */
+export const KIND_TO_PREMIUM: Record<string, string> = {
+  'company-logo': 'PREMIUM_BACKGROUND_IMAGE_TEXT',
+  'image-text-overlay': 'PREMIUM_BACKGROUND_IMAGE_TEXT',
+  'image-header-with-text': 'PREMIUM_BACKGROUND_IMAGE_TEXT',
+  'single-image-text': 'PREMIUM_SINGLE_IMAGE_TEXT',
+  'image-and-text': 'PREMIUM_SINGLE_IMAGE_TEXT',
+  'three-image-text': 'PREMIUM_FOUR_IMAGES_TEXT',
+  'four-image-text-quadrant': 'PREMIUM_FOUR_IMAGES_TEXT',
+  'comparison-table': 'PREMIUM_COMPARISON_TABLE_1',
+  'tech-specs': 'PREMIUM_TECH_SPECS',
+  'text-only': 'PREMIUM_TEXT',
+  'dual-use-split': 'PREMIUM_DUAL_IMAGES_TEXT',
+  'icon-row': 'PREMIUM_FULL_IMAGE',
+  qna: 'PREMIUM_QA',
+  hotspots: 'PREMIUM_HOTSPOTS_1',
+  carousel: 'PREMIUM_SIMPLE_IMAGE_CAROUSEL',
+};
+
+/** The Amazon module type a kind deploys as on the given tier. */
+export function amazonModuleTypeForKind(kind: string, tier: AplusTier): string {
+  if (tier === 'Premium A+') {
+    return KIND_TO_PREMIUM[kind] ?? KIND_TO_AMAZON[kind] ?? 'PREMIUM_TEXT';
+  }
+  return KIND_TO_AMAZON[kind] ?? 'STANDARD_HEADER_IMAGE_TEXT';
+}
+
+/**
+ * Exact image upload dimensions per Premium module type (web-researched
+ * 2026-07 — VERIFY every value against the live Premium A+ Content Manager).
+ * Full-width bands take a separate 600×450 mobile upload; inset images reflow.
+ */
+export const PREMIUM_IMAGE_SPECS: Record<
+  string,
+  Omit<ModuleImageSpec, 'role'>
+> = {
+  PREMIUM_BACKGROUND_IMAGE_TEXT: {
+    width: 1464,
+    height: 600,
+    mobileWidth: 600,
+    mobileHeight: 450,
+  },
+  PREMIUM_FULL_IMAGE: {
+    width: 1464,
+    height: 600,
+    mobileWidth: 600,
+    mobileHeight: 450,
+  },
+  PREMIUM_HOTSPOTS_1: {
+    width: 1464,
+    height: 600,
+    mobileWidth: 600,
+    mobileHeight: 450,
+  },
+  PREMIUM_SIMPLE_IMAGE_CAROUSEL: {
+    width: 1464,
+    height: 600,
+    mobileWidth: 600,
+    mobileHeight: 450,
+  },
+  PREMIUM_SINGLE_IMAGE_TEXT: { width: 800, height: 600 },
+  PREMIUM_DUAL_IMAGES_TEXT: { width: 650, height: 350 },
+  PREMIUM_FOUR_IMAGES_TEXT: { width: 600, height: 450 },
+  PREMIUM_COMPARISON_TABLE_1: { width: 300, height: 300 },
+};
+
+/** Per-slot exact upload dims for a premium-deployed module (else undefined). */
+function premiumImageSpecs(
+  module: APlusGeneratedModule,
+  amazonModuleType: string
+): ModuleImageSpec[] | undefined {
+  const spec = PREMIUM_IMAGE_SPECS[amazonModuleType];
+  if (!spec) return undefined;
+  const entries = moduleImageSlotEntries(module);
+  if (!entries.length) return undefined;
+  return entries.map(({ slot }) => ({ role: slot.role, ...spec }));
+}
+
 type CompiledSection = {
   module: APlusGeneratedModule;
   mappingKind: ModuleMappingEntry['kind'];
   warnings: DeploymentValidation[];
 };
 
-function compileSection(section: Section): CompiledSection {
+function compileSection(section: Section, tier: AplusTier): CompiledSection {
+  const premium = tier === 'Premium A+';
   const layout = section.visual.layout;
   // NEVER the intent — that's planner instruction-prose, not display copy.
   const title =
@@ -391,6 +484,23 @@ function compileSection(section: Section): CompiledSection {
         },
       };
     case 'qna': {
+      if (premium) {
+        // Premium Q&A is native — clamp to its field limits (VERIFY).
+        return {
+          mappingKind: 'native',
+          warnings: [],
+          module: {
+            ...common,
+            amazonModuleType: KIND_TO_PREMIUM['qna'],
+            type: 'qna',
+            headline: section.headline,
+            items: layout.items.slice(0, 5).map((item) => ({
+              question: item.question.slice(0, 120),
+              answer: item.answer.slice(0, 800),
+            })),
+          },
+        };
+      }
       // Standard A+ has no native Q&A — degrade to a text module (doc).
       const body = layout.items
         .map((item) => `Q: ${item.question}\nA: ${item.answer}`)
@@ -434,6 +544,25 @@ function compileSection(section: Section): CompiledSection {
         },
       };
     case 'hotspots':
+      if (premium) {
+        // Premium Hotspots: raw base photo + native callouts (VERIFY limits).
+        return {
+          mappingKind: 'native',
+          warnings: [],
+          module: {
+            ...common,
+            amazonModuleType: KIND_TO_PREMIUM['hotspots'],
+            type: 'hotspots',
+            headline: section.headline,
+            image: slotByRole(section, layout.baseImageRole, 'hotspot-base'),
+            hotspots: layout.hotspots.slice(0, 6).map((spot) => ({
+              position: { ...spot.position },
+              label: spot.label.slice(0, 50),
+              copy: spot.copy.slice(0, 200),
+            })),
+          },
+        };
+      }
       return {
         mappingKind: 'designed-image',
         warnings: [
@@ -473,7 +602,24 @@ function compileSection(section: Section): CompiledSection {
         },
       };
     case 'carousel': {
-      const roles = layout.imageRoles.slice(0, 3);
+      if (premium) {
+        // Premium Simple Image Carousel: 2–6 native slides (VERIFY limits).
+        return {
+          mappingKind: 'native',
+          warnings: [],
+          module: {
+            ...common,
+            amazonModuleType: KIND_TO_PREMIUM['carousel'],
+            type: 'carousel',
+            slides: layout.slides.slice(0, 6).map((slide) => ({
+              image: slotByRole(section, slide.imageRole, slide.imageRole),
+              headline: slide.headline?.slice(0, 100),
+              caption: slide.caption?.slice(0, 200),
+            })),
+          },
+        };
+      }
+      const roles = layout.slides.map((slide) => slide.imageRole).slice(0, 3);
       while (roles.length < 3) roles.push(roles[roles.length - 1] ?? 'tile');
       return {
         mappingKind: 'designed-image',
@@ -497,36 +643,65 @@ function compileSection(section: Section): CompiledSection {
 }
 
 /**
- * Compiles an Experience to a Standard A+ deployment. Premium A+ is a later
- * increment — passing 'Premium A+' only raises the module budget for now.
+ * Compiles an Experience to an A+ deployment for the given tier. Premium is
+ * NATIVE-FIRST: every kind with a premium native counterpart deploys as that
+ * module (real text fields, exact-dim raw photos); only PREMIUM_FULL_IMAGE
+ * bands (icon-row, sliced scenes) remain designed images.
  */
 export function compileExperienceToAplus(
   experience: Experience,
-  opts: { tier: 'Basic A+' | 'Premium A+' }
+  opts: { tier: AplusTier }
 ): AplusDeployment {
+  const premium = opts.tier === 'Premium A+';
   const validation: DeploymentValidation[] = [];
   const modules: APlusGeneratedModule[] = [];
   const moduleMapping: ModuleMappingEntry[] = [];
 
   const ordered = [...experience.sections].sort((a, b) => a.order - b.order);
   for (const section of ordered) {
-    const compiled = compileSection(section);
+    const compiled = compileSection(section, opts.tier);
     validation.push(...compiled.warnings);
 
+    let mappingKind = compiled.mappingKind;
+    let amazonModuleType = compiled.module.amazonModuleType;
+    if (premium) {
+      amazonModuleType = amazonModuleTypeForKind(
+        compiled.module.type,
+        opts.tier
+      );
+      // Native-first: only full-image bands keep baked-text designed pixels.
+      mappingKind =
+        amazonModuleType === 'PREMIUM_FULL_IMAGE' ? 'designed-image' : 'native';
+    }
+
     const order = modules.length + 1;
-    modules.push({ ...compiled.module, order });
+    const module = { ...compiled.module, order, amazonModuleType };
+    modules.push(module);
 
     const units = sectionSliceUnits(section);
-    const isSliceStack = compiled.mappingKind === 'designed-image' && units > 2;
+    const isSliceStack = mappingKind === 'designed-image' && units > 2;
     moduleMapping.push({
       order,
       amazonModuleType: isSliceStack
-        ? 'STANDARD_HEADER_IMAGE_TEXT'
-        : compiled.module.amazonModuleType,
+        ? premium
+          ? 'PREMIUM_FULL_IMAGE'
+          : 'STANDARD_HEADER_IMAGE_TEXT'
+        : amazonModuleType,
       sectionIds: [section.id],
-      kind: isSliceStack ? 'image-slice-stack' : compiled.mappingKind,
+      kind: isSliceStack ? 'image-slice-stack' : mappingKind,
       slices: isSliceStack
-        ? planSliceStack(units * APLUS_SLICE_CONSTANTS.sliceUnitPx)
+        ? planSliceStack(
+            // Scene heights are measured in 300px quanta regardless of tier;
+            // the premium grid just cuts them into all-600 slices.
+            units * APLUS_SLICE_CONSTANTS.sliceUnitPx,
+            premium ? APLUS_SLICE_CONSTANTS.premium : APLUS_SLICE_CONSTANTS
+          )
+        : undefined,
+      imageSpecs: premium
+        ? premiumImageSpecs(
+            module,
+            isSliceStack ? 'PREMIUM_FULL_IMAGE' : amazonModuleType
+          )
         : undefined,
     });
   }
@@ -554,7 +729,7 @@ export function compileExperienceToAplus(
 
   return {
     experienceId: experience.id,
-    format: 'aplus',
+    format: premium ? 'premium-aplus' : 'aplus',
     modules,
     moduleMapping,
     validation,

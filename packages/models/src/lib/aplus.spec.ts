@@ -3,9 +3,11 @@ import {
   APlusCreativitySchema,
   APlusGeneratedModuleSchema,
   APlusGuidanceSchema,
+  PREMIUM_A_PLUS_MODULE_TYPES,
   RENDERABLE_AMAZON_MODULE_TYPES,
   amazonModuleTypeToKind,
   applyAPlusGuardrails,
+  generatedModuleSchemaForKind,
   moduleImageSlotEntries,
   moduleImageSlots,
   moduleTextFieldDescriptors,
@@ -343,6 +345,47 @@ describe('moduleTextFieldDescriptors', () => {
           { icon: 'droplet', label: 'Cold drinks' },
         ],
       },
+      {
+        order: 12,
+        amazonModuleType: 'PREMIUM_QA',
+        title: 'Q&A',
+        type: 'qna',
+        headline: 'Your questions',
+        items: [
+          { question: 'Leak-proof?', answer: 'Yes — sealed rims.' },
+          { question: 'Lids included?', answer: 'Every pack.' },
+        ],
+      },
+      {
+        order: 13,
+        amazonModuleType: 'PREMIUM_HOTSPOTS_1',
+        title: 'Feature tour',
+        type: 'hotspots',
+        headline: 'Every detail',
+        image: slot('hotspot-base'),
+        hotspots: [
+          {
+            position: { x: 0.3, y: 0.4 },
+            label: 'Snap lid',
+            copy: 'Seals tight.',
+          },
+          {
+            position: { x: 0.7, y: 0.6 },
+            label: 'Ripple wall',
+            copy: 'Cool to hold.',
+          },
+        ],
+      },
+      {
+        order: 14,
+        amazonModuleType: 'PREMIUM_SIMPLE_IMAGE_CAROUSEL',
+        title: 'Day in the life',
+        type: 'carousel',
+        slides: [
+          { image: slot('s1'), headline: 'Morning', caption: 'First pour.' },
+          { image: slot('s2'), caption: 'On the move.' },
+        ],
+      },
     ];
 
     for (const module of modules) {
@@ -493,5 +536,148 @@ describe('applyAPlusGuardrails', () => {
     );
     expect(cleaned).not.toMatch(/\$|free shipping/i);
     expect(triggered.length).toBeGreaterThan(0);
+  });
+});
+
+describe('resolved image URL shapes', () => {
+  const withUrl = (url: string): APlusGeneratedModule => ({
+    order: 1,
+    amazonModuleType: 'STANDARD_HEADER_IMAGE_TEXT',
+    title: 'Hero',
+    type: 'image-header-with-text',
+    image: { ...slot('hero'), image: { url, alt: 'hero photo' } },
+  });
+
+  it('accepts the app’s root-relative asset routes, data URLs, and https', () => {
+    // Regression: z.string().url() rejected /api/a-plus/assets/… and silently
+    // 400’d every module round-trip once images persisted to real assets.
+    for (const url of [
+      '/api/a-plus/assets/asset_38bfc72e-9591-44f3-963c-ae34a799a976',
+      'data:image/png;base64,AAAA',
+      'https://example.com/x.png',
+    ]) {
+      expect(APlusGeneratedModuleSchema.safeParse(withUrl(url)).success).toBe(
+        true
+      );
+    }
+  });
+
+  it('still rejects non-URL garbage', () => {
+    expect(
+      APlusGeneratedModuleSchema.safeParse(withUrl('not a url')).success
+    ).toBe(false);
+    expect(APlusGeneratedModuleSchema.safeParse(withUrl('')).success).toBe(
+      false
+    );
+  });
+});
+
+describe('premium module kinds (qna / hotspots / carousel)', () => {
+  it('writer-shaped payloads parse via generatedModuleSchemaForKind', () => {
+    const qna = generatedModuleSchemaForKind('qna').parse({
+      order: 3,
+      amazonModuleType: 'PREMIUM_QA',
+      title: 'Q&A',
+      type: 'qna',
+      items: [{ question: 'Leak-proof?', answer: 'Yes — sealed rims.' }],
+    });
+    expect(APlusGeneratedModuleSchema.parse(qna).type).toBe('qna');
+
+    const hotspots = generatedModuleSchemaForKind('hotspots').parse({
+      order: 4,
+      amazonModuleType: 'PREMIUM_HOTSPOTS_1',
+      title: 'Tour',
+      type: 'hotspots',
+      image: slot('hotspot-base'),
+      hotspots: [
+        { position: { x: 0.5, y: 0.5 }, label: 'Lid', copy: 'Snug fit.' },
+      ],
+    });
+    expect(APlusGeneratedModuleSchema.parse(hotspots).type).toBe('hotspots');
+
+    const carousel = generatedModuleSchemaForKind('carousel').parse({
+      order: 5,
+      amazonModuleType: 'PREMIUM_SIMPLE_IMAGE_CAROUSEL',
+      title: 'Story',
+      type: 'carousel',
+      slides: [
+        { image: slot('s1'), headline: 'Morning' },
+        { image: slot('s2'), caption: 'Refill.' },
+      ],
+    });
+    expect(APlusGeneratedModuleSchema.parse(carousel).type).toBe('carousel');
+  });
+
+  it('enforces native limits (question length, hotspot/slide counts)', () => {
+    const schema = generatedModuleSchemaForKind('qna');
+    expect(
+      schema.safeParse({
+        order: 1,
+        amazonModuleType: 'PREMIUM_QA',
+        title: 'Q&A',
+        type: 'qna',
+        items: [{ question: 'x'.repeat(121), answer: 'a' }],
+      }).success
+    ).toBe(false);
+    expect(
+      generatedModuleSchemaForKind('carousel').safeParse({
+        order: 1,
+        amazonModuleType: 'PREMIUM_SIMPLE_IMAGE_CAROUSEL',
+        title: 'Solo',
+        type: 'carousel',
+        slides: [{ image: slot('s1') }],
+      }).success
+    ).toBe(false);
+  });
+
+  it('exposes image slots with working descriptor paths', () => {
+    const hotspots: APlusGeneratedModule = {
+      order: 1,
+      amazonModuleType: 'PREMIUM_HOTSPOTS_1',
+      title: 'Tour',
+      type: 'hotspots',
+      image: slot('hotspot-base'),
+      hotspots: [
+        { position: { x: 0.5, y: 0.5 }, label: 'Lid', copy: 'Snug fit.' },
+      ],
+    };
+    expect(
+      moduleImageSlotEntries(hotspots).map((entry) => entry.slot.role)
+    ).toEqual(['hotspot-base']);
+
+    const carousel: APlusGeneratedModule = {
+      order: 2,
+      amazonModuleType: 'PREMIUM_SIMPLE_IMAGE_CAROUSEL',
+      title: 'Story',
+      type: 'carousel',
+      slides: [{ image: slot('s1') }, { image: slot('s2') }],
+    };
+    const entries = moduleImageSlotEntries(carousel);
+    expect(entries.map((entry) => entry.slot.role)).toEqual(['s1', 's2']);
+    // The brief path drives per-slot editing exactly like other kinds.
+    const edited = setModuleTextField(
+      carousel,
+      [...entries[1].path, 'brief'],
+      'New slide brief'
+    );
+    if (edited.type !== 'carousel') throw new Error('kind');
+    expect(edited.slides[1].image.brief).toBe('New slide brief');
+
+    const qna: APlusGeneratedModule = {
+      order: 3,
+      amazonModuleType: 'PREMIUM_QA',
+      title: 'Q&A',
+      type: 'qna',
+      items: [{ question: 'Q?', answer: 'A.' }],
+    };
+    expect(moduleImageSlots(qna)).toEqual([]);
+  });
+
+  it('PREMIUM_A_PLUS_MODULE_TYPES names exactly the premium-only kinds', () => {
+    expect([...PREMIUM_A_PLUS_MODULE_TYPES].sort()).toEqual([
+      'carousel',
+      'hotspots',
+      'qna',
+    ]);
   });
 });

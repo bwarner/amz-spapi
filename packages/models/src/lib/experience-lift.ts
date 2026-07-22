@@ -256,6 +256,50 @@ function liftModule(
           []
         )
       );
+    case 'qna':
+      return base(
+        'proof',
+        visualConcept(
+          {
+            archetype: 'qna',
+            items: module.items.map((item) => ({ ...item })),
+          },
+          []
+        ),
+        { headline: module.headline }
+      );
+    case 'hotspots':
+      return base(
+        'how-it-works',
+        visualConcept(
+          {
+            archetype: 'hotspots',
+            baseImageRole: module.image.role,
+            hotspots: module.hotspots.map((spot) => ({
+              position: { ...spot.position },
+              label: spot.label,
+              copy: spot.copy,
+            })),
+          },
+          [module.image]
+        ),
+        { headline: module.headline }
+      );
+    case 'carousel':
+      return base(
+        'use-cases',
+        visualConcept(
+          {
+            archetype: 'carousel',
+            slides: module.slides.map((slide) => ({
+              imageRole: slide.image.role,
+              headline: slide.headline,
+              caption: slide.caption,
+            })),
+          },
+          module.slides.map((slide) => slide.image)
+        )
+      );
   }
 }
 

@@ -1,4 +1,7 @@
-import { liftGeneratedPackageToExperience } from './experience-lift';
+import {
+  liftGeneratedPackageToExperience,
+  liftModuleToSection,
+} from './experience-lift';
 
 import { REPRESENTATIVE_PACKAGE } from './experience-fixtures';
 
@@ -167,5 +170,107 @@ describe('liftGeneratedPackageToExperience', () => {
       presentation: 'text-band',
     });
     expect(experience.sections[0].subcopy).toBe('Body.');
+  });
+
+  it('lifts premium kinds with positions, captions, briefs, and resolved images intact', () => {
+    const qna = liftModuleToSection(
+      {
+        order: 1,
+        amazonModuleType: 'PREMIUM_QA',
+        title: 'Q&A',
+        type: 'qna',
+        headline: 'Your questions',
+        items: [{ question: 'Leak-proof?', answer: 'Yes — sealed rims.' }],
+      },
+      { id: 's1', order: 1 }
+    );
+    expect(qna.job).toBe('proof');
+    expect(qna.headline).toBe('Your questions');
+    if (qna.visual.layout.archetype !== 'qna') throw new Error('archetype');
+    expect(qna.visual.layout.items).toEqual([
+      { question: 'Leak-proof?', answer: 'Yes — sealed rims.' },
+    ]);
+
+    const hotspots = liftModuleToSection(
+      {
+        order: 2,
+        amazonModuleType: 'PREMIUM_HOTSPOTS_1',
+        title: 'Feature tour',
+        type: 'hotspots',
+        image: {
+          role: 'hotspot-base',
+          brief: 'Whole product on a counter.',
+          size: '1792x1024',
+          alt: 'Cup with lid',
+          image: { url: 'https://example.com/base.png', alt: 'Cup with lid' },
+        },
+        hotspots: [
+          {
+            position: { x: 0.25, y: 0.75 },
+            label: 'Snap lid',
+            copy: 'Seals tight.',
+          },
+        ],
+      },
+      { id: 's2', order: 2 }
+    );
+    expect(hotspots.job).toBe('how-it-works');
+    if (hotspots.visual.layout.archetype !== 'hotspots')
+      throw new Error('archetype');
+    expect(hotspots.visual.layout.baseImageRole).toBe('hotspot-base');
+    expect(hotspots.visual.layout.hotspots[0].position).toEqual({
+      x: 0.25,
+      y: 0.75,
+    });
+    expect(hotspots.visual.images[0]).toMatchObject({
+      role: 'hotspot-base',
+      source: { brief: 'Whole product on a counter.' },
+      resolved: { url: 'https://example.com/base.png' },
+    });
+
+    const carousel = liftModuleToSection(
+      {
+        order: 3,
+        amazonModuleType: 'PREMIUM_SIMPLE_IMAGE_CAROUSEL',
+        title: 'Day in the life',
+        type: 'carousel',
+        slides: [
+          {
+            image: {
+              role: 's1',
+              brief: 'Morning kitchen scene.',
+              size: '1024x1024',
+              alt: 'Morning pour',
+            },
+            headline: 'Morning',
+            caption: 'First pour.',
+          },
+          {
+            image: {
+              role: 's2',
+              brief: 'Commuter scene.',
+              size: '1024x1024',
+              alt: 'On the go',
+            },
+            caption: 'On the move.',
+          },
+        ],
+      },
+      { id: 's3', order: 3 }
+    );
+    expect(carousel.job).toBe('use-cases');
+    if (carousel.visual.layout.archetype !== 'carousel')
+      throw new Error('archetype');
+    expect(carousel.visual.layout.slides).toEqual([
+      { imageRole: 's1', headline: 'Morning', caption: 'First pour.' },
+      { imageRole: 's2', headline: undefined, caption: 'On the move.' },
+    ]);
+    expect(carousel.visual.images.map((slot) => slot.role)).toEqual([
+      's1',
+      's2',
+    ]);
+    expect(carousel.visual.images[0].source.brief).toBe(
+      'Morning kitchen scene.'
+    );
   });
 });

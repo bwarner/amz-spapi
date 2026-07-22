@@ -146,11 +146,13 @@ export function sectionTextFieldDescriptors(
       break;
     case 'qna':
       layout.items.forEach((item, index) => {
+        // Editor cap = Premium native limit (layout schema stays looser so
+        // stored drafts parse; the compiler clamps at deploy time too).
         add(
           `Question ${index + 1}`,
           layoutPath('items', index, 'question'),
           item.question,
-          200
+          120
         );
         add(
           `Answer ${index + 1}`,
@@ -163,17 +165,35 @@ export function sectionTextFieldDescriptors(
       break;
     case 'hotspots':
       layout.hotspots.forEach((spot, index) => {
+        // Editor cap = Premium native limit (see qna note above).
         add(
           `Hotspot ${index + 1} label`,
           layoutPath('hotspots', index, 'label'),
           spot.label,
-          60
+          50
         );
         add(
           `Hotspot ${index + 1} copy`,
           layoutPath('hotspots', index, 'copy'),
           spot.copy,
           200
+        );
+      });
+      break;
+    case 'carousel':
+      layout.slides.forEach((slide, index) => {
+        add(
+          `Slide ${index + 1} headline`,
+          layoutPath('slides', index, 'headline'),
+          slide.headline,
+          100
+        );
+        add(
+          `Slide ${index + 1} caption`,
+          layoutPath('slides', index, 'caption'),
+          slide.caption,
+          200,
+          true
         );
       });
       break;
@@ -257,5 +277,9 @@ export function setSectionResolvedImage(
   const next = structuredClone(section);
   const slot = next.visual.images[index];
   slot.resolved = { url: image.url, alt: image.alt ?? (slot.alt || slot.role) };
+  // A PROVIDED alt describes the actual image (e.g. a pinned real photo) —
+  // mirror it onto the slot so alt text, instructions, and exports never keep
+  // describing a planned AI scene the slot no longer shows.
+  if (image.alt) slot.alt = image.alt;
   return next;
 }

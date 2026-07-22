@@ -2,10 +2,12 @@ import type { APlusGeneratedModule } from './aplus';
 import type { Experience, Section } from './experience';
 import { liftModuleToSection } from './experience-lift';
 import {
-  APLUS_PLANNABLE_ARCHETYPES,
+  IMMERSIVE_ARCHETYPES,
+  PREMIUM_PLANNABLE_ARCHETYPES,
   NarrativeBeatSchema,
   beatsFromExperience,
   fallbackNarrativeBeats,
+  isImmersiveArchetype,
   moduleKindForBeat,
   sanitizeNarrativeBeats,
   type NarrativeBeat,
@@ -96,6 +98,30 @@ function minimalModule(kind: string): APlusGeneratedModule {
           { icon: 'droplet', label: 'Cold' },
         ],
       };
+    case 'qna':
+      return {
+        ...common,
+        type: 'qna',
+        items: [{ question: 'Leak-proof?', answer: 'Yes — sealed rims.' }],
+      };
+    case 'hotspots':
+      return {
+        ...common,
+        type: 'hotspots',
+        image: slot('hotspot-base'),
+        hotspots: [
+          { position: { x: 0.5, y: 0.4 }, label: 'Lid', copy: 'Snug fit.' },
+        ],
+      };
+    case 'carousel':
+      return {
+        ...common,
+        type: 'carousel',
+        slides: [
+          { image: slot('s1'), headline: 'Morning' },
+          { image: slot('s2'), caption: 'Refill.' },
+        ],
+      };
     default:
       throw new Error(`no minimal module for kind ${kind}`);
   }
@@ -112,8 +138,8 @@ describe('NarrativeBeatSchema', () => {
     expect(parsed.assetsToUse).toEqual([]);
   });
 
-  it('rejects non-plannable archetypes', () => {
-    for (const archetype of ['stat-band', 'video', 'hotspots', 'qna']) {
+  it('rejects archetypes no tier can plan', () => {
+    for (const archetype of ['stat-band', 'video']) {
       expect(
         NarrativeBeatSchema.safeParse({
           order: 1,
@@ -122,6 +148,19 @@ describe('NarrativeBeatSchema', () => {
           intent: 'x',
         }).success
       ).toBe(false);
+    }
+  });
+
+  it('parses premium archetypes (Basic safety lives in sanitize)', () => {
+    for (const archetype of ['qna', 'hotspots', 'carousel']) {
+      expect(
+        NarrativeBeatSchema.safeParse({
+          order: 1,
+          job: 'proof',
+          archetype,
+          intent: 'x',
+        }).success
+      ).toBe(true);
     }
   });
 });
@@ -143,9 +182,14 @@ describe('moduleKindForBeat round-trip', () => {
       ['hook', 'brand-story-band'],
       ['brand', 'brand-story-band'],
       ['cta', 'brand-story-band'],
+      ['proof', 'qna'],
+      ['how-it-works', 'hotspots'],
+      ['use-cases', 'carousel'],
     ];
     const covered = new Set(cases.map(([, archetype]) => archetype));
-    expect([...covered].sort()).toEqual([...APLUS_PLANNABLE_ARCHETYPES].sort());
+    expect([...covered].sort()).toEqual(
+      [...PREMIUM_PLANNABLE_ARCHETYPES].sort()
+    );
 
     for (const [job, archetype] of cases) {
       const theBeat = beat(1, job, archetype, 'Make the buyer believe it.');
@@ -271,6 +315,130 @@ describe('sanitizeNarrativeBeats', () => {
     });
     expect(sanitized[1].archetype).toBe('spec-sheet');
   });
+
+  it('default (Basic) coerces premium beats, preserving job and intent', () => {
+    const sanitized = sanitizeNarrativeBeats(
+      [
+        beat(1, 'hook', 'full-bleed-hero'),
+        beat(2, 'proof', 'qna', 'Kill the leak objection.'),
+        beat(3, 'how-it-works', 'hotspots', 'Tour the features.'),
+        beat(4, 'use-cases', 'carousel', 'Show the range.'),
+      ],
+      { ...opts, maxBeats: 4 }
+    );
+    expect(sanitized[1]).toMatchObject({
+      job: 'proof',
+      archetype: 'spec-sheet',
+      intent: 'Kill the leak objection.',
+    });
+    expect(sanitized[2]).toMatchObject({
+      job: 'how-it-works',
+      archetype: 'split-LR',
+      intent: 'Tour the features.',
+    });
+    expect(sanitized[3]).toMatchObject({
+      job: 'use-cases',
+      archetype: 'feature-grid',
+      intent: 'Show the range.',
+    });
+  });
+
+  it('premium allowlist passes premium beats through', () => {
+    const sanitized = sanitizeNarrativeBeats(
+      [
+        beat(1, 'hook', 'full-bleed-hero'),
+        beat(2, 'proof', 'qna'),
+        beat(3, 'how-it-works', 'hotspots'),
+        beat(4, 'use-cases', 'carousel'),
+      ],
+      {
+        ...opts,
+        maxBeats: 4,
+        allowedArchetypes: PREMIUM_PLANNABLE_ARCHETYPES,
+      }
+    );
+    expect(sanitized.map((b) => b.archetype)).toEqual([
+      'full-bleed-hero',
+      'qna',
+      'hotspots',
+      'carousel',
+    ]);
+  });
+
+  it('separates adjacent edge-to-edge photo modules with a text-anchored beat', () => {
+    const sanitized = sanitizeNarrativeBeats(
+      [
+        beat(1, 'hook', 'full-bleed-hero'),
+        beat(2, 'benefit', 'lifestyle-immersion'),
+        beat(3, 'proof', 'spec-sheet'),
+        beat(4, 'comparison', 'comparison-table'),
+      ],
+      { ...opts, maxBeats: 4 }
+    );
+    // The spec sheet is pulled between the two photo modules.
+    expect(sanitized.map((b) => b.archetype)).toEqual([
+      'full-bleed-hero',
+      'spec-sheet',
+      'lifestyle-immersion',
+      'comparison-table',
+    ]);
+    for (let i = 1; i < sanitized.length; i++) {
+      expect(
+        isImmersiveArchetype(sanitized[i - 1].archetype) &&
+          isImmersiveArchetype(sanitized[i].archetype)
+      ).toBe(false);
+    }
+  });
+
+  it('leaves an all-immersive plan intact (nothing to separate with)', () => {
+    const sanitized = sanitizeNarrativeBeats(
+      [
+        beat(1, 'hook', 'full-bleed-hero'),
+        beat(2, 'benefit', 'lifestyle-immersion'),
+        beat(3, 'problem', 'problem-solution'),
+      ],
+      { ...opts, maxBeats: 3 }
+    );
+    // Padding may add non-immersive beats; with maxBeats hit, order stays.
+    expect(sanitized).toHaveLength(3);
+    expect(sanitized[0].archetype).toBe('full-bleed-hero');
+  });
+
+  it('IMMERSIVE_ARCHETYPES covers the full-bleed photo layouts', () => {
+    expect([...IMMERSIVE_ARCHETYPES].sort()).toEqual(
+      [
+        'full-bleed-hero',
+        'lifestyle-immersion',
+        'problem-solution',
+        'hotspots',
+        'carousel',
+        'video',
+      ].sort()
+    );
+    expect(isImmersiveArchetype('spec-sheet')).toBe(false);
+  });
+
+  it('allows at most ONE of each premium showcase archetype', () => {
+    const sanitized = sanitizeNarrativeBeats(
+      [
+        beat(1, 'hook', 'full-bleed-hero'),
+        beat(2, 'proof', 'qna'),
+        beat(3, 'differentiation', 'qna', 'Second qna must coerce.'),
+        beat(4, 'use-cases', 'carousel'),
+      ],
+      {
+        ...opts,
+        maxBeats: 4,
+        allowedArchetypes: PREMIUM_PLANNABLE_ARCHETYPES,
+      }
+    );
+    const qnaCount = sanitized.filter((b) => b.archetype === 'qna').length;
+    expect(qnaCount).toBe(1);
+    const repeat = sanitized.find(
+      (b) => b.intent === 'Second qna must coerce.'
+    );
+    expect(repeat?.archetype).toBe('spec-sheet');
+  });
 });
 
 describe('fallbackNarrativeBeats', () => {
@@ -318,15 +486,25 @@ describe('beatsFromExperience', () => {
           items: [{ question: 'Q?', answer: 'A.' }],
         }),
         section(1, { archetype: 'lifestyle-immersion' }, 'hook'),
+        section(3, {
+          archetype: 'stat-band',
+          stats: [
+            { value: '50', label: 'cups' },
+            { value: '8oz', label: 'capacity' },
+          ],
+        }),
       ],
       status: 'draft',
     };
     const beats = beatsFromExperience(experience);
-    expect(beats.map((b) => b.order)).toEqual([1, 2]);
+    expect(beats.map((b) => b.order)).toEqual([1, 2, 3]);
     expect(beats[0]).toMatchObject({
       job: 'hook',
       archetype: 'lifestyle-immersion',
     });
-    expect(beats[1].archetype).toBe('spec-sheet'); // qna coerced
+    // Premium archetypes pass through (regen returns the same kind)...
+    expect(beats[1].archetype).toBe('qna');
+    // ...while truly non-plannable ones still coerce.
+    expect(beats[2].archetype).toBe('icon-row');
   });
 });

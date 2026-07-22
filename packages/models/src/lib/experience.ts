@@ -339,7 +339,17 @@ export const LayoutIntentSchema = z.discriminatedUnion('archetype', [
   }),
   z.object({
     archetype: z.literal('carousel'),
-    imageRoles: z.array(z.string().max(60)).min(2),
+    /** 2–6 one-idea slides, each with optional short copy (Premium limits). */
+    slides: z
+      .array(
+        z.object({
+          imageRole: z.string().max(60),
+          headline: z.string().max(100).optional(),
+          caption: z.string().max(200).optional(),
+        })
+      )
+      .min(2)
+      .max(6),
   }),
 ]);
 export type LayoutIntent = z.infer<typeof LayoutIntentSchema>;
@@ -436,7 +446,17 @@ export const APLUS_SLICE_CONSTANTS = {
    * legitimately adds a brand-footer bookend on top of them.
    */
   moduleBudget: { basic: 7, premium: 7 },
+  /**
+   * Premium A+ geometry (web-researched 2026-07 — VERIFY against the live
+   * Premium A+ Content Manager). The Premium canvas is 1464px wide; full-image
+   * bands are 1464×600 with separate 600×450 mobile uploads. No 300px premium
+   * band exists, so premium slice stacks are an all-600 grid.
+   */
+  premium: { canvasWidth: 1464, sliceUnitPx: 600, tallSlicePx: 600 },
 } as const;
+
+/** The two A+ tiers the editor/compiler understand. */
+export type AplusTier = 'Basic A+' | 'Premium A+';
 
 export const SliceSpecSchema = z.object({
   index: z.number().int().nonnegative(),
@@ -448,6 +468,18 @@ export const SliceSpecSchema = z.object({
 });
 export type SliceSpec = z.infer<typeof SliceSpecSchema>;
 
+/** Exact target dimensions for one image upload of a compiled module. */
+export const ModuleImageSpecSchema = z.object({
+  /** The image slot role this spec applies to. */
+  role: z.string(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  /** Present when Amazon wants a separately-uploaded mobile crop. */
+  mobileWidth: z.number().int().positive().optional(),
+  mobileHeight: z.number().int().positive().optional(),
+});
+export type ModuleImageSpec = z.infer<typeof ModuleImageSpecSchema>;
+
 export const ModuleMappingEntrySchema = z.object({
   /** Order of the compiled module in `modules`. */
   order: z.number().int().positive(),
@@ -456,6 +488,8 @@ export const ModuleMappingEntrySchema = z.object({
   kind: z.enum(['native', 'designed-image', 'image-slice-stack']),
   /** Present when kind = image-slice-stack: the Amazon-side upload plan. */
   slices: z.array(SliceSpecSchema).optional(),
+  /** Exact per-image upload dims (Premium: exports leave at these sizes). */
+  imageSpecs: z.array(ModuleImageSpecSchema).optional(),
 });
 export type ModuleMappingEntry = z.infer<typeof ModuleMappingEntrySchema>;
 

@@ -16,9 +16,10 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Archetypes the A+ planner may choose. Excludes hotspots/video/carousel/qna
- * (Premium-native media, later phase) and stat-band (compile-target only — no
- * writable module kind lifts back to it).
+ * Archetypes the Basic A+ planner may choose. Excludes qna/hotspots/carousel
+ * (Premium-native — see PREMIUM_PLANNABLE_ARCHETYPES), video (no sourcing
+ * pipeline) and stat-band (compile-target only — no writable module kind lifts
+ * back to it).
  */
 export const APLUS_PLANNABLE_ARCHETYPES = [
   'full-bleed-hero',
@@ -35,10 +36,23 @@ export const APLUS_PLANNABLE_ARCHETYPES = [
 export type AplusPlannableArchetype =
   (typeof APLUS_PLANNABLE_ARCHETYPES)[number];
 
+/** Premium A+ adds the EBC-native interactive/showcase archetypes. */
+export const PREMIUM_PLANNABLE_ARCHETYPES = [
+  ...APLUS_PLANNABLE_ARCHETYPES,
+  'qna',
+  'hotspots',
+  'carousel',
+] as const satisfies readonly LayoutArchetype[];
+export type PremiumPlannableArchetype =
+  (typeof PREMIUM_PLANNABLE_ARCHETYPES)[number];
+
+// One WIDE beat schema across tiers — Basic safety is enforced in
+// sanitizeNarrativeBeats (allowedArchetypes), not by parse failure, so a
+// premium beat in a Basic run degrades gracefully instead of being dropped.
 export const NarrativeBeatSchema = z.object({
   order: z.number().int().positive(),
   job: ConversionJobSchema,
-  archetype: z.enum(APLUS_PLANNABLE_ARCHETYPES),
+  archetype: z.enum(PREMIUM_PLANNABLE_ARCHETYPES),
   /** One sentence: what this section must make the buyer believe or feel. */
   intent: z.string().min(1).max(200),
   /** Optional short angle for the headline — direction, not final copy. */
@@ -107,6 +121,12 @@ export function moduleKindForBeat(
       return beat.job === 'hook' || beat.job === 'brand'
         ? 'company-logo'
         : 'text-only';
+    case 'qna':
+      return 'qna';
+    case 'hotspots':
+      return 'hotspots';
+    case 'carousel':
+      return 'carousel';
   }
 }
 
@@ -167,7 +187,7 @@ export function fallbackNarrativeBeats(
 }
 
 /** Archetypes strong enough to open the page above the fold. */
-const OPENER_ARCHETYPES: readonly AplusPlannableArchetype[] = [
+export const OPENER_ARCHETYPES: readonly PremiumPlannableArchetype[] = [
   'full-bleed-hero',
   'lifestyle-immersion',
   'split-LR',
@@ -175,10 +195,41 @@ const OPENER_ARCHETYPES: readonly AplusPlannableArchetype[] = [
   'dual-use-split',
   'feature-grid',
   'brand-story-band',
+  'carousel',
 ];
+
+/** Premium showcase archetypes: at most ONE of each per page. */
+const SINGLETON_ARCHETYPES: ReadonlySet<string> = new Set([
+  'qna',
+  'hotspots',
+  'carousel',
+]);
+
+/**
+ * Archetypes that render as one edge-to-edge photograph. Two of them in a row
+ * read as a tiled contact sheet rather than a story — the eye gets no text
+ * band to rest on — so sanitizeNarrativeBeats separates them even though their
+ * archetypes differ (which is why the layout-diversity rule alone misses it).
+ */
+export const IMMERSIVE_ARCHETYPES: readonly LayoutArchetype[] = [
+  'full-bleed-hero',
+  'lifestyle-immersion',
+  'problem-solution',
+  'hotspots',
+  'carousel',
+  'video',
+];
+
+const IMMERSIVE_SET: ReadonlySet<string> = new Set(IMMERSIVE_ARCHETYPES);
+
+/** True when the archetype renders as a full-bleed photo module. */
+export function isImmersiveArchetype(archetype: string): boolean {
+  return IMMERSIVE_SET.has(archetype);
+}
 
 /**
  * Makes any model-planned beat list safe to execute: drops invalid entries,
+ * coerces archetypes the target tier can't execute (job/intent preserved),
  * clamps to the budget, renumbers 1..N, breaks back-to-back archetype repeats
  * (layout-diversity rule), forces a VISUAL opener (a spec table above the
  * fold kills the page), and pads up to maxBeats from the fallback story.
@@ -186,11 +237,41 @@ const OPENER_ARCHETYPES: readonly AplusPlannableArchetype[] = [
  */
 export function sanitizeNarrativeBeats(
   beats: NarrativeBeat[],
-  opts: { maxBeats: number; productName: string }
+  opts: {
+    maxBeats: number;
+    productName: string;
+    /**
+     * Archetypes the target tier can execute. Defaults to the Basic set so
+     * forgotten callers stay Basic-safe; Premium runs pass
+     * PREMIUM_PLANNABLE_ARCHETYPES.
+     */
+    allowedArchetypes?: readonly PremiumPlannableArchetype[];
+  }
 ): NarrativeBeat[] {
+  const allowed = new Set<string>(
+    opts.allowedArchetypes ?? APLUS_PLANNABLE_ARCHETYPES
+  );
+  // Disallowed archetypes COERCE to their closest executable neighbor (never
+  // dropped — the beat is a story decision, the archetype just its costume),
+  // and premium showcase archetypes are singletons: at most ONE each of
+  // qna/hotspots/carousel per page. Coercion targets are always plain Basic
+  // archetypes, so one pass settles both rules.
+  const singletonSeen = new Set<string>();
+  const coerce = (beat: NarrativeBeat): NarrativeBeat => {
+    let archetype = beat.archetype;
+    if (
+      !allowed.has(archetype) ||
+      (SINGLETON_ARCHETYPES.has(archetype) && singletonSeen.has(archetype))
+    ) {
+      archetype = NON_PLANNABLE_COERCION[archetype] ?? 'lifestyle-immersion';
+    }
+    if (SINGLETON_ARCHETYPES.has(archetype)) singletonSeen.add(archetype);
+    return archetype === beat.archetype ? beat : { ...beat, archetype };
+  };
   const valid = beats
     .filter((beat) => NarrativeBeatSchema.safeParse(beat).success)
-    .sort((a, b) => a.order - b.order);
+    .sort((a, b) => a.order - b.order)
+    .map(coerce);
 
   // Layout diversity: never the same archetype twice in a row.
   const diverse: NarrativeBeat[] = [];
@@ -245,12 +326,36 @@ export function sanitizeNarrativeBeats(
     }
   }
 
+  // Immersive separation: two edge-to-edge photo modules in a row read as a
+  // tiled contact sheet (see IMMERSIVE_ARCHETYPES) — pull the NEXT
+  // text-anchored beat between them, preserving story order otherwise. Runs
+  // after opener promotion (which can itself create a photo-photo pair).
+  for (let i = 0; i + 1 < diverse.length; i++) {
+    if (!isImmersiveArchetype(diverse[i].archetype)) continue;
+    if (!isImmersiveArchetype(diverse[i + 1].archetype)) continue;
+    const breakerIndex = diverse.findIndex(
+      (beat, index) =>
+        index > i + 1 &&
+        !isImmersiveArchetype(beat.archetype) &&
+        // Taking this beat must not butt its neighbors' identical
+        // archetypes together (would violate layout diversity).
+        (index + 1 >= diverse.length ||
+          diverse[index - 1].archetype !== diverse[index + 1].archetype)
+    );
+    if (breakerIndex < 0) break; // nothing text-anchored left to separate with
+    const [breaker] = diverse.splice(breakerIndex, 1);
+    diverse.splice(i + 1, 0, breaker);
+  }
+
   return diverse
     .slice(0, opts.maxBeats)
     .map((beat, index) => ({ ...beat, order: index + 1 }));
 }
 
-/** Coercions for archetypes the A+ planner can't produce (regeneration context). */
+/**
+ * Coercions for archetypes a tier can't execute — used when a Basic run must
+ * downgrade a premium beat, and when deriving beats from converted drafts.
+ */
 const NON_PLANNABLE_COERCION: Partial<
   Record<LayoutArchetype, AplusPlannableArchetype>
 > = {
@@ -264,7 +369,8 @@ const NON_PLANNABLE_COERCION: Partial<
 /**
  * Derives the beat list from an Experience — the regeneration context. Works
  * on any experience (including old converted drafts): non-plannable archetypes
- * coerce to their closest plannable neighbor.
+ * coerce to their closest plannable neighbor. Premium archetypes pass through
+ * so regenerating a qna/hotspots/carousel section returns the same kind.
  */
 export function beatsFromExperience(experience: Experience): NarrativeBeat[] {
   return [...experience.sections]
@@ -272,9 +378,9 @@ export function beatsFromExperience(experience: Experience): NarrativeBeat[] {
     .map((section, index) => {
       const archetype = section.visual.layout.archetype;
       const plannable = (
-        APLUS_PLANNABLE_ARCHETYPES as readonly string[]
+        PREMIUM_PLANNABLE_ARCHETYPES as readonly string[]
       ).includes(archetype)
-        ? (archetype as AplusPlannableArchetype)
+        ? (archetype as PremiumPlannableArchetype)
         : NON_PLANNABLE_COERCION[archetype] ?? 'lifestyle-immersion';
       return {
         order: index + 1,

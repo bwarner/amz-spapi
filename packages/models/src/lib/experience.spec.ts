@@ -99,7 +99,13 @@ describe('LayoutIntentSchema', () => {
       source: 'ugc',
       posterFrameRole: 'poster',
     },
-    { archetype: 'carousel', imageRoles: ['c1', 'c2'] },
+    {
+      archetype: 'carousel',
+      slides: [
+        { imageRole: 'c1', headline: 'Morning rush' },
+        { imageRole: 'c2', caption: 'Weekend refill.' },
+      ],
+    },
   ];
 
   it('parses every archetype variant', () => {
