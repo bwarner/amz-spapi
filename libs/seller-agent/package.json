@@ -12,5 +12,9 @@
       "default": "./src/index.js"
     },
     "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@amz-spapi/ai-provider": "0.0.1",
+    "@amz-spapi/sp-cache": "0.0.1"
   }
 }

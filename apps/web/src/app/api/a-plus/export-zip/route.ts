@@ -276,7 +276,7 @@ export async function POST(request: Request) {
       // small content inside a tall fixed frame).
       const isBand =
         premium && module.amazonModuleType === 'PREMIUM_FULL_IMAGE';
-      let png = Buffer.from(
+      let png: Buffer = Buffer.from(
         await renderModule(
           clone,
           theme,
