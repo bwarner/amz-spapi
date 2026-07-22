@@ -270,6 +270,48 @@ Deployment {                 // compile an Experience to one format
 }
 ```
 
+### Structured (data-driven) sections — comparison / tech-specs / Q&A
+
+Not every Section is an image-driven scene. **Comparison, technical specifications,
+and Q&A are _structured content_** — the data IS the message, not a generated
+image. The model handles them as first-class:
+
+- The **LayoutIntent archetype carries archetype-specific structured content**, not
+  just copy + image slots:
+  - `comparison-table` → `{ columns: products[], rows: attributes[], cells, highlightColumn }`
+  - `spec-sheet` → `{ rows: {label, value}[] }`
+  - `qna` → `{ items: {question, answer}[] }`
+  - `stat-band` → `{ stats: {value, label}[] }` · `feature-grid` → `{ tiles[] }`
+- The `VisualConcept` is then a **data-bound designed rendering** (styled
+  table / spec grid / accordion), _not_ image generation. It still gets art
+  direction (brand palette/type) **and a real mobile composition** — a comparison
+  table must **reflow/restructure on mobile**, not just shrink (a key conversion
+  point).
+- They carry a **conversion job** like any Section, so the Narrative Engine places
+  them by strategy: `comparison` ⇒ differentiation; `spec-sheet` ⇒ proof /
+  how-it-works; `qna` ⇒ objection-handling / trust.
+- **Reuse:** today's `comparison-table` and `tech-specs` schemas are strong and map
+  ~1:1 to these archetypes' content shapes — keep them.
+
+**Deployment: NATIVE modules (decided).** Structured sections compile to Amazon's
+**native** comparison / tech-specs / Q&A modules — the Compiler populates the real
+module fields (→ build sheet / future API write), NOT a designed PNG. Implications:
+
+- **No text-in-image risk** — Amazon renders the text; passes moderation cleanly.
+- **Amazon handles mobile reflow natively** — so structured sections need _no_
+  separate mobile composition (their `VisualConcept.mobile` is N/A; Amazon is
+  responsive). Simplifies the mobile story for these.
+- **Accessible** (real text, not pixels).
+- **Drop the Satori designed-image path for structured content** — a simplification
+  (Satori stays for image-driven scenes only).
+- The seller still sees a **preview** of how the native module will look, but the
+  _artifact_ is structured field data, not a PNG.
+- Q&A is Premium-A+/Listing-native → **degrades on Standard A+** to a styled FAQ
+  (image-driven feature section).
+
+Image-driven scenes (hero, lifestyle, benefit) still deploy as **designed images**
+in full-image modules — native is only for the structured types.
+
 ### Reuse mapping (current → redesign)
 
 | Current                                                         | Becomes                                                                         |
