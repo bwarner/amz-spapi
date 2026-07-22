@@ -1,0 +1,19 @@
+packages:
+  - 'packages/*'
+  - 'libs/*'
+
+# Match npm's --legacy-peer-deps tolerance the workspace previously relied on.
+strictPeerDependencies: false
+autoInstallPeers: true
+
+# npm workspaces auto-link workspace packages by name+version without needing a
+# `workspace:*` protocol prefix. Our internal deps use bare version strings like
+# "0.0.1" — keep linking those to the in-repo copy rather than the npm registry.
+linkWorkspacePackages: true
+
+# Hoisted layout: each project's node_modules is flat (like npm), but files are
+# still hardlinked from pnpm's global content-addressable store, so cross-project
+# dedup savings still apply. Flat layout keeps apps/web (an Nx project with no
+# package.json) and packages that import internal libs resolving as they did
+# under npm. Flip to "isolated" as a follow-up cleanup if desired.
+nodeLinker: hoisted
