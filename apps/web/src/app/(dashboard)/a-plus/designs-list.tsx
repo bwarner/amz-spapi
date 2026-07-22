@@ -10,7 +10,8 @@ export type DesignListItem = {
   draftId: string;
   name: string;
   productName?: string;
-  asin?: string;
+  /** Deploy-target ASINs (first = primary). */
+  asins?: string[];
   contentTier?: 'Basic A+' | 'Premium A+';
   updatedAt: number;
 };
@@ -103,8 +104,13 @@ export function DesignsList({ drafts: initial }: { drafts: DesignListItem[] }) {
                     {d.name || 'Untitled design'}
                   </p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {d.productName || d.asin || 'No product set'} · updated{' '}
-                    {new Date(d.updatedAt).toLocaleString()}
+                    {d.productName || d.asins?.[0] || 'No product set'}
+                    {d.asins && d.asins.length > 1
+                      ? ` (+${d.asins.length - 1} ASIN${
+                          d.asins.length > 2 ? 's' : ''
+                        })`
+                      : ''}{' '}
+                    · updated {new Date(d.updatedAt).toLocaleString()}
                   </p>
                 </Link>
                 {d.contentTier ? (

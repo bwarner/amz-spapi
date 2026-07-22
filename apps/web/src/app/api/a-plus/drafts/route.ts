@@ -28,11 +28,23 @@ export async function POST(request: Request) {
     brandGuideId?: unknown;
     name?: unknown;
     productName?: unknown;
-    asin?: unknown;
+    asins?: unknown;
     contentTier?: unknown;
     payload?: unknown;
     packageJson?: unknown;
   };
+
+  // Deploy-target ASINs (first = primary) — one design applies to many ASINs.
+  const asins = Array.isArray(body.asins)
+    ? [
+        ...new Set(
+          body.asins
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim().toUpperCase())
+            .filter(Boolean)
+        ),
+      ].slice(0, 50)
+    : undefined;
 
   const draftId =
     typeof body.draftId === 'string' && body.draftId
@@ -56,7 +68,7 @@ export async function POST(request: Request) {
         : 'Untitled A+ draft',
     productName:
       typeof body.productName === 'string' ? body.productName : undefined,
-    asin: typeof body.asin === 'string' ? body.asin : undefined,
+    asins: asins?.length ? asins : undefined,
     contentTier:
       body.contentTier === 'Premium A+' || body.contentTier === 'Basic A+'
         ? body.contentTier
