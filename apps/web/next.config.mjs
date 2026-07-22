@@ -34,6 +34,19 @@ const nextConfig = {
       '.cjs': ['.cts', '.cjs'],
     };
 
+    // @auth0/nextjs-auth0's DPoP util uses a dynamic require webpack can't
+    // statically resolve. It's harmless (server-only, resolves at runtime) but
+    // noisy — and it's bundled by the Edge compiler via middleware, so
+    // serverExternalPackages can't reach it. Mute just this warning.
+    config.ignoreWarnings = [
+      ...(config.ignoreWarnings ?? []),
+      {
+        module: /nextjs-auth0/,
+        message:
+          /Critical dependency: the request of a dependency is an expression/,
+      },
+    ];
+
     return config;
   },
 };
