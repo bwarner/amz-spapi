@@ -20,7 +20,7 @@ export default async function APlusDesignsPage() {
         draftId: draft.draftId,
         name: draft.name,
         productName: draft.productName,
-        asin: draft.asin,
+        asins: draft.asins,
         contentTier: draft.contentTier,
         updatedAt: draft.updatedAt,
       }))}

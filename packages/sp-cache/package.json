@@ -12,5 +12,9 @@
       "default": "./src/index.js"
     },
     "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@amz-spapi/couchbase-utils": "0.0.1",
+    "@farvisionllc/sp-client": "0.0.1"
   }
 }

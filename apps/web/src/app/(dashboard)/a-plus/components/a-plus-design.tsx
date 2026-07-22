@@ -20,6 +20,10 @@ export const APLUS_CANVAS_WIDTH = 970;
  * the mobile compositions are authored separately (stacked, larger type, fewer
  * columns) rather than a scaled-down desktop. */
 export const APLUS_MOBILE_CANVAS_WIDTH = 600;
+/** Premium A+ (EBC) desktop canvas — Premium modules render full-width at
+ * 1464px (web-researched 2026-07; VERIFY against Seller Central). Mobile stays
+ * at APLUS_MOBILE_CANVAS_WIDTH. */
+export const APLUS_PREMIUM_CANVAS_WIDTH = 1464;
 
 /** Selectable design styles. Same content + layouts, different visual language. */
 export type DesignStyleKey = 'editorial' | 'modern' | 'bold' | 'minimal';
@@ -355,7 +359,9 @@ function SectionTitle({ title, theme }: { title: string; theme: BrandTheme }) {
     );
   }
 
-  // Editorial (default): centered title between accent dots and rules.
+  // Editorial (default): centered title between accent dots and rules. The
+  // rules SHRINK on narrow canvases (600px mobile band) so long titles never
+  // push the ornaments past the frame edge.
   return (
     <div
       style={{
@@ -363,14 +369,17 @@ function SectionTitle({ title, theme }: { title: string; theme: BrandTheme }) {
         alignItems: 'center',
         justifyContent: 'center',
         width: '100%',
-        padding: '38px 0 8px',
+        padding: '38px 16px 8px',
       }}
     >
-      <div style={{ width: 70, height: 1, background: theme.line }} />
+      <div
+        style={{ width: 70, flexShrink: 1, height: 1, background: theme.line }}
+      />
       <div
         style={{
           width: 7,
           height: 7,
+          flexShrink: 0,
           margin: '0 14px',
           borderRadius: 7,
           background: theme.accent,
@@ -383,12 +392,15 @@ function SectionTitle({ title, theme }: { title: string; theme: BrandTheme }) {
         style={{
           width: 7,
           height: 7,
+          flexShrink: 0,
           margin: '0 14px',
           borderRadius: 7,
           background: theme.accent,
         }}
       />
-      <div style={{ width: 70, height: 1, background: theme.line }} />
+      <div
+        style={{ width: 70, flexShrink: 1, height: 1, background: theme.line }}
+      />
     </div>
   );
 }
@@ -640,6 +652,9 @@ function HeroPhoto({
 type Ctx = {
   theme: BrandTheme;
   mobile: boolean;
+  /** Rendering into a fixed premium band frame (1464×600) — layouts may
+   * choose a taller composition to fill it (e.g. icon grid vs strip). */
+  band?: boolean;
 };
 
 function DesignedHero({
@@ -1406,6 +1421,13 @@ function DesignedSpecsOrText({
       : theme.density === 'tight'
       ? '8px 40px 28px'
       : '10px 40px 34px';
+  // The section label often falls back to the headline (compiler title chain
+  // label → headline), so an identical headline would print twice — keep it
+  // only when it adds words.
+  const headline = clean(module.headline);
+  const showHeadline =
+    headline &&
+    headline.trim().toLowerCase() !== clean(module.title).trim().toLowerCase();
   return (
     <div
       style={{
@@ -1417,10 +1439,10 @@ function DesignedSpecsOrText({
       }}
     >
       <SectionTitle title={module.title} theme={theme} />
-      {clean(module.headline) ? (
+      {showHeadline ? (
         <div style={{ display: 'flex', marginTop: 6 }}>
           <Heading theme={theme} size={theme.density === 'tight' ? 26 : 24}>
-            {clean(module.headline)}
+            {headline}
           </Heading>
         </div>
       ) : null}
@@ -1628,124 +1650,54 @@ function DesignedLogo({
     </div>
   );
 
-  // Brand FOOTER: a centered closing band — ornament, logo chip, tagline — over
-  // a darkened backdrop (or a dark brand band when no photo). Distinct from the
-  // left-aligned opening hero so the page reads with a clear bookend.
+  // Brand FOOTER: a clean, typographic closing band — thin accent rule, the
+  // logo sitting directly on brand paper (no chip, no ornament), tagline in a
+  // quiet tone beneath. Photographic backdrops read as murk at this size, so
+  // the footer deliberately ignores any background slot on the module.
   if (module.placement === 'footer') {
     return (
       <div
         style={{
           position: 'relative',
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
           width: '100%',
-          minHeight: mobile ? 220 : 280,
-          background: bgSrc ? theme.surfaceAlt : theme.ink,
+          minHeight: mobile ? 200 : 240,
+          padding: mobile ? '40px 30px' : '52px 0',
+          background: theme.bg,
         }}
       >
-        {bgSrc ? (
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-            }}
-          >
-            <img
-              src={bgSrc}
-              alt={module.background?.alt || ''}
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-                display: 'block',
-              }}
-            />
-          </div>
-        ) : null}
-        {bgSrc ? (
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-              background:
-                'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.72) 100%)',
-            }}
-          />
-        ) : null}
         <div
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
             right: 0,
-            height: 5,
+            height: 3,
             display: 'flex',
             background: theme.accent,
           }}
         />
-        <div
-          style={{
-            position: 'relative',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: mobile ? '36px 30px' : '46px 0',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <div style={{ width: 40, height: 2, background: theme.accent }} />
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                margin: '0 10px',
-                borderRadius: 8,
-                background: theme.accent,
-              }}
-            />
-            <div style={{ width: 40, height: 2, background: theme.accent }} />
-          </div>
+        {renderLogo(mobile ? 88 : 108, mobile ? 260 : 340)}
+        {tagline ? (
           <div
             style={{
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
               marginTop: 18,
-              padding: mobile ? '10px 18px' : '12px 22px',
-              borderRadius: theme.radius * 1.4,
-              background: withAlpha('#FFFFFF', 0.95),
-              boxShadow: '0 12px 30px rgba(0,0,0,0.3)',
+              maxWidth: 600,
+              fontFamily: theme.headingFont,
+              fontSize: mobile ? 15 : 19,
+              lineHeight: 1.4,
+              letterSpacing: 0.2,
+              color: theme.muted,
+              textAlign: 'center',
             }}
           >
-            {renderLogo(mobile ? 54 : 62, mobile ? 200 : 260)}
+            {tagline}
           </div>
-          {tagline ? (
-            <div
-              style={{
-                display: 'flex',
-                marginTop: 16,
-                maxWidth: 600,
-                fontFamily: theme.headingFont,
-                fontSize: mobile ? 15 : 19,
-                lineHeight: 1.4,
-                color: 'rgba(255,255,255,0.92)',
-                textAlign: 'center',
-              }}
-            >
-              {tagline}
-            </div>
-          ) : null}
-        </div>
+        ) : null}
       </div>
     );
   }
@@ -2400,9 +2352,12 @@ function DesignedIconRow({
   module: Extract<APlusGeneratedModule, { type: 'icon-row' }>;
   ctx: Ctx;
 }) {
-  const { theme, mobile } = ctx;
-  const iconSize = mobile ? 24 : 28;
-  const circle = mobile ? 46 : 56;
+  const { theme, mobile, band } = ctx;
+  // Band frame: a 2-row × 3-column grid is intrinsically taller, so the
+  // scale-to-fit fills the 1464×600 band instead of floating a thin strip.
+  const bandGrid = Boolean(band) && !mobile && module.items.length > 3;
+  const iconSize = mobile ? 26 : bandGrid ? 34 : 28;
+  const circle = mobile ? 50 : bandGrid ? 68 : 56;
   return (
     <div
       style={{
@@ -2417,10 +2372,116 @@ function DesignedIconRow({
       <div
         style={{
           display: 'flex',
-          flexDirection: mobile ? 'column' : 'row',
+          flexDirection: 'row',
+          // Mobile + band frames: a wrapped grid of CENTERED icon-above-label
+          // cells (the canonical icon-grid pattern, same grammar as desktop) —
+          // symmetric under a centered title with no alignment rails to rag.
+          // A partial last row centers itself.
+          flexWrap: mobile || bandGrid ? 'wrap' : 'nowrap',
           alignItems: 'stretch',
           justifyContent: 'center',
-          padding: mobile ? '10px 24px 0' : '16px 30px 0',
+          padding: mobile ? '10px 12px 0' : '16px 30px 0',
+        }}
+      >
+        {module.items.map((item, i) => {
+          return (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flex: mobile ? '0 0 33%' : bandGrid ? '0 0 30%' : 1,
+                padding: mobile
+                  ? '14px 6px'
+                  : bandGrid
+                  ? '18px 10px'
+                  : '6px 10px',
+                borderLeft:
+                  !mobile && !bandGrid && i > 0
+                    ? `1px solid ${theme.line}`
+                    : 'none',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: circle,
+                  height: circle,
+                  borderRadius: circle,
+                  background: theme.accentSoft,
+                  marginBottom: mobile ? 10 : 12,
+                }}
+              >
+                <svg
+                  width={iconSize}
+                  height={iconSize}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke={theme.accent}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {ICON_PATHS[resolveIcon(item.icon)].map((d, j) => (
+                    <path key={j} d={d} />
+                  ))}
+                </svg>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  fontFamily: theme.bodyFont,
+                  fontSize: mobile ? 15 : bandGrid ? 17 : 14,
+                  fontWeight: 600,
+                  color: theme.ink,
+                  textAlign: 'center',
+                }}
+              >
+                {clean(item.label)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- Premium A+ (EBC) native modules -----------------------------------------
+
+/**
+ * Premium Q&A preview. STATIC — the accordion interaction is Amazon's; this
+ * mirrors the expanded content so the seller can proof every pair.
+ */
+function DesignedQna({
+  module,
+  ctx,
+}: {
+  module: Extract<APlusGeneratedModule, { type: 'qna' }>;
+  ctx: Ctx;
+}) {
+  const { theme, mobile } = ctx;
+  const badge = mobile ? 30 : 34;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        background: theme.bg,
+        paddingBottom: mobile ? 24 : 32,
+      }}
+    >
+      <SectionTitle title={module.headline || module.title} theme={theme} />
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          padding: mobile ? '10px 24px 0' : '14px 48px 0',
         }}
       >
         {module.items.map((item, i) => (
@@ -2428,13 +2489,12 @@ function DesignedIconRow({
             key={i}
             style={{
               display: 'flex',
-              flexDirection: mobile ? 'row' : 'column',
-              alignItems: 'center',
-              justifyContent: mobile ? 'flex-start' : 'center',
-              flex: 1,
-              padding: mobile ? '12px 0' : '6px 10px',
-              borderLeft: !mobile && i > 0 ? `1px solid ${theme.line}` : 'none',
-              borderTop: mobile && i > 0 ? `1px solid ${theme.line}` : 'none',
+              alignItems: 'flex-start',
+              marginTop: i > 0 ? 12 : 0,
+              padding: mobile ? '16px 18px' : '20px 24px',
+              borderRadius: theme.radius,
+              background: i % 2 === 0 ? theme.surface : theme.surfaceAlt,
+              border: `1px solid ${theme.line}`,
             }}
           >
             <div
@@ -2442,40 +2502,290 @@ function DesignedIconRow({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: circle,
-                height: circle,
-                borderRadius: circle,
-                background: theme.accentSoft,
-                marginRight: mobile ? 14 : 0,
-                marginBottom: mobile ? 0 : 12,
+                width: badge,
+                height: badge,
+                borderRadius: badge,
+                background: theme.accent,
+                color: theme.accentInk,
+                fontFamily: theme.headingFont,
+                fontWeight: 700,
+                fontSize: mobile ? 14 : 15,
+                marginRight: mobile ? 14 : 18,
+                flexShrink: 0,
               }}
             >
-              <svg
-                width={iconSize}
-                height={iconSize}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke={theme.accent}
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
+              {`Q${i + 1}`}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  fontFamily: theme.headingFont,
+                  fontWeight: theme.headingWeight,
+                  fontSize: mobile ? 17 : 19,
+                  lineHeight: 1.3,
+                  color: theme.ink,
+                }}
               >
-                {ICON_PATHS[resolveIcon(item.icon)].map((d, j) => (
-                  <path key={j} d={d} />
-                ))}
-              </svg>
+                {clean(item.question)}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  marginTop: 8,
+                  fontFamily: theme.bodyFont,
+                  fontSize: mobile ? 15 : 16,
+                  lineHeight: 1.6,
+                  color: theme.muted,
+                }}
+              >
+                {clean(item.answer)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Premium Hotspots preview. STATIC — numbered accent markers over the base
+ * band at the model-planned positions, plus a legend (Amazon renders the
+ * tap/hover interaction). The band keeps the Premium 1464:600 feel.
+ */
+function DesignedHotspots({
+  module,
+  ctx,
+}: {
+  module: Extract<APlusGeneratedModule, { type: 'hotspots' }>;
+  ctx: Ctx;
+}) {
+  const { theme, mobile } = ctx;
+  const bandHeight = mobile ? 450 : 480;
+  const marker = mobile ? 28 : 32;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        background: theme.bg,
+        paddingBottom: mobile ? 24 : 32,
+      }}
+    >
+      <SectionTitle title={module.headline || module.title} theme={theme} />
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          width: '100%',
+          marginTop: mobile ? 10 : 14,
+        }}
+      >
+        <Photo slot={module.image} height={bandHeight} />
+        {module.hotspots.map((spot, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: `${spot.position.x * 100}%`,
+              top: `${spot.position.y * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: marker,
+              height: marker,
+              borderRadius: marker,
+              background: theme.accent,
+              color: theme.accentInk,
+              fontFamily: theme.headingFont,
+              fontWeight: 700,
+              fontSize: mobile ? 13 : 14,
+              border: `2px solid ${withAlpha('#FFFFFF', 0.9)}`,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+            }}
+          >
+            {String(i + 1)}
+          </div>
+        ))}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          padding: mobile ? '14px 24px 0' : '18px 48px 0',
+        }}
+      >
+        {module.hotspots.map((spot, i) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              marginTop: i > 0 ? 10 : 0,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                borderRadius: 22,
+                background: theme.accent,
+                color: theme.accentInk,
+                fontFamily: theme.headingFont,
+                fontWeight: 700,
+                fontSize: 12,
+                marginRight: 12,
+                marginTop: 1,
+                flexShrink: 0,
+              }}
+            >
+              {String(i + 1)}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  fontFamily: theme.bodyFont,
+                  fontWeight: 700,
+                  fontSize: mobile ? 15 : 16,
+                  lineHeight: 1.4,
+                  color: theme.ink,
+                }}
+              >
+                {clean(spot.label)}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  fontFamily: theme.bodyFont,
+                  fontSize: mobile ? 14 : 15,
+                  lineHeight: 1.5,
+                  color: theme.muted,
+                }}
+              >
+                {clean(spot.copy)}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Premium Simple Image Carousel preview. STATIC — desktop shows the slides as
+ * an equal-width filmstrip, mobile stacks them (Amazon renders the swipe).
+ */
+function DesignedCarousel({
+  module,
+  ctx,
+}: {
+  module: Extract<APlusGeneratedModule, { type: 'carousel' }>;
+  ctx: Ctx;
+}) {
+  const { theme, mobile } = ctx;
+  const total = module.slides.length;
+  const imageHeight = mobile ? 300 : total >= 5 ? 220 : 260;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        background: theme.bg,
+        paddingBottom: mobile ? 24 : 32,
+      }}
+    >
+      <SectionTitle title={module.title} theme={theme} />
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: mobile ? 'column' : 'row',
+          alignItems: 'stretch',
+          padding: mobile ? '10px 24px 0' : '14px 30px 0',
+        }}
+      >
+        {module.slides.map((slide, i) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              flex: 1,
+              marginLeft: !mobile && i > 0 ? 14 : 0,
+              marginTop: mobile && i > 0 ? 16 : 0,
+              borderRadius: theme.radius,
+              border: `1px solid ${theme.line}`,
+              background: theme.surface,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{ position: 'relative', display: 'flex', width: '100%' }}
+            >
+              <Photo slot={slide.image} height={imageHeight} />
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  left: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: withAlpha('#000000', 0.55),
+                  color: '#FFFFFF',
+                  fontFamily: theme.bodyFont,
+                  fontWeight: 600,
+                  fontSize: 12,
+                }}
+              >
+                {`${i + 1} / ${total}`}
+              </div>
             </div>
             <div
               style={{
                 display: 'flex',
-                fontFamily: theme.bodyFont,
-                fontSize: mobile ? 15 : 14,
-                fontWeight: 600,
-                color: theme.ink,
-                textAlign: 'center',
+                flexDirection: 'column',
+                padding: mobile ? '12px 16px 16px' : '14px 16px 18px',
               }}
             >
-              {clean(item.label)}
+              {clean(slide.headline) ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    fontFamily: theme.headingFont,
+                    fontWeight: theme.headingWeight,
+                    fontSize: mobile ? 17 : 16,
+                    lineHeight: 1.25,
+                    color: theme.ink,
+                  }}
+                >
+                  {clean(slide.headline)}
+                </div>
+              ) : null}
+              {clean(slide.caption) ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    marginTop: clean(slide.headline) ? 6 : 0,
+                    fontFamily: theme.bodyFont,
+                    fontSize: mobile ? 14 : 13.5,
+                    lineHeight: 1.5,
+                    color: theme.muted,
+                  }}
+                >
+                  {clean(slide.caption)}
+                </div>
+              ) : null}
             </div>
           </div>
         ))}
@@ -2489,12 +2799,15 @@ export function DesignedModule({
   module,
   theme,
   viewport = 'desktop',
+  band,
 }: {
   module: APlusGeneratedModule;
   theme: BrandTheme;
   viewport?: 'desktop' | 'mobile';
+  /** Rendering into a fixed premium band frame (see Ctx.band). */
+  band?: boolean;
 }) {
-  const ctx: Ctx = { theme, mobile: viewport === 'mobile' };
+  const ctx: Ctx = { theme, mobile: viewport === 'mobile', band };
   switch (module.type) {
     case 'company-logo':
       return <DesignedLogo module={module} ctx={ctx} />;
@@ -2521,7 +2834,11 @@ export function DesignedModule({
       return <DesignedDualUse module={module} ctx={ctx} />;
     case 'icon-row':
       return <DesignedIconRow module={module} ctx={ctx} />;
-    default:
-      return null;
+    case 'qna':
+      return <DesignedQna module={module} ctx={ctx} />;
+    case 'hotspots':
+      return <DesignedHotspots module={module} ctx={ctx} />;
+    case 'carousel':
+      return <DesignedCarousel module={module} ctx={ctx} />;
   }
 }

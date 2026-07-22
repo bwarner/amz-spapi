@@ -176,6 +176,68 @@ export const SAMPLE_GALLERY: Record<string, APlusGeneratedModule> = {
       },
     ],
   },
+  qna: {
+    ...base('qna', 'PREMIUM_QA', 'Questions & answers'),
+    headline: 'Your questions, answered',
+    items: [
+      {
+        question: 'Do the cups leak with hot drinks?',
+        answer:
+          'No — the smooth food-grade interior lining seals the seams, and the snap-fit lid keeps drinks contained on the go.',
+      },
+      {
+        question: 'Do I need a sleeve for hot coffee?',
+        answer:
+          'No sleeve needed. The ripple wall traps an insulating air layer, so the outside stays comfortable to hold.',
+      },
+      {
+        question: 'Are lids included in the pack?',
+        answer: 'Yes — every pack includes matching snap-fit lids.',
+      },
+    ],
+  },
+  hotspots: {
+    ...base('hotspots', 'PREMIUM_HOTSPOTS_1', 'Every detail, engineered'),
+    headline: 'Every detail, engineered',
+    image: slot('hotspot-base', 'Ripple wall cup with lid on a café counter'),
+    hotspots: [
+      {
+        position: { x: 0.3, y: 0.25 },
+        label: 'Snap-fit lid',
+        copy: 'Seals securely to help prevent spills on the move.',
+      },
+      {
+        position: { x: 0.62, y: 0.5 },
+        label: 'Ripple wall',
+        copy: 'Insulating air layer keeps hands comfortable, no sleeve needed.',
+      },
+      {
+        position: { x: 0.45, y: 0.8 },
+        label: 'Food-grade lining',
+        copy: 'Smooth interior preserves taste and prevents leaks.',
+      },
+    ],
+  },
+  carousel: {
+    ...base('carousel', 'PREMIUM_SIMPLE_IMAGE_CAROUSEL', 'From dawn to dusk'),
+    slides: [
+      {
+        image: slot('s1', 'Morning espresso at home', '1024x1024'),
+        headline: 'Slow mornings',
+        caption: 'Insulated comfort for the first pour of the day.',
+      },
+      {
+        image: slot('s2', 'Commuter carrying a cup', '1024x1024'),
+        headline: 'On the move',
+        caption: 'Snap-fit lids keep the commute spill-free.',
+      },
+      {
+        image: slot('s3', 'Office meeting with cups', '1024x1024'),
+        headline: 'At the office',
+        caption: 'A professional look for client meetings and events.',
+      },
+    ],
+  },
 };
 
 export const SAMPLE_GALLERY_KINDS = Object.keys(SAMPLE_GALLERY);

@@ -104,9 +104,17 @@ export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
           // Per-request quality wins over the model/env default; only the
           // size-based backend (gpt-image-1) honors it — others ignore it.
           const quality = params.quality ?? model.quality;
+          // Reference-generate (image-to-image): only the size-based backend
+          // (gpt-image-1) accepts image inputs; others get text-only.
+          const references =
+            model.sizing === 'size' && params.referenceImages?.length
+              ? params.referenceImages
+              : undefined;
           const { image } = await generateImage({
             model: model.slug,
-            prompt: params.prompt,
+            prompt: references
+              ? { images: references, text: params.prompt }
+              : params.prompt,
             ...(model.sizing === 'size'
               ? { size: toExactSize(params.size) as `${number}x${number}` }
               : {

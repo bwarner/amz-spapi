@@ -10,9 +10,16 @@
       "@amz-spapi/couchbase-utils": ["../../libs/couchbase-utils/src/index.ts"],
       "@amz-spapi/sp-cache": ["../../packages/sp-cache/src/index.ts"],
       "@amz-spapi/seller-agent": ["../../libs/seller-agent/src/index.ts"],
-      "@amz-spapi/amazon-sp-generated": ["../../packages/amazon-sp-generated/src/index.ts"],
-      "@amz-spapi/amazon-sp-generated/*": ["../../packages/amazon-sp-generated/src/*"],
-      "@farvisionllc/credential-store": ["../../packages/credential-store/src/index.ts"],
+      "@amz-spapi/amazon-sp-generated": [
+        "../../packages/amazon-sp-generated/src/index.ts"
+      ],
+      "@amz-spapi/amazon-sp-generated/*": [
+        "../../packages/amazon-sp-generated/src/*"
+      ],
+      "@farvisionllc/ad-client": ["../../packages/ad-client/src/index.ts"],
+      "@farvisionllc/credential-store": [
+        "../../packages/credential-store/src/index.ts"
+      ],
       "@farvisionllc/models": ["../../packages/models/src/index.ts"],
       "@farvisionllc/sp-client": ["../../packages/sp-client/src/index.ts"],
       "@farvisionllc/oauth": ["../../packages/oauth/src/index.ts"]
@@ -26,11 +33,7 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
+    "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
@@ -51,10 +54,5 @@
     "next-env.d.ts",
     ".next/types/**/*.ts"
   ],
-  "exclude": [
-    "node_modules",
-    "jest.config.ts",
-    "**/*.spec.ts",
-    "**/*.test.ts"
-  ]
+  "exclude": ["node_modules", "jest.config.ts", "**/*.spec.ts", "**/*.test.ts"]
 }

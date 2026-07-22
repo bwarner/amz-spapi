@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import { auth0 } from '../../../../lib/auth0';
 import { resolveImageModelVariant } from '../../../../lib/image-model-flag';
@@ -8,6 +8,7 @@ import {
   createAssetId,
   createAssetKey,
   createAssetS3Client,
+  getAsset,
   getAssetBucket,
   getDuplicateAsset,
   upsertAsset,
@@ -39,14 +40,24 @@ function pickImageSize(requested: string | undefined): ImageSize {
   return '1024x1024';
 }
 
-function prepareImagePrompt(prompt: string): string {
+function prepareImagePrompt(prompt: string, hasReferences = false): string {
   return [
+    ...(hasReferences
+      ? [
+          'Reference photo(s) of the ACTUAL product are attached. Depict THIS exact product — same shape, proportions, materials, surface texture, and the EXACT color of every component and part as in the reference photos — recreating the scene described below around it. Never substitute a generic look-alike.',
+          '',
+        ]
+      : []),
     prompt,
     '',
     // Hard realism override — enforced on EVERY image regardless of the brief,
     // because conceptual cell labels (e.g. "Cross-Section Proof", "Insulation
     // Engineering") otherwise push the model toward unrealistic diagram/CGI art.
     'Important image rule: render a realistic, natural-light PHOTOGRAPH of the real physical product in a believable real-world setting. Absolutely NO cutaways, cross-sections, exploded or see-through/x-ray views, technical or engineering diagrams, schematics, blueprints, infographics, heat-maps, arrows/annotations, 3D or CGI renders, or abstract concept art. If the description implies an internal or technical detail, instead show the real product in a natural context that implies it (e.g. a hand holding it, a tidy stack on a counter) — never a depiction OF the concept.',
+    // Color/material drift is the #1 reference-generate failure (component
+    // colors invented, contents ghosting through solid parts) — restate it as
+    // a hard rule on EVERY image, not only when references are attached.
+    'Important image rule: component COLORS and MATERIALS are factual, not stylistic. Every part of the product (e.g. lids, caps, handles, closures, trims, straps, cables) keeps the EXACT color stated in the product facts or shown in the reference photos, in every unit visible in the frame — never recolor parts to match the scene palette. All solid parts are fully OPAQUE: never show liquid, contents, or light through a closed or solid component, and never render a solid part as translucent.',
     'Important image rule: do not render brand names, brand badges, logos, brand lockups, watermarks, product labels with brand names, readable brand marks, or any other text, callouts, or numbers anywhere in the image. Leave any brand/logo placement as an empty logo-safe area for later editing.',
   ].join('\n');
 }
@@ -57,12 +68,18 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { prompt?: unknown; size?: unknown; quality?: unknown };
+  let body: {
+    prompt?: unknown;
+    size?: unknown;
+    quality?: unknown;
+    referenceAssetIds?: unknown;
+  };
   try {
     body = (await request.json()) as {
       prompt?: unknown;
       size?: unknown;
       quality?: unknown;
+      referenceAssetIds?: unknown;
     };
   } catch {
     return Response.json({ error: 'Invalid request body.' }, { status: 400 });
@@ -100,12 +117,45 @@ export async function POST(request: Request) {
     typeof body.size === 'string' ? body.size : undefined
   );
 
+  // Reference-generate: fetch the seller's real product photos (ownership
+  // checked) so the image model depicts THIS exact product, not a text-only
+  // approximation. Unreadable/foreign assets are skipped, never fatal.
+  const referenceAssetIds = Array.isArray(body.referenceAssetIds)
+    ? body.referenceAssetIds
+        .filter((id): id is string => typeof id === 'string')
+        .slice(0, 2)
+    : [];
+  const referenceImages: Uint8Array[] = [];
+  if (referenceAssetIds.length) {
+    const s3 = createAssetS3Client();
+    for (const assetId of referenceAssetIds) {
+      try {
+        const refAsset = await getAsset(assetId);
+        if (!refAsset || refAsset.userId !== session.user.sub) continue;
+        const obj = await s3.send(
+          new GetObjectCommand({
+            Bucket: refAsset.storage.bucket,
+            Key: refAsset.storage.key,
+          })
+        );
+        const bytes = await obj.Body?.transformToByteArray();
+        if (bytes) referenceImages.push(bytes);
+      } catch {
+        // Skip unreadable references — text-only generation still works.
+      }
+    }
+    console.log(
+      `[a-plus-image-generate] references: ${referenceImages.length}/${referenceAssetIds.length} usable`
+    );
+  }
+
   let generated: { url: string; mediaType: string; revisedPrompt?: string };
   try {
     const results = await imageGenerator.generate({
-      prompt: prepareImagePrompt(body.prompt),
+      prompt: prepareImagePrompt(body.prompt, referenceImages.length > 0),
       size,
       quality,
+      referenceImages: referenceImages.length ? referenceImages : undefined,
     });
     const first = results[0];
     if (!first?.url) {
@@ -118,6 +168,11 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Image generation failed.';
+    console.error(
+      `[a-plus-image-generate] FAILED (variant=${variant}, refs=${
+        referenceImages.length
+      }): ${message.slice(0, 300)}`
+    );
     return Response.json({ error: message }, { status: 500 });
   }
 

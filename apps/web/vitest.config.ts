@@ -12,6 +12,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),
+      // Workspace packages (mirrors tsconfig.base.json paths).
+      '@farvisionllc/models': resolve(
+        __dirname,
+        '../../packages/models/src/index.ts'
+      ),
     },
   },
 });

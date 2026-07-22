@@ -1,7 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * Image URLs come in three shapes: absolute http(s), data URLs (in-memory
+ * generations), and the app's own ROOT-RELATIVE asset routes
+ * (`/api/a-plus/assets/<id>`). `z.string().url()` rejects relative paths —
+ * which silently 400'd every module round-trip once images persisted — so
+ * validate the union explicitly.
+ */
+const imageUrlSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => value.startsWith('/') || /^(https?:|data:)/i.test(value),
+    'Must be an absolute URL, data URL, or root-relative asset path'
+  );
+
 export const APlusImageSchema = z.object({
-  url: z.string().url(),
+  url: imageUrlSchema,
   alt: z.string().min(1).max(160),
 });
 export type APlusImage = z.infer<typeof APlusImageSchema>;
@@ -295,6 +310,66 @@ const iconRowModule = z.object({
     .max(6),
 });
 
+// ---------------------------------------------------------------------------
+// Premium A+ (EBC) native module kinds. These exist ONLY on the Premium tier —
+// the Basic compiler degrades their archetypes (see aplus-compiler.ts). Limits
+// mirror Seller Central's Premium module fields (web-researched 2026-07 —
+// VERIFY against the live Premium A+ Content Manager).
+// ---------------------------------------------------------------------------
+
+const qnaModule = z.object({
+  ...moduleBase,
+  type: z.literal('qna'),
+  headline: genHeadline,
+  // Premium Q&A: up to 5 pairs, questions ≤120 chars (VERIFY).
+  items: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(120),
+        answer: z.string().min(1).max(800),
+      })
+    )
+    .min(1)
+    .max(5),
+});
+const hotspotsModule = z.object({
+  ...moduleBase,
+  type: z.literal('hotspots'),
+  headline: genHeadline,
+  /** ONE wide base band showing the whole product; markers land on features. */
+  image: APlusImageSlotSchema,
+  // Premium Hotspots: up to 6 callouts, labels ≤50 chars (VERIFY).
+  hotspots: z
+    .array(
+      z.object({
+        /** Marker position as fractions of the base image (0..1). */
+        position: z.object({
+          x: z.number().min(0).max(1),
+          y: z.number().min(0).max(1),
+        }),
+        label: z.string().min(1).max(50),
+        copy: z.string().max(200),
+      })
+    )
+    .min(1)
+    .max(6),
+});
+const carouselModule = z.object({
+  ...moduleBase,
+  type: z.literal('carousel'),
+  // Premium Simple Image Carousel: 2–6 slides, short per-slide copy (VERIFY).
+  slides: z
+    .array(
+      z.object({
+        image: APlusImageSlotSchema,
+        headline: z.string().max(100).optional(),
+        caption: z.string().max(200).optional(),
+      })
+    )
+    .min(2)
+    .max(6),
+});
+
 export const APlusGeneratedModuleSchema = z.discriminatedUnion('type', [
   companyLogoModule,
   iconRowModule,
@@ -308,6 +383,9 @@ export const APlusGeneratedModuleSchema = z.discriminatedUnion('type', [
   techSpecsModule,
   textOnlyModule,
   dualUseSplitModule,
+  qnaModule,
+  hotspotsModule,
+  carouselModule,
 ]);
 export type APlusGeneratedModule = z.infer<typeof APlusGeneratedModuleSchema>;
 export type APlusGeneratedModuleKind = APlusGeneratedModule['type'];
@@ -328,6 +406,13 @@ export const BASIC_A_PLUS_MODULE_TYPES = [
   'icon-row',
 ] as const satisfies readonly APlusGeneratedModuleKind[];
 
+/** Module kinds that exist ONLY on the Premium A+ (EBC) tier. */
+export const PREMIUM_A_PLUS_MODULE_TYPES = [
+  'qna',
+  'hotspots',
+  'carousel',
+] as const satisfies readonly APlusGeneratedModuleKind[];
+
 /** Per-kind schema, so callers can constrain generation to one module type. */
 export const APLUS_GENERATED_MODULE_SCHEMA_BY_KIND = {
   'company-logo': companyLogoModule,
@@ -342,6 +427,9 @@ export const APLUS_GENERATED_MODULE_SCHEMA_BY_KIND = {
   'text-only': textOnlyModule,
   'dual-use-split': dualUseSplitModule,
   'icon-row': iconRowModule,
+  qna: qnaModule,
+  hotspots: hotspotsModule,
+  carousel: carouselModule,
 } as const satisfies Record<APlusGeneratedModuleKind, z.ZodTypeAny>;
 
 export function generatedModuleSchemaForKind(
@@ -376,12 +464,27 @@ export const AMAZON_MODULE_TYPE_TO_KIND: Record<
   STANDARD_TECH_SPECS: 'tech-specs',
   STANDARD_PRODUCT_DESCRIPTION: 'text-only',
   STANDARD_TEXT: 'text-only',
-  // A two-panel scenario split (e.g. Hot vs Cold). Exports as one image; the
-  // seller uploads it into a standard image module in Seller Central.
-  STANDARD_DUAL_USE_SPLIT: 'dual-use-split',
-  // No native Amazon icon-row module — the strip bakes into one image the
-  // seller drops into a standard image module.
-  STANDARD_ICON_ROW: 'icon-row',
+  // Legacy app-invented codes — NOT real Seller Central module types. Kept only
+  // so drafts generated before they were removed from the renderable set still
+  // parse and render; new generations can no longer produce them, and
+  // normalizeAmazonModuleType() rewrites them to a real type on draft load.
+  STANDARD_DUAL_USE_SPLIT: 'dual-use-split', // legacy
+  STANDARD_ICON_ROW: 'icon-row', // legacy
+  // Premium A+ (EBC). App-invented identifiers — the SP-API A+ Content API is
+  // STANDARD-only and Premium pages are built manually in Seller Central, so
+  // no official enum exists. Build-sheet keys only; sellerCentralModuleName()
+  // carries the seller-facing truth (VERIFY names against Seller Central).
+  PREMIUM_QA: 'qna',
+  PREMIUM_HOTSPOTS_1: 'hotspots',
+  PREMIUM_SIMPLE_IMAGE_CAROUSEL: 'carousel',
+  PREMIUM_FULL_IMAGE: 'image-header-with-text',
+  PREMIUM_BACKGROUND_IMAGE_TEXT: 'image-text-overlay',
+  PREMIUM_SINGLE_IMAGE_TEXT: 'single-image-text',
+  PREMIUM_DUAL_IMAGES_TEXT: 'dual-use-split',
+  PREMIUM_FOUR_IMAGES_TEXT: 'four-image-text-quadrant',
+  PREMIUM_TEXT: 'text-only',
+  PREMIUM_TECH_SPECS: 'tech-specs',
+  PREMIUM_COMPARISON_TABLE_1: 'comparison-table',
 };
 
 export function amazonModuleTypeToKind(
@@ -443,6 +546,42 @@ export function isAplusGenerationModel(id: string): boolean {
   return APLUS_GENERATION_MODEL_IDS.has(id);
 }
 
+/**
+ * Creativity level for A+ generation. Surfaced in the UI as Low/Medium/High
+ * ("Creativity") and mapped server-side to per-phase sampling temperatures —
+ * the word "temperature" never reaches the UI.
+ */
+export const APLUS_CREATIVITY_LEVELS = ['low', 'medium', 'high'] as const;
+export const APlusCreativitySchema = z.enum(APLUS_CREATIVITY_LEVELS);
+export type APlusCreativity = z.infer<typeof APlusCreativitySchema>;
+
+/**
+ * Per-phase temperature mapping. The strategy phase emits a schema-constrained
+ * plan where higher temperature mostly buys enum drift and JSON flakiness, so
+ * it stays conservative at every level; module copy is per-field prose where
+ * creativity is the point, so it gets the full range (low is 0.3 rather than
+ * 0.2 so "Low" still avoids robotic repetition across 5–7 modules).
+ */
+export const APLUS_CREATIVITY_TEMPERATURE: Record<
+  'strategy' | 'moduleCopy',
+  Record<APlusCreativity, number>
+> = {
+  strategy: { low: 0.2, medium: 0.4, high: 0.6 },
+  moduleCopy: { low: 0.3, medium: 0.7, high: 1.0 },
+};
+
+/**
+ * Optional seller guidance appended to the generation prompts (advanced mode).
+ * Bounded so a runaway paste can't blow up the prompt; compliance rules in the
+ * base prompts always take precedence over guidance.
+ */
+export const APLUS_GUIDANCE_MAX_LENGTH = 2000;
+export const APlusGuidanceSchema = z.object({
+  strategy: z.string().max(APLUS_GUIDANCE_MAX_LENGTH).optional(),
+  moduleCopy: z.string().max(APLUS_GUIDANCE_MAX_LENGTH).optional(),
+});
+export type APlusGuidance = z.infer<typeof APlusGuidanceSchema>;
+
 /** True if the type maps to a real renderable layout (i.e. not the fallback). */
 export function isRenderableAmazonModuleType(
   amazonModuleType: string
@@ -468,8 +607,6 @@ export const RENDERABLE_AMAZON_MODULE_TYPES = [
   'STANDARD_COMPARISON_TABLE',
   'STANDARD_TECH_SPECS',
   'STANDARD_PRODUCT_DESCRIPTION',
-  'STANDARD_DUAL_USE_SPLIT',
-  'STANDARD_ICON_ROW',
 ] as const satisfies readonly (keyof typeof AMAZON_MODULE_TYPE_TO_KIND)[];
 export type RenderableAmazonModuleType =
   (typeof RENDERABLE_AMAZON_MODULE_TYPES)[number];
@@ -495,8 +632,20 @@ export const SELLER_CENTRAL_MODULE_NAMES: Record<string, string> = {
   STANDARD_TECH_SPECS: 'Standard Technical Specifications',
   STANDARD_TEXT: 'Standard Text',
   STANDARD_THREE_IMAGE_TEXT: 'Standard Three Image & Text',
-  STANDARD_DUAL_USE_SPLIT: 'Standard Image (two-scenario split)',
-  STANDARD_ICON_ROW: 'Standard Image (icon highlights strip)',
+  STANDARD_DUAL_USE_SPLIT: 'Standard Image (two-scenario split)', // legacy
+  STANDARD_ICON_ROW: 'Standard Image (icon highlights strip)', // legacy
+  // Premium A+ module picker names (VERIFY against Seller Central).
+  PREMIUM_QA: 'Premium Q&A',
+  PREMIUM_HOTSPOTS_1: 'Premium Hotspots 1',
+  PREMIUM_SIMPLE_IMAGE_CAROUSEL: 'Premium Simple Image Carousel',
+  PREMIUM_FULL_IMAGE: 'Premium Full Image',
+  PREMIUM_BACKGROUND_IMAGE_TEXT: 'Premium Background Image with Text',
+  PREMIUM_SINGLE_IMAGE_TEXT: 'Premium Single Image with Text',
+  PREMIUM_DUAL_IMAGES_TEXT: 'Premium Dual Images & Text',
+  PREMIUM_FOUR_IMAGES_TEXT: 'Premium Four Images & Text',
+  PREMIUM_TEXT: 'Premium Text',
+  PREMIUM_TECH_SPECS: 'Premium Technical Specifications',
+  PREMIUM_COMPARISON_TABLE_1: 'Premium Comparison Table 1',
 };
 
 /** Seller Central A+ module picker name for a given module type. */
@@ -504,33 +653,81 @@ export function sellerCentralModuleName(amazonModuleType: string): string {
   return SELLER_CENTRAL_MODULE_NAMES[amazonModuleType] || amazonModuleType;
 }
 
+/**
+ * Legacy app-invented "Amazon" codes remapped to the real Seller Central type
+ * a seller would actually use. Both legacy layouts export as one wide PNG the
+ * seller uploads into a standard image module, so the image-header module is
+ * the honest deployment target.
+ */
+export const LEGACY_AMAZON_MODULE_TYPE_REMAP: Record<string, string> = {
+  STANDARD_DUAL_USE_SPLIT: 'STANDARD_HEADER_IMAGE_TEXT',
+  STANDARD_ICON_ROW: 'STANDARD_HEADER_IMAGE_TEXT',
+};
+
+/** Rewrites legacy fake module type codes to a real Seller Central type. */
+export function normalizeAmazonModuleType(amazonModuleType: string): string {
+  return LEGACY_AMAZON_MODULE_TYPE_REMAP[amazonModuleType] ?? amazonModuleType;
+}
+
 /** All image slots in a module (in render order), for per-slot image generation. */
 export function moduleImageSlots(
   module: APlusGeneratedModule
 ): APlusImageSlot[] {
+  return moduleImageSlotEntries(module).map((entry) => entry.slot);
+}
+
+/**
+ * Image slots with their descriptor path into the module (same order as
+ * moduleImageSlots), so editors can update slot fields — e.g. the brief at
+ * [...path, 'brief'] — via setModuleTextField.
+ */
+export function moduleImageSlotEntries(
+  module: APlusGeneratedModule
+): Array<{ slot: APlusImageSlot; path: APlusTextFieldPath }> {
   switch (module.type) {
     case 'company-logo':
       // The logo itself is the seller's uploaded brand asset (never AI), but the
       // ambient brand BACKDROP behind it is AI-generated, so expose that slot.
-      return module.background ? [module.background] : [];
+      return module.background
+        ? [{ slot: module.background, path: ['background'] }]
+        : [];
     case 'image-header-with-text':
     case 'image-text-overlay':
     case 'single-image-text':
     case 'image-and-text':
-      return [module.image];
+      return [{ slot: module.image, path: ['image'] }];
     case 'three-image-text':
-      return module.columns.map((column) => column.image);
+      return module.columns.map((column, index) => ({
+        slot: column.image,
+        path: ['columns', index, 'image'],
+      }));
     case 'four-image-text-quadrant':
-      return module.quadrants.map((quadrant) => quadrant.image);
+      return module.quadrants.map((quadrant, index) => ({
+        slot: quadrant.image,
+        path: ['quadrants', index, 'image'],
+      }));
     case 'dual-use-split':
-      return module.panels.map((panel) => panel.image);
+      return module.panels.map((panel, index) => ({
+        slot: panel.image,
+        path: ['panels', index, 'image'],
+      }));
     case 'comparison-table':
-      return module.products.flatMap((product) =>
-        product.image ? [product.image] : []
+      return module.products.flatMap((product, index) =>
+        product.image
+          ? [{ slot: product.image, path: ['products', index, 'image'] }]
+          : []
       );
+    case 'hotspots':
+      return [{ slot: module.image, path: ['image'] }];
+    case 'carousel':
+      return module.slides.map((slide, index) => ({
+        slot: slide.image,
+        path: ['slides', index, 'image'],
+      }));
     case 'tech-specs':
     case 'text-only':
     case 'icon-row':
+    case 'qna':
       return [];
     default:
       return [];
@@ -609,9 +806,329 @@ export function moduleTextFields(
         push(`Icon ${index + 1} label`, item.label)
       );
       break;
+    case 'qna':
+      push('Headline', module.headline);
+      module.items.forEach((item, index) => {
+        push(`Question ${index + 1}`, item.question);
+        push(`Answer ${index + 1}`, item.answer);
+      });
+      break;
+    case 'hotspots':
+      push('Headline', module.headline);
+      module.hotspots.forEach((spot, index) => {
+        push(`Hotspot ${index + 1} label`, spot.label);
+        push(`Hotspot ${index + 1} copy`, spot.copy);
+      });
+      break;
+    case 'carousel':
+      module.slides.forEach((slide, index) => {
+        push(`Slide ${index + 1} headline`, slide.headline);
+        push(`Slide ${index + 1} caption`, slide.caption);
+      });
+      break;
   }
 
   return fields;
+}
+
+// ---------------------------------------------------------------------------
+// Editable text-field descriptors. Enumerates EVERY customer-facing copy field
+// of a generated module — including empty optional ones so users can add copy,
+// plus the module title and image alt text — each with a stable path usable by
+// setModuleTextField(). moduleTextFields() above stays the "filled fields only"
+// view that the build sheet and guardrail sweep depend on.
+// ---------------------------------------------------------------------------
+
+export type APlusTextFieldPath = ReadonlyArray<string | number>;
+
+export type APlusModuleTextFieldDescriptor = {
+  label: string;
+  path: APlusTextFieldPath;
+  value: string;
+  maxLength: number;
+  multiline: boolean;
+};
+
+export function moduleTextFieldDescriptors(
+  module: APlusGeneratedModule
+): APlusModuleTextFieldDescriptor[] {
+  const fields: APlusModuleTextFieldDescriptor[] = [];
+  const add = (
+    label: string,
+    path: APlusTextFieldPath,
+    value: string | undefined | null,
+    maxLength: number,
+    multiline = false
+  ) => fields.push({ label, path, value: value ?? '', maxLength, multiline });
+
+  add('Module title', ['title'], module.title, 120);
+
+  switch (module.type) {
+    case 'company-logo':
+      add('Headline', ['headline'], module.headline, 120);
+      add('Tagline', ['tagline'], module.tagline, 120);
+      add('Logo alt text', ['logo', 'alt'], module.logo.alt, 160);
+      if (module.background) {
+        add(
+          'Backdrop alt text',
+          ['background', 'alt'],
+          module.background.alt,
+          160
+        );
+      }
+      break;
+    case 'image-header-with-text':
+    case 'image-text-overlay':
+      add('Headline', ['headline'], module.headline, 160);
+      add('Body', ['body'], module.body, 800, true);
+      add('Badge', ['badge'], module.badge, 16);
+      add('Image alt text', ['image', 'alt'], module.image.alt, 160);
+      break;
+    case 'single-image-text':
+    case 'image-and-text':
+      add('Headline', ['headline'], module.headline, 160);
+      add('Body', ['body'], module.body, 800, true);
+      module.bullets?.forEach((bullet, index) =>
+        add(`Bullet ${index + 1}`, ['bullets', index], bullet, 160)
+      );
+      add('Badge', ['badge'], module.badge, 16);
+      add('Image alt text', ['image', 'alt'], module.image.alt, 160);
+      break;
+    case 'three-image-text':
+      module.columns.forEach((column, index) => {
+        add(
+          `Column ${index + 1} headline`,
+          ['columns', index, 'headline'],
+          column.headline,
+          160
+        );
+        add(
+          `Column ${index + 1} body`,
+          ['columns', index, 'body'],
+          column.body,
+          400,
+          true
+        );
+        add(
+          `Column ${index + 1} image alt`,
+          ['columns', index, 'image', 'alt'],
+          column.image.alt,
+          160
+        );
+      });
+      break;
+    case 'four-image-text-quadrant':
+      module.quadrants.forEach((quadrant, index) => {
+        add(
+          `Block ${index + 1} headline`,
+          ['quadrants', index, 'headline'],
+          quadrant.headline,
+          160
+        );
+        add(
+          `Block ${index + 1} body`,
+          ['quadrants', index, 'body'],
+          quadrant.body,
+          400,
+          true
+        );
+        add(
+          `Block ${index + 1} image alt`,
+          ['quadrants', index, 'image', 'alt'],
+          quadrant.image.alt,
+          160
+        );
+      });
+      break;
+    case 'comparison-table':
+      module.products.forEach((product, index) => {
+        add(
+          `Product ${index + 1}`,
+          ['products', index, 'title'],
+          product.title,
+          100
+        );
+        if (product.image) {
+          add(
+            `Product ${index + 1} image alt`,
+            ['products', index, 'image', 'alt'],
+            product.image.alt,
+            160
+          );
+        }
+      });
+      module.rows.forEach((row, rowIndex) => {
+        add(
+          `Row ${rowIndex + 1} label`,
+          ['rows', rowIndex, 'label'],
+          row.label,
+          60
+        );
+        row.values.forEach((value, valueIndex) =>
+          add(
+            `${row.label || `Row ${rowIndex + 1}`} — ${
+              module.products[valueIndex]?.title || `Product ${valueIndex + 1}`
+            }`,
+            ['rows', rowIndex, 'values', valueIndex],
+            value,
+            80
+          )
+        );
+      });
+      break;
+    case 'tech-specs':
+      add('Headline', ['headline'], module.headline, 160);
+      module.rows.forEach((row, index) => {
+        add(`Spec ${index + 1} label`, ['rows', index, 'label'], row.label, 60);
+        add(
+          `Spec ${index + 1} value`,
+          ['rows', index, 'value'],
+          row.value,
+          200
+        );
+      });
+      break;
+    case 'text-only':
+      add('Headline', ['headline'], module.headline, 160);
+      add('Body', ['body'], module.body, 1200, true);
+      module.bullets?.forEach((bullet, index) =>
+        add(`Bullet ${index + 1}`, ['bullets', index], bullet, 160)
+      );
+      break;
+    case 'dual-use-split':
+      module.panels.forEach((panel, index) => {
+        add(
+          `Panel ${index + 1} label`,
+          ['panels', index, 'label'],
+          panel.label,
+          40
+        );
+        add(
+          `Panel ${index + 1} caption`,
+          ['panels', index, 'caption'],
+          panel.caption,
+          160
+        );
+        add(
+          `Panel ${index + 1} image alt`,
+          ['panels', index, 'image', 'alt'],
+          panel.image.alt,
+          160
+        );
+      });
+      break;
+    case 'icon-row':
+      module.items.forEach((item, index) =>
+        add(
+          `Icon ${index + 1} label`,
+          ['items', index, 'label'],
+          item.label,
+          40
+        )
+      );
+      break;
+    case 'qna':
+      add('Headline', ['headline'], module.headline, 160);
+      module.items.forEach((item, index) => {
+        add(
+          `Question ${index + 1}`,
+          ['items', index, 'question'],
+          item.question,
+          120
+        );
+        add(
+          `Answer ${index + 1}`,
+          ['items', index, 'answer'],
+          item.answer,
+          800,
+          true
+        );
+      });
+      break;
+    case 'hotspots':
+      add('Headline', ['headline'], module.headline, 160);
+      module.hotspots.forEach((spot, index) => {
+        add(
+          `Hotspot ${index + 1} label`,
+          ['hotspots', index, 'label'],
+          spot.label,
+          50
+        );
+        add(
+          `Hotspot ${index + 1} copy`,
+          ['hotspots', index, 'copy'],
+          spot.copy,
+          200,
+          true
+        );
+      });
+      add('Image alt text', ['image', 'alt'], module.image.alt, 160);
+      break;
+    case 'carousel':
+      module.slides.forEach((slide, index) => {
+        add(
+          `Slide ${index + 1} headline`,
+          ['slides', index, 'headline'],
+          slide.headline,
+          100
+        );
+        add(
+          `Slide ${index + 1} caption`,
+          ['slides', index, 'caption'],
+          slide.caption,
+          200,
+          true
+        );
+        add(
+          `Slide ${index + 1} image alt`,
+          ['slides', index, 'image', 'alt'],
+          slide.image.alt,
+          160
+        );
+      });
+      break;
+  }
+
+  return fields;
+}
+
+/**
+ * Immutably sets one text field on a generated module by descriptor path.
+ * Clearing a field (empty/whitespace value) stores undefined for object keys
+ * and an empty string for array elements (so arrays keep their shape). Editing
+ * a slot's alt text also mirrors the value onto the slot's resolved image, so
+ * an already-generated image keeps matching alt text.
+ */
+export function setModuleTextField<T extends APlusGeneratedModule>(
+  module: T,
+  path: APlusTextFieldPath,
+  value: string
+): T {
+  if (path.length === 0) return module;
+  const next = structuredClone(module);
+  let parent: unknown = next;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (parent === null || typeof parent !== 'object') return module;
+    parent = (parent as Record<string | number, unknown>)[path[i]];
+  }
+  if (parent === null || typeof parent !== 'object') return module;
+
+  const target = parent as Record<string | number, unknown>;
+  const tail = path[path.length - 1];
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    target[tail] = typeof tail === 'number' ? '' : undefined;
+  } else {
+    // Store the raw value (not trimmed) so typing trailing spaces works.
+    target[tail] = value;
+    if (tail === 'alt') {
+      const image = (target as { image?: unknown }).image;
+      if (image !== null && typeof image === 'object' && 'alt' in image) {
+        (image as { alt: string }).alt = value;
+      }
+    }
+  }
+  return next;
 }
 
 export const APLUS_GUARDRAIL_PATTERNS: Array<{

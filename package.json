@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "license": "MIT",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "dev": "nx dev web",
     "build": "nx build",
     "test": "vitest",
     "test:run": "vitest run",
@@ -12,9 +14,9 @@
     "format": "nx format:write",
     "generate": "nx generate",
     "cdk": "cdk --app \"node --loader ts-node/esm infra/aws/bin/app.ts\"",
-    "cdk:synth": "npm run cdk -- synth",
-    "cdk:diff": "npm run cdk -- diff",
-    "cdk:deploy": "npm run cdk -- deploy",
+    "cdk:synth": "pnpm cdk -- synth",
+    "cdk:diff": "pnpm cdk -- diff",
+    "cdk:deploy": "pnpm cdk -- deploy",
     "setup:couchbase": "npx nx run @amz-spapi/source:setup-couchbase",
     "prepare": "husky"
   },
@@ -25,12 +27,21 @@
     "@ai-sdk/openai": "^3.0.48",
     "@ai-sdk/provider": "^3.0.8",
     "@ai-sdk/react": "^3.0.143",
+    "@amz-spapi/ai-provider": "0.0.1",
+    "@amz-spapi/couchbase-utils": "0.0.1",
+    "@amz-spapi/seller-agent": "0.0.1",
+    "@amz-spapi/sp-cache": "0.0.1",
     "@auth0/nextjs-auth0": "^4.10.0",
     "@aws-sdk/client-kms": "^3.939.0",
     "@aws-sdk/client-s3": "^3.1034.0",
     "@aws-sdk/credential-provider-node": "^3.972.27",
     "@aws-sdk/s3-request-presigner": "^3.1034.0",
     "@commander-js/extra-typings": "^14.0.0",
+    "@farvisionllc/ad-client": "0.0.1",
+    "@farvisionllc/credential-store": "0.0.1",
+    "@farvisionllc/models": "0.0.1",
+    "@farvisionllc/oauth": "0.0.1",
+    "@farvisionllc/sp-client": "0.0.1",
     "@hookform/resolvers": "^5.2.1",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -72,6 +83,7 @@
     "dotenv": "^16.6.1",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
+    "fflate": "^0.8.3",
     "geist": "^1.5.1",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.544.0",
@@ -157,13 +169,21 @@
     "vite": "^6.0.1",
     "vitest": "^3.2.4"
   },
-  "workspaces": [
-    "packages/**",
-    "libs/*",
-    "amazon-ads-schema"
-  ],
   "nx": {
     "includedScripts": []
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "@swc/core",
+      "better-sqlite3",
+      "core-js",
+      "couchbase",
+      "esbuild",
+      "nx",
+      "sharp",
+      "unrs-resolver"
+    ]
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [

@@ -38,11 +38,16 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
   },
   {
     scope: 'media',
-    collections: ['assets', 'asset_hashes'],
+    collections: ['assets', 'asset_hashes', 'asset_links'],
   },
   {
     scope: 'a_plus',
-    collections: ['drafts', 'brand_guides', 'source_cache'],
+    collections: ['drafts', 'brand_guides', 'source_cache', 'draft_versions'],
+  },
+  {
+    // Platform-independent Product domain (Product → Variant → Listing).
+    scope: 'catalog',
+    collections: ['products', 'variants', 'listings'],
   },
 ];
 
@@ -320,6 +325,83 @@ async function main() {
     'idx_a_plus_brand_guides_user_updated',
     ['`userId`', '`updatedAt`']
   );
+  // a_plus.draft_versions — protective snapshots of designs (backtrack/restore)
+  await createPrimaryIndex(cluster, bucketName, 'a_plus', 'draft_versions');
+  await createIndex(
+    cluster,
+    bucketName,
+    'a_plus',
+    'draft_versions',
+    'idx_a_plus_draft_versions_draft',
+    ['`userId`', '`draftId`', '`createdAt`']
+  );
+
+  // media.asset_links — asset ↔ owner (product/variant/listing/brand) many-to-many
+  await createPrimaryIndex(cluster, bucketName, 'media', 'asset_links');
+  await createIndex(
+    cluster,
+    bucketName,
+    'media',
+    'asset_links',
+    'idx_asset_links_owner',
+    ['`userId`', '`ownerType`', '`ownerId`']
+  );
+  await createIndex(
+    cluster,
+    bucketName,
+    'media',
+    'asset_links',
+    'idx_asset_links_asset',
+    ['`userId`', '`assetId`']
+  );
+
+  // catalog.products / variants / listings — the Product domain
+  await createPrimaryIndex(cluster, bucketName, 'catalog', 'products');
+  await createPrimaryIndex(cluster, bucketName, 'catalog', 'variants');
+  await createPrimaryIndex(cluster, bucketName, 'catalog', 'listings');
+  await createIndex(
+    cluster,
+    bucketName,
+    'catalog',
+    'products',
+    'idx_products_user_updated',
+    ['`userId`', '`updatedAt`']
+  );
+  await createIndex(
+    cluster,
+    bucketName,
+    'catalog',
+    'variants',
+    'idx_variants_user_product',
+    ['`userId`', '`productId`']
+  );
+  await createIndex(
+    cluster,
+    bucketName,
+    'catalog',
+    'listings',
+    'idx_listings_user_product',
+    ['`userId`', '`productId`']
+  );
+  // Listing IDENTITY is the seller SKU (one ASIN → many SKU/FNSKU listings), so
+  // idempotent sync dedups by SKU.
+  await createIndex(
+    cluster,
+    bucketName,
+    'catalog',
+    'listings',
+    'idx_listings_user_sku',
+    ['`userId`', '`platform`', '`marketplaceId`', '`external`.`sku`']
+  );
+  // Query "all listings sharing an ASIN" (multiple SKUs/FNSKUs per ASIN).
+  await createIndex(
+    cluster,
+    bucketName,
+    'catalog',
+    'listings',
+    'idx_listings_user_asin',
+    ['`userId`', '`platform`', '`marketplaceId`', '`external`.`asin`']
+  );
 
   console.log('\n✅ Couchbase setup complete!\n');
   console.log('📋 Summary of structures created:');
@@ -333,6 +415,9 @@ async function main() {
   console.log('   a_plus.brand_guides — Reusable A+ brand guides');
   console.log(
     '   a_plus.source_cache — Cached extracted facts from source URLs (TTL: 24h)'
+  );
+  console.log(
+    '   a_plus.draft_versions — Design version snapshots (backtrack/restore)'
   );
   console.log('');
   console.log(

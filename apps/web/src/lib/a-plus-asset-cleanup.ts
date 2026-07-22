@@ -1,8 +1,10 @@
 import { deleteAsset, getAsset } from './media-assets';
 import {
   listAllAPlusDraftDocs,
+  listAllDraftVersionDocs,
   listBrandGuides,
   type APlusDraft,
+  type APlusDraftVersion,
 } from './a-plus-drafts';
 
 /**
@@ -48,28 +50,64 @@ function draftAssetIds(
 
 /**
  * The set of asset ids still referenced by any of the user's drafts (optionally
- * excluding one draft) plus brand-guide logos.
+ * excluding one draft), their version snapshots, plus brand-guide logos.
  *
- * INVARIANT: A+ drafts (module slots) and brand-guide logos are the ONLY places
- * generated A+ images are referenced. This is what makes age-free GC safe. If a
- * new feature ever references these assets (a published/exported listing, a chat
- * attachment, an ads creative, etc.), it MUST be added to this scan — otherwise
- * cleanup will delete an in-use image. When that happens, prefer moving to real
- * reference-counting on the asset doc over chasing every referencer here.
+ * INVARIANT: A+ drafts (module slots), DRAFT VERSION SNAPSHOTS, and brand-guide
+ * logos are the ONLY places generated A+ images are referenced. This is what
+ * makes age-free GC safe. If a new feature ever references these assets (a
+ * published/exported listing, a chat attachment, an ads creative, etc.), it
+ * MUST be added to this scan — otherwise cleanup will delete an in-use image.
+ * When that happens, prefer moving to real reference-counting on the asset doc
+ * over chasing every referencer here.
  */
+type ReferenceScanExclusions = {
+  /** Exclude the draft DOC itself (its old/new state is being compared). */
+  excludeDraftId?: string;
+  /**
+   * Exclude a draft's VERSION SNAPSHOTS — ONLY valid on draft deletion, where
+   * the versions are cascaded away with it. NEVER set this on a save: version
+   * snapshots are exactly what keeps a superseded image restorable, and
+   * excluding them here deletes images that restores still need.
+   */
+  excludeVersionsOfDraft?: string;
+  /** Exclude one just-deleted version (query visibility can lag). */
+  excludeVersionId?: string;
+};
+
 async function referencedAssetIds(
   userId: string,
-  excludeDraftId?: string
+  exclusions: ReferenceScanExclusions = {}
 ): Promise<Set<string>> {
-  const [drafts, guides] = await Promise.all([
+  const [drafts, versions, guides] = await Promise.all([
     listAllAPlusDraftDocs(userId),
+    listAllDraftVersionDocs(userId),
     listBrandGuides(userId),
   ]);
 
   const refs = new Set<string>();
   for (const draft of drafts) {
-    if (excludeDraftId && draft.draftId === excludeDraftId) continue;
+    if (
+      exclusions.excludeDraftId &&
+      draft.draftId === exclusions.excludeDraftId
+    ) {
+      continue;
+    }
     for (const id of draftAssetIds(draft)) refs.add(id);
+  }
+  for (const version of versions) {
+    if (
+      exclusions.excludeVersionsOfDraft &&
+      version.draftId === exclusions.excludeVersionsOfDraft
+    ) {
+      continue;
+    }
+    if (
+      exclusions.excludeVersionId &&
+      version.versionId === exclusions.excludeVersionId
+    ) {
+      continue;
+    }
+    for (const id of draftAssetIds(version)) refs.add(id);
   }
   for (const guide of guides) {
     if (guide.logoAsset?.assetId) refs.add(guide.logoAsset.assetId);
@@ -84,12 +122,12 @@ async function referencedAssetIds(
 async function gcGeneratedAssets(
   userId: string,
   candidateIds: Iterable<string>,
-  excludeDraftId?: string
+  exclusions: ReferenceScanExclusions = {}
 ): Promise<number> {
   const candidates = [...new Set(candidateIds)];
   if (candidates.length === 0) return 0;
 
-  const referenced = await referencedAssetIds(userId, excludeDraftId);
+  const referenced = await referencedAssetIds(userId, exclusions);
 
   let deleted = 0;
   for (const assetId of candidates) {
@@ -127,21 +165,47 @@ export async function cleanupSupersededDraftAssets(params: {
   const dropped = [...oldIds].filter((id) => !newIds.has(id));
   if (dropped.length === 0) return 0;
 
-  return gcGeneratedAssets(params.userId, dropped, params.draftId);
+  // Version snapshots stay IN the reference scan here — a superseded image is
+  // only deletable when no snapshot still lets the seller restore it.
+  return gcGeneratedAssets(params.userId, dropped, {
+    excludeDraftId: params.draftId,
+  });
 }
 
 /**
  * On draft delete: delete the generated images this draft referenced that no
- * other draft/brand-guide references.
+ * other draft/brand-guide references. The caller must cascade-delete the
+ * draft's VERSIONS first and pass them in, so their images are GC'd too and
+ * don't hold references.
  */
 export async function cleanupDeletedDraftAssets(params: {
   userId: string;
   draftId: string;
   draft: Pick<APlusDraft, 'payload' | 'packageJson'>;
+  deletedVersions?: Array<Pick<APlusDraftVersion, 'payload' | 'packageJson'>>;
 }): Promise<number> {
-  return gcGeneratedAssets(
-    params.userId,
-    draftAssetIds(params.draft),
-    params.draftId
-  );
+  const candidates = draftAssetIds(params.draft);
+  for (const version of params.deletedVersions ?? []) {
+    for (const id of draftAssetIds(version)) candidates.add(id);
+  }
+  return gcGeneratedAssets(params.userId, candidates, {
+    excludeDraftId: params.draftId,
+    // Deletion cascades the versions away with the draft — only here is it
+    // correct to ignore them as referencers.
+    excludeVersionsOfDraft: params.draftId,
+  });
+}
+
+/**
+ * After deleting/pruning a single version: GC the generated images only that
+ * snapshot referenced (the version doc must already be deleted, or passed as
+ * excludeVersionId here since query visibility can lag).
+ */
+export async function cleanupDeletedVersionAssets(params: {
+  userId: string;
+  version: Pick<APlusDraftVersion, 'versionId' | 'payload' | 'packageJson'>;
+}): Promise<number> {
+  return gcGeneratedAssets(params.userId, draftAssetIds(params.version), {
+    excludeVersionId: params.version.versionId,
+  });
 }
