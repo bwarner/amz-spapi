@@ -58,17 +58,6 @@ export async function POST(request: Request) {
   let refreshToken = process.env['LWA_REFRESH_TOKEN'];
   let userMarketplaceId = marketplaceId;
 
-  // Debug logging
-  console.log(
-    '[chat] LWA_CLIENT_ID:',
-    clientId ? clientId.substring(0, 30) + '...' : 'NOT SET'
-  );
-  console.log('[chat] LWA_CLIENT_SECRET:', clientSecret ? 'SET' : 'NOT SET');
-  console.log(
-    '[chat] LWA_REFRESH_TOKEN:',
-    refreshToken ? 'SET (len:' + refreshToken.length + ')' : 'NOT SET'
-  );
-
   try {
     const userId = session.user.sub;
     const resolved = await resolveAmazonConnection({
@@ -91,7 +80,6 @@ export async function POST(request: Request) {
   let spCache: SpCache | undefined;
 
   if (clientId && refreshToken) {
-    console.log('[chat] Creating SpApiClient...');
     const spClient = new SpApiClient({
       clientId,
       clientSecret,
@@ -103,9 +91,6 @@ export async function POST(request: Request) {
       spClient,
       marketplaceId: userMarketplaceId,
     });
-    console.log('[chat] SpCache created successfully');
-  } else {
-    console.log('[chat] No credentials - skipping SP client creation');
   }
 
   const imageGenerator = provider.imageGenerator?.();
