@@ -412,6 +412,10 @@ For now, feel free to ask me anything about Amazon selling!
     instructions,
     tools: tools as any,
     stopWhen: stepCountIs(20),
+    experimental_telemetry: {
+      isEnabled: true,
+      functionId: 'chat.seller-agent',
+    },
     providerOptions,
   });
 }

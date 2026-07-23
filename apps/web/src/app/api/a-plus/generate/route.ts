@@ -373,6 +373,10 @@ async function generateModulesSingle(
     try {
       const res = await generateText({
         model: provider.languageModel('fast'),
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: 'aplus.generate.single-call',
+        },
         abortSignal: AbortSignal.timeout(180_000),
         // All modules in one object is token-heavy — give it ample room so the
         // JSON is never truncated (truncation reads as a schema mismatch).
@@ -477,6 +481,10 @@ async function generateModulesParallel(
         try {
           const res = await generateText({
             model: provider.languageModel('fast'),
+            experimental_telemetry: {
+              isEnabled: true,
+              functionId: 'aplus.generate.section-writer',
+            },
             abortSignal: AbortSignal.timeout(90_000),
             temperature,
             providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
@@ -608,6 +616,10 @@ export async function POST(request: Request) {
         const runNarrative = (temperature: number | undefined) =>
           generateText({
             model: provider.languageModel('fast'),
+            experimental_telemetry: {
+              isEnabled: true,
+              functionId: 'aplus.generate.narrative-plan',
+            },
             abortSignal: AbortSignal.timeout(120_000),
             temperature,
             providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,

@@ -133,6 +133,10 @@ export async function POST(request: Request) {
     const provider = createAIProvider();
     const result = await generateText({
       model: provider.languageModel('default'),
+      experimental_telemetry: {
+        isEnabled: true,
+        functionId: 'aplus.asset-profile',
+      },
       maxOutputTokens: 600,
       abortSignal: AbortSignal.timeout(25_000),
       output: Output.object({

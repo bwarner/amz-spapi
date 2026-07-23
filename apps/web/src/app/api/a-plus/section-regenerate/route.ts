@@ -151,6 +151,10 @@ export async function POST(request: Request) {
     try {
       const res = await generateText({
         model: provider.languageModel('fast'),
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: 'aplus.section-regenerate',
+        },
         abortSignal: AbortSignal.timeout(90_000),
         temperature,
         providerOptions: STRUCTURED_OUTPUT_PROVIDER_OPTIONS,
