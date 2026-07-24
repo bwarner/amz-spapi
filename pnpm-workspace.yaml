@@ -6,6 +6,26 @@ packages:
 strictPeerDependencies: false
 autoInstallPeers: true
 
+# @imgly/background-removal-node pins sharp 0.32 with its own vendored libvips;
+# loading two libvips versions in one process is unstable (duplicate ObjC class
+# crash warnings on macOS). Force it onto the workspace sharp.
+overrides:
+  '@imgly/background-removal-node>sharp': ^0.34.5
+
+# Native/postinstall packages allowed to run build scripts (pnpm 10 blocks by
+# default). Moved here from package.json "pnpm" (ignored since pnpm 10).
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - '@swc/core'
+  - better-sqlite3
+  - core-js
+  - couchbase
+  - esbuild
+  - nx
+  - onnxruntime-node
+  - sharp
+  - unrs-resolver
+
 # npm workspaces auto-link workspace packages by name+version without needing a
 # `workspace:*` protocol prefix. Our internal deps use bare version strings like
 # "0.0.1" — keep linking those to the in-repo copy rather than the npm registry.
