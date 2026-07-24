@@ -1,30 +1,18 @@
-import crypto from 'node:crypto';
-import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import { auth0 } from '../../../../lib/auth0';
 import { resolveImageModelVariant } from '../../../../lib/image-model-flag';
 import {
   type MediaAsset,
-  createAssetId,
-  createAssetKey,
   createAssetS3Client,
   getAsset,
-  getAssetBucket,
-  getDuplicateAsset,
-  upsertAsset,
-  upsertHashPointer,
+  persistGeneratedImageAsset,
 } from '../../../../lib/media-assets';
 
 // Direct image-model generation runs ~8-12s, but allow headroom for slower
 // variants/high quality and cold starts so the request never times out
 // mid-generation (the old ~190s reasoning-tool path is gone).
 export const maxDuration = 120;
-
-function extensionForMime(mime: string): string {
-  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
-  if (mime.includes('webp')) return 'webp';
-  return 'png';
-}
 
 type ImageSize = '1024x1024' | '1792x1024' | '1024x1792';
 
@@ -180,47 +168,10 @@ export async function POST(request: Request) {
   let asset: MediaAsset | null = null;
 
   try {
-    const dataUrlMatch = generated.url.match(/^data:([^;]+);base64,(.+)$/);
-    if (!dataUrlMatch) {
-      throw new Error('Image generator did not return decodable image bytes.');
-    }
-    const mimeType = dataUrlMatch[1] || generated.mediaType || 'image/png';
-    const buffer = Buffer.from(dataUrlMatch[2], 'base64');
-    const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-
-    const existing = await getDuplicateAsset({ userId, sha256 });
-    if (existing) {
-      asset = existing;
-    } else {
-      const assetId = createAssetId();
-      const fileName = `generated-${assetId}.${extensionForMime(mimeType)}`;
-      const bucket = getAssetBucket();
-      const key = createAssetKey({ userId, assetId, fileName });
-      const s3 = createAssetS3Client();
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: key,
-          Body: buffer,
-          ContentType: mimeType,
-        })
-      );
-      const now = Date.now();
-      asset = {
-        assetId,
-        userId,
-        createdForFeature: 'a-plus',
-        originalFileName: fileName,
-        mimeType,
-        sizeBytes: buffer.byteLength,
-        hashes: { sha256 },
-        status: 'uploaded',
-        storage: { provider: 's3', bucket, key },
-        createdAt: now,
-        updatedAt: now,
-      };
-      await Promise.all([upsertAsset(asset), upsertHashPointer(asset)]);
-    }
+    asset = await persistGeneratedImageAsset({
+      userId,
+      dataUrl: generated.url,
+    });
   } catch (error) {
     const persistError =
       error instanceof Error ? error.message : 'Could not persist image.';

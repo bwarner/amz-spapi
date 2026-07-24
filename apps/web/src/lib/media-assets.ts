@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
+  PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import {
@@ -156,6 +158,92 @@ export async function upsertHashPointer(asset: MediaAsset): Promise<void> {
       createdAt: Date.now(),
     }
   );
+}
+
+export function extensionForMime(mime: string): string {
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('webp')) return 'webp';
+  return 'png';
+}
+
+/**
+ * Read an asset's bytes from S3 — ownership-checked, so callers can pass
+ * untrusted asset ids (e.g. from model tool calls).
+ */
+export async function loadAssetBytes(params: {
+  userId: string;
+  assetId: string;
+}): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
+  const asset = await getAsset(params.assetId);
+  if (
+    !asset ||
+    asset.userId !== params.userId ||
+    asset.status === 'pending_upload'
+  ) {
+    return null;
+  }
+  const client = createAssetS3Client();
+  const result = await client.send(
+    new GetObjectCommand({
+      Bucket: asset.storage.bucket,
+      Key: asset.storage.key,
+    })
+  );
+  const bytes = await result.Body?.transformToByteArray();
+  if (!bytes) return null;
+  return { bytes, mimeType: asset.mimeType };
+}
+
+/**
+ * Persist a generated image (data URL) as an uploaded asset, deduped by
+ * content hash. The `generated-` file-name prefix marks it eligible for
+ * asset GC (user uploads are never collected).
+ */
+export async function persistGeneratedImageAsset(params: {
+  userId: string;
+  dataUrl: string;
+  feature?: MediaAssetFeature;
+}): Promise<MediaAsset> {
+  const match = params.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error('Image generator did not return decodable image bytes.');
+  }
+  const mimeType = match[1] || 'image/png';
+  const buffer = Buffer.from(match[2], 'base64');
+  const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+
+  const existing = await getDuplicateAsset({ userId: params.userId, sha256 });
+  if (existing) return existing;
+
+  const assetId = createAssetId();
+  const fileName = `generated-${assetId}.${extensionForMime(mimeType)}`;
+  const bucket = getAssetBucket();
+  const key = createAssetKey({ userId: params.userId, assetId, fileName });
+  const client = createAssetS3Client();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: mimeType,
+    })
+  );
+  const now = Date.now();
+  const asset: MediaAsset = {
+    assetId,
+    userId: params.userId,
+    createdForFeature: params.feature ?? 'a-plus',
+    originalFileName: fileName,
+    mimeType,
+    sizeBytes: buffer.byteLength,
+    hashes: { sha256 },
+    status: 'uploaded',
+    storage: { provider: 's3', bucket, key },
+    createdAt: now,
+    updatedAt: now,
+  };
+  await Promise.all([upsertAsset(asset), upsertHashPointer(asset)]);
+  return asset;
 }
 
 export async function headAssetObject(asset: MediaAsset) {
