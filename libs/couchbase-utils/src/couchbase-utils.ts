@@ -148,6 +148,17 @@ export async function getDocument<T>(
   return rows[0] ?? null;
 }
 
+// Couchbase expiration semantics: values up to 30 days are RELATIVE seconds;
+// anything larger is an ABSOLUTE Unix timestamp. A long TTL passed as-is
+// (e.g. 180 days = epoch 1970-06-29) expires the document immediately.
+const RELATIVE_EXPIRY_MAX_SECONDS = 30 * 24 * 60 * 60;
+
+function normalizeExpiry(expirySeconds: number): number {
+  return expirySeconds > RELATIVE_EXPIRY_MAX_SECONDS
+    ? Math.floor(Date.now() / 1000) + expirySeconds
+    : expirySeconds;
+}
+
 export async function upsertDocument<T>(
   scopeName: string,
   collectionName: string,
@@ -170,7 +181,7 @@ export async function upsertDocument<T>(
       parameters: {
         key,
         document,
-        ...(expirySeconds ? { expiry: expirySeconds } : {}),
+        ...(expirySeconds ? { expiry: normalizeExpiry(expirySeconds) } : {}),
       },
     },
   });
