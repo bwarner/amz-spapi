@@ -21,6 +21,11 @@
       "import": "./src/lib/ordersV0.ts",
       "default": "./src/lib/ordersV0.ts"
     },
+    "./lib/listingsItems_2021-08-01": {
+      "types": "./src/lib/listingsItems_2021-08-01.ts",
+      "import": "./src/lib/listingsItems_2021-08-01.ts",
+      "default": "./src/lib/listingsItems_2021-08-01.ts"
+    },
     "./package.json": "./package.json"
   },
   "devDependencies": {

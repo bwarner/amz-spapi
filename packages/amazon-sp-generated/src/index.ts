@@ -18,9 +18,8 @@ const __dirname = path.dirname(__filename);
 const schemas = [
   'catalogItems_2022-04-01.json',
   'ordersV0.json',
-  // Add more SP-API schemas here as needed:
-  // 'listings_2021-08-01.json',
-  // etc.
+  'listingsItems_2021-08-01.json',
+  // Add more SP-API schemas here as needed
 ];
 
 program

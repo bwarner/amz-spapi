@@ -5,6 +5,7 @@ import axios, {
 } from 'axios';
 import type { paths as CatalogPaths } from '@amz-spapi/amazon-sp-generated/lib/catalogItems_2022-04-01';
 import type { paths as OrdersPaths } from '@amz-spapi/amazon-sp-generated/lib/ordersV0';
+import type { paths as ListingsPaths } from '@amz-spapi/amazon-sp-generated/lib/listingsItems_2021-08-01';
 
 export interface SpApiClientConfig {
   clientId: string; // LWA Client ID
@@ -36,6 +37,21 @@ type OrderResponse =
   OrdersPaths['/orders/v0/orders/{orderId}']['get']['responses']['200']['content']['application/json'];
 type OrderItemsResponse =
   OrdersPaths['/orders/v0/orders/{orderId}/orderItems']['get']['responses']['200']['content']['application/json'];
+
+type ListingsItemResponse =
+  ListingsPaths['/listings/2021-08-01/items/{sellerId}/{sku}']['get']['responses']['200']['content']['application/json'];
+type ListingsSearchResponse =
+  ListingsPaths['/listings/2021-08-01/items/{sellerId}']['get']['responses']['200']['content']['application/json'];
+
+export type ListingsIncludedData =
+  | 'summaries'
+  | 'attributes'
+  | 'issues'
+  | 'offers'
+  | 'fulfillmentAvailability'
+  | 'procurement'
+  | 'relationships'
+  | 'productTypes';
 
 export interface APlusContentDocumentRequest {
   contentDocument: Record<string, unknown>;
@@ -297,6 +313,119 @@ export class SpApiClient {
           pageToken: params.pageToken,
           keywordsLocale: params.keywordsLocale,
           locale: params.locale,
+        },
+      }
+    );
+
+    return response.data;
+  }
+
+  // ========================================
+  // Listings Items API (2021-08-01)
+  // ========================================
+
+  private requireSellerId(sellerId?: string): string {
+    const resolved = sellerId ?? this.config.sellerId;
+    if (!resolved) {
+      throw new Error(
+        'Listings Items API requires a sellerId (merchant token). ' +
+          'Pass it explicitly or set SpApiClientConfig.sellerId.'
+      );
+    }
+    return resolved;
+  }
+
+  /**
+   * Get the seller's own listing for a SKU (submitted attributes + Amazon
+   * issues — distinct from the public catalog view).
+   * GET /listings/2021-08-01/items/{sellerId}/{sku}
+   */
+  async getListingsItem(params: {
+    sku: string;
+    sellerId?: string;
+    marketplaceIds?: string[];
+    includedData?: ListingsIncludedData[];
+    issueLocale?: string;
+  }): Promise<ListingsItemResponse> {
+    const sellerId = this.requireSellerId(params.sellerId);
+    const marketplaceIds = params.marketplaceIds || [this.config.marketplaceId];
+
+    const response = await this.httpClient.get<ListingsItemResponse>(
+      `/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(
+        params.sku
+      )}`,
+      {
+        params: {
+          marketplaceIds: marketplaceIds.join(','),
+          includedData: params.includedData?.join(','),
+          issueLocale: params.issueLocale,
+        },
+      }
+    );
+
+    return response.data;
+  }
+
+  /**
+   * Search the seller's own listings by identifier (SKU/ASIN/…) or date
+   * filters. Paginated.
+   * GET /listings/2021-08-01/items/{sellerId}
+   */
+  async searchListingsItems(params: {
+    sellerId?: string;
+    marketplaceIds?: string[];
+    identifiers?: string[];
+    identifiersType?:
+      | 'ASIN'
+      | 'EAN'
+      | 'FNSKU'
+      | 'GTIN'
+      | 'ISBN'
+      | 'JAN'
+      | 'MINSAN'
+      | 'SKU'
+      | 'UPC';
+    variationParentSku?: string;
+    packageHierarchySku?: string;
+    createdAfter?: string;
+    createdBefore?: string;
+    lastUpdatedAfter?: string;
+    lastUpdatedBefore?: string;
+    withIssueSeverity?: ('WARNING' | 'ERROR')[];
+    withStatus?: ('BUYABLE' | 'DISCOVERABLE')[];
+    withoutStatus?: ('BUYABLE' | 'DISCOVERABLE')[];
+    includedData?: ListingsIncludedData[];
+    issueLocale?: string;
+    sortBy?: 'sku' | 'createdDate' | 'lastUpdatedDate';
+    sortOrder?: 'ASC' | 'DESC';
+    pageSize?: number;
+    pageToken?: string;
+  }): Promise<ListingsSearchResponse> {
+    const sellerId = this.requireSellerId(params.sellerId);
+    const marketplaceIds = params.marketplaceIds || [this.config.marketplaceId];
+
+    const response = await this.httpClient.get<ListingsSearchResponse>(
+      `/listings/2021-08-01/items/${sellerId}`,
+      {
+        params: {
+          marketplaceIds: marketplaceIds.join(','),
+          identifiers: params.identifiers?.join(','),
+          identifiersType: params.identifiersType,
+          variationParentSku: params.variationParentSku,
+          packageHierarchySku: params.packageHierarchySku,
+          createdAfter: params.createdAfter,
+          createdBefore: params.createdBefore,
+          lastUpdatedAfter: params.lastUpdatedAfter,
+          lastUpdatedBefore: params.lastUpdatedBefore,
+          withIssueSeverity: params.withIssueSeverity?.join(','),
+          withStatus: params.withStatus?.join(','),
+          withoutStatus: params.withoutStatus?.join(','),
+          includedData: params.includedData?.join(','),
+          issueLocale: params.issueLocale,
+          sortBy: params.sortBy,
+          sortOrder: params.sortOrder,
+          pageSize: params.pageSize,
+          pageToken: params.pageToken,
         },
       }
     );

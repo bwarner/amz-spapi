@@ -9,6 +9,7 @@
  *   sp_cache.catalog       — SP-API catalog item cache (TTL: 24h)
  *   sp_cache.orders        — SP-API orders cache (TTL: 15min)
  *   sp_cache.inventory     — SP-API inventory cache (TTL: 30min)
+ *   sp_cache.listings      — SP-API seller listings cache (TTL: 5min)
  *   credentials.profiles   — Amazon OAuth credential profiles (no TTL)
  *   media.assets           — Uploaded media asset metadata
  *   media.asset_hashes     — Per-user duplicate detection pointers
@@ -30,7 +31,7 @@ import * as couchbase from 'couchbase';
 const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
   {
     scope: 'sp_cache',
-    collections: ['catalog', 'orders', 'inventory'],
+    collections: ['catalog', 'orders', 'inventory', 'listings'],
   },
   {
     scope: 'credentials',
@@ -48,6 +49,11 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
     // Platform-independent Product domain (Product → Variant → Listing).
     scope: 'catalog',
     collections: ['products', 'variants', 'listings'],
+  },
+  {
+    // Seller-assistant chat: meta docs + one doc per message (TTL'd).
+    scope: 'chat',
+    collections: ['conversations', 'messages'],
   },
 ];
 
@@ -334,6 +340,27 @@ async function main() {
     'draft_versions',
     'idx_a_plus_draft_versions_draft',
     ['`userId`', '`draftId`', '`createdAt`']
+  );
+
+  // chat.conversations — per-conversation meta, listed per user by recency
+  await createPrimaryIndex(cluster, bucketName, 'chat', 'conversations');
+  await createIndex(
+    cluster,
+    bucketName,
+    'chat',
+    'conversations',
+    'idx_chat_conversations_user_updated',
+    ['`userId`', '`updatedAt`']
+  );
+  // chat.messages — one doc per message, windowed reads by seq
+  await createPrimaryIndex(cluster, bucketName, 'chat', 'messages');
+  await createIndex(
+    cluster,
+    bucketName,
+    'chat',
+    'messages',
+    'idx_chat_messages_chat_seq',
+    ['`userId`', '`chatId`', '`seq`']
   );
 
   // media.asset_links — asset ↔ owner (product/variant/listing/brand) many-to-many

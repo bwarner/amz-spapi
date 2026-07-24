@@ -6,11 +6,12 @@ import { getDocument, upsertDocument } from '@amz-spapi/couchbase-utils';
  * Aligned with Amazon's acceptable use policies.
  */
 const TTL = {
-  CATALOG_ITEM: 24 * 60 * 60,    // 24 hours — listings change infrequently
-  CATALOG_SEARCH: 60 * 60,        // 1 hour — search results can shift
-  ORDERS: 15 * 60,                // 15 minutes — order status changes
-  ORDER_ITEMS: 15 * 60,           // 15 minutes
-  INVENTORY: 30 * 60,             // 30 minutes — changes with sales
+  CATALOG_ITEM: 24 * 60 * 60, // 24 hours — listings change infrequently
+  CATALOG_SEARCH: 60 * 60, // 1 hour — search results can shift
+  ORDERS: 15 * 60, // 15 minutes — order status changes
+  ORDER_ITEMS: 15 * 60, // 15 minutes
+  INVENTORY: 30 * 60, // 30 minutes — changes with sales
+  LISTINGS: 5 * 60, // 5 minutes — the seller's own edits must read back fresh
 } as const;
 
 const SCOPE = 'sp_cache';
@@ -19,6 +20,7 @@ const COLLECTIONS = {
   CATALOG: 'catalog',
   ORDERS: 'orders',
   INVENTORY: 'inventory',
+  LISTINGS: 'listings',
 } as const;
 
 function cacheKey(type: string, marketplace: string, id: string): string {
@@ -45,7 +47,8 @@ function cacheKey(type: string, marketplace: string, id: string): string {
  * Returns a new object with sensitive fields removed.
  */
 function stripOrderPii<T extends Record<string, any>>(order: T): T {
-  const { BuyerInfo, ShippingAddress, BuyerTaxInfo, BuyerEmail, ...safe } = order as any;
+  const { BuyerInfo, ShippingAddress, BuyerTaxInfo, BuyerEmail, ...safe } =
+    order as any;
   return safe as T;
 }
 
@@ -99,6 +102,8 @@ function sanitizeOrderItemsResponse(response: any): any {
 export interface SpCacheConfig {
   spClient: SpApiClient;
   marketplaceId: string;
+  /** Merchant token — required for Listings Items calls; keys their cache entries. */
+  sellerId?: string;
   /** Set to true to bypass cache (always hit API). Default false. */
   bypassCache?: boolean;
 }
@@ -112,33 +117,158 @@ export interface SpCacheConfig {
 export class SpCache {
   private spClient: SpApiClient;
   private marketplaceId: string;
+  private sellerId?: string;
   private bypassCache: boolean;
 
   constructor(config: SpCacheConfig) {
     this.spClient = config.spClient;
     this.marketplaceId = config.marketplaceId;
+    this.sellerId = config.sellerId;
     this.bypassCache = config.bypassCache ?? false;
+  }
+
+  /** Whether Listings Items calls are possible (a merchant token is known). */
+  hasSellerId(): boolean {
+    return Boolean(this.sellerId);
+  }
+
+  /**
+   * Get the seller's own listing for a SKU (submitted attributes + issues).
+   * Cached for 5 minutes — seller edits must read back fresh.
+   */
+  async getListingsItem(params: {
+    sku: string;
+    includedData?: (
+      | 'summaries'
+      | 'attributes'
+      | 'issues'
+      | 'offers'
+      | 'fulfillmentAvailability'
+      | 'relationships'
+      | 'productTypes'
+    )[];
+  }) {
+    const included = (params.includedData || []).sort().join(',');
+    const key = cacheKey(
+      'listing',
+      this.marketplaceId,
+      `${this.sellerId}:${params.sku}:${included}`
+    );
+
+    if (!this.bypassCache) {
+      const cached = await getDocument<any>(SCOPE, COLLECTIONS.LISTINGS, key);
+      if (cached) return cached;
+    }
+
+    const result = await this.spClient.getListingsItem({
+      sku: params.sku,
+      sellerId: this.sellerId,
+      includedData: params.includedData,
+    });
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.LISTINGS,
+      key,
+      result,
+      TTL.LISTINGS
+    );
+    return result;
+  }
+
+  /**
+   * Search the seller's own listings (by SKU/ASIN identifiers, or all,
+   * paginated). Cached for 5 minutes.
+   */
+  async searchListingsItems(params: {
+    identifiers?: string[];
+    identifiersType?: 'ASIN' | 'SKU' | 'FNSKU';
+    withIssueSeverity?: ('WARNING' | 'ERROR')[];
+    includedData?: (
+      | 'summaries'
+      | 'attributes'
+      | 'issues'
+      | 'offers'
+      | 'fulfillmentAvailability'
+    )[];
+    sortBy?: 'sku' | 'createdDate' | 'lastUpdatedDate';
+    pageSize?: number;
+    pageToken?: string;
+  }) {
+    const searchKey = JSON.stringify([
+      this.sellerId,
+      params.identifiers?.slice().sort(),
+      params.identifiersType,
+      params.withIssueSeverity?.slice().sort(),
+      (params.includedData || []).slice().sort(),
+      params.sortBy,
+      params.pageSize,
+      params.pageToken,
+    ]);
+    const key = cacheKey(
+      'listingSearch',
+      this.marketplaceId,
+      Buffer.from(searchKey).toString('base64url')
+    );
+
+    if (!this.bypassCache) {
+      const cached = await getDocument<any>(SCOPE, COLLECTIONS.LISTINGS, key);
+      if (cached) return cached;
+    }
+
+    const result = await this.spClient.searchListingsItems({
+      sellerId: this.sellerId,
+      identifiers: params.identifiers,
+      identifiersType: params.identifiersType,
+      withIssueSeverity: params.withIssueSeverity,
+      includedData: params.includedData,
+      sortBy: params.sortBy,
+      pageSize: params.pageSize,
+      pageToken: params.pageToken,
+    });
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.LISTINGS,
+      key,
+      result,
+      TTL.LISTINGS
+    );
+    return result;
   }
 
   /**
    * Get catalog item details by ASIN.
    * Cached for 24 hours.
    */
-  async getCatalogItem(asin: string, params?: {
-    marketplaceIds?: string[];
-    includedData?: string[];
-    locale?: string;
-  }) {
+  async getCatalogItem(
+    asin: string,
+    params?: {
+      marketplaceIds?: string[];
+      includedData?: string[];
+      locale?: string;
+    }
+  ) {
     const key = cacheKey('item', this.marketplaceId, asin);
-    const includedKey = `${key}:${(params?.includedData || []).sort().join(',')}`;
+    const includedKey = `${key}:${(params?.includedData || [])
+      .sort()
+      .join(',')}`;
 
     if (!this.bypassCache) {
-      const cached = await getDocument<any>(SCOPE, COLLECTIONS.CATALOG, includedKey);
+      const cached = await getDocument<any>(
+        SCOPE,
+        COLLECTIONS.CATALOG,
+        includedKey
+      );
       if (cached) return cached;
     }
 
     const result = await this.spClient.getCatalogItem(asin, params);
-    await upsertDocument(SCOPE, COLLECTIONS.CATALOG, includedKey, result, TTL.CATALOG_ITEM);
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.CATALOG,
+      includedKey,
+      result,
+      TTL.CATALOG_ITEM
+    );
     return result;
   }
 
@@ -149,7 +279,15 @@ export class SpCache {
   async searchCatalogItems(params: {
     keywords?: string;
     identifiers?: string[];
-    identifiersType?: 'ASIN' | 'EAN' | 'GTIN' | 'ISBN' | 'JAN' | 'MINSAN' | 'SKU' | 'UPC';
+    identifiersType?:
+      | 'ASIN'
+      | 'EAN'
+      | 'GTIN'
+      | 'ISBN'
+      | 'JAN'
+      | 'MINSAN'
+      | 'SKU'
+      | 'UPC';
     marketplaceIds?: string[];
     includedData?: string[];
     brandNames?: string[];
@@ -167,7 +305,11 @@ export class SpCache {
       ps: params.pageSize,
       pt: params.pageToken,
     });
-    const key = cacheKey('search', this.marketplaceId, Buffer.from(searchKey).toString('base64url'));
+    const key = cacheKey(
+      'search',
+      this.marketplaceId,
+      Buffer.from(searchKey).toString('base64url')
+    );
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.CATALOG, key);
@@ -175,7 +317,13 @@ export class SpCache {
     }
 
     const result = await this.spClient.searchCatalogItems(params);
-    await upsertDocument(SCOPE, COLLECTIONS.CATALOG, key, result, TTL.CATALOG_SEARCH);
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.CATALOG,
+      key,
+      result,
+      TTL.CATALOG_SEARCH
+    );
     return result;
   }
 
@@ -202,7 +350,11 @@ export class SpCache {
       mr: params.maxResultsPerPage,
       nt: params.nextToken,
     });
-    const key = cacheKey('orders', this.marketplaceId, Buffer.from(orderKey).toString('base64url'));
+    const key = cacheKey(
+      'orders',
+      this.marketplaceId,
+      Buffer.from(orderKey).toString('base64url')
+    );
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.ORDERS, key);
@@ -237,7 +389,11 @@ export class SpCache {
    */
   async getOrderItems(orderId: string, nextToken?: string) {
     const suffix = nextToken ? `:${nextToken}` : '';
-    const key = cacheKey('orderItems', this.marketplaceId, `${orderId}${suffix}`);
+    const key = cacheKey(
+      'orderItems',
+      this.marketplaceId,
+      `${orderId}${suffix}`
+    );
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.ORDERS, key);
@@ -246,7 +402,13 @@ export class SpCache {
 
     const result = await this.spClient.getOrderItems(orderId, nextToken);
     const sanitized = sanitizeOrderItemsResponse(result);
-    await upsertDocument(SCOPE, COLLECTIONS.ORDERS, key, sanitized, TTL.ORDER_ITEMS);
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.ORDERS,
+      key,
+      sanitized,
+      TTL.ORDER_ITEMS
+    );
     return result;
   }
 
@@ -266,7 +428,11 @@ export class SpCache {
       sk: params.sellerSkus,
       nt: params.nextToken,
     });
-    const key = cacheKey('inv', this.marketplaceId, Buffer.from(invKey).toString('base64url'));
+    const key = cacheKey(
+      'inv',
+      this.marketplaceId,
+      Buffer.from(invKey).toString('base64url')
+    );
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.INVENTORY, key);
@@ -274,7 +440,13 @@ export class SpCache {
     }
 
     const result = await this.spClient.getInventorySummaries(params);
-    await upsertDocument(SCOPE, COLLECTIONS.INVENTORY, key, result, TTL.INVENTORY);
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.INVENTORY,
+      key,
+      result,
+      TTL.INVENTORY
+    );
     return result;
   }
 }
