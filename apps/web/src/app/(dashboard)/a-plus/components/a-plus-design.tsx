@@ -2168,7 +2168,7 @@ function DesignedDualUse({
  * Generic lucide-style icon paths (stroke), drawn as inline <svg>. Inline SVG
  * renders both in the browser preview and in satori/next-og export.
  */
-const ICON_PATHS: Record<IconRowIcon, string[]> = {
+export const ICON_PATHS: Record<IconRowIcon, string[]> = {
   coffee: [
     'M17 8h1a4 4 0 1 1 0 8h-1',
     'M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z',
@@ -2338,7 +2338,7 @@ const ICON_ALIASES: Record<string, IconRowIcon> = {
   done: 'check',
 };
 
-function resolveIcon(name: string): IconRowIcon {
+export function resolveIcon(name: string): IconRowIcon {
   const k = name.trim().toLowerCase();
   if (k in ICON_PATHS) return k as IconRowIcon;
   return ICON_ALIASES[k] ?? 'check';
