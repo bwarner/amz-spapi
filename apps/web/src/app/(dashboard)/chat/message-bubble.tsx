@@ -52,7 +52,124 @@ const TOOL_LABELS: Record<string, [string, string]> = {
   'get-orders': ['Fetching orders...', 'Orders retrieved'],
   'get-order-details': ['Fetching order details...', 'Order details retrieved'],
   'get-inventory': ['Checking inventory...', 'Inventory retrieved'],
+  'get-my-listing': ['Fetching your listing...', 'Your listing retrieved'],
+  'search-my-listings': [
+    'Searching your listings...',
+    'Your listings retrieved',
+  ],
+  'generate-image': ['Generating image...', 'Image generated'],
+  'propose-listing-photos': [
+    'Generating photo proposals...',
+    'Photo proposals ready',
+  ],
+  'crop-image': ['Cropping image...', 'Image cropped'],
+  'compose-image': ['Compositing images...', 'Images composited'],
+  'generate-infographic': ['Rendering infographic...', 'Infographic rendered'],
+  'scale-image': ['Scaling image...', 'Image scaled'],
+  'remove-image-background': ['Removing background...', 'Background removed'],
 };
+
+const LISTING_IMAGE_TOOL_TYPES = new Set([
+  'tool-get-my-listing',
+  'tool-search-my-listings',
+  'tool-propose-listing-photos',
+  'tool-generate-image',
+  'tool-crop-image',
+  'tool-scale-image',
+  'tool-remove-image-background',
+  'tool-compose-image',
+  'tool-generate-infographic',
+  // Public catalog tools — competitor images render side by side with yours.
+  'tool-get-listing',
+  'tool-search-catalog',
+]);
+
+/** Cap for one catalog item's image set so a single lookup can't flood the grid. */
+const CATALOG_IMAGES_MAX = 8;
+
+type CatalogImageEntry = { variant?: string; link?: string };
+type CatalogImageSet = { images?: CatalogImageEntry[] };
+
+function mainFirst(images: CatalogImageEntry[]): CatalogImageEntry[] {
+  return [...images].sort((a, b) =>
+    a.variant === 'MAIN' ? -1 : b.variant === 'MAIN' ? 1 : 0
+  );
+}
+
+function listingSlotLabel(slot: string): string {
+  if (slot === 'main_product_image_locator') return 'Main';
+  if (slot === 'swatch_product_image_locator') return 'Swatch';
+  const other = slot.match(/^other_product_image_locator_(\d+)$/);
+  return other ? `Image ${other[1]}` : slot;
+}
+
+/** Pull renderable images out of listing / photo tool outputs. */
+function extractListingToolImages(
+  output: unknown
+): Array<{ url: string; label?: string }> {
+  if (!output || typeof output !== 'object') return [];
+  const data = output as {
+    // Own-listing tools: flat {slot|label, url}. Catalog tools: nested
+    // SP-API sets {marketplaceId, images: [{variant, link}]}.
+    images?: Array<
+      { slot?: string; label?: string; url?: string } | CatalogImageSet
+    >;
+    listings?: Array<{ mainImage?: string; title?: string; sku?: string }>;
+    proposals?: Array<{ label?: string; url?: string }>;
+    // Catalog search: one MAIN image per result item.
+    items?: Array<{
+      asin?: string;
+      summaries?: Array<{ itemName?: string }>;
+      images?: CatalogImageSet[];
+    }>;
+  };
+  const collected: Array<{ url: string; label?: string }> = [];
+  const catalogEntries: CatalogImageEntry[] = [];
+  for (const image of data.images ?? []) {
+    if (!image) continue;
+    if ('url' in image && image.url) {
+      collected.push({
+        url: image.url,
+        label:
+          image.label ??
+          (image.slot ? listingSlotLabel(image.slot) : undefined),
+      });
+      continue;
+    }
+    if ('images' in image && Array.isArray(image.images)) {
+      catalogEntries.push(...image.images);
+    }
+  }
+  for (const entry of mainFirst(catalogEntries).slice(0, CATALOG_IMAGES_MAX)) {
+    if (entry.link) {
+      collected.push({ url: entry.link, label: entry.variant });
+    }
+  }
+  for (const item of data.items ?? []) {
+    const images = item?.images?.flatMap((set) => set.images ?? []) ?? [];
+    const main = mainFirst(images)[0];
+    if (main?.link) {
+      collected.push({
+        url: main.link,
+        label: item.summaries?.[0]?.itemName ?? item.asin,
+      });
+    }
+  }
+  for (const listing of data.listings ?? []) {
+    if (listing?.mainImage) {
+      collected.push({
+        url: listing.mainImage,
+        label: listing.title ?? listing.sku,
+      });
+    }
+  }
+  for (const proposal of data.proposals ?? []) {
+    if (proposal?.url) {
+      collected.push({ url: proposal.url, label: proposal.label });
+    }
+  }
+  return collected;
+}
 
 function ToolCallDisplay({
   toolName,
@@ -94,9 +211,11 @@ export function MessageBubble({
 }) {
   const isUser = message.role === 'user';
 
-  // Collect tool calls + special-render any A+ preview output
+  // Collect tool calls + special-render any A+ preview / listing image output
   const toolCalls: { toolName: string; state: string }[] = [];
   const aplusDocs: APlusDocument[] = [];
+  const listingImages: Array<{ url: string; label?: string }> = [];
+  const seenImageUrls = new Set<string>();
   let textContent = '';
 
   if (message.parts) {
@@ -116,6 +235,17 @@ export function MessageBubble({
       ) {
         const doc = parseAPlusDoc(part.output);
         if (doc) aplusDocs.push(doc);
+      }
+
+      if (
+        LISTING_IMAGE_TOOL_TYPES.has(part.type) &&
+        part.state === 'output-available'
+      ) {
+        for (const image of extractListingToolImages(part.output)) {
+          if (seenImageUrls.has(image.url)) continue;
+          seenImageUrls.add(image.url);
+          listingImages.push(image);
+        }
       }
     }
   }
@@ -160,6 +290,30 @@ export function MessageBubble({
           <div className="mb-3 space-y-4">
             {aplusDocs.map((doc, i) => (
               <APlusPreview key={i} doc={doc} />
+            ))}
+          </div>
+        )}
+
+        {/* Listing images from tool output */}
+        {listingImages.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {listingImages.map((image) => (
+              <figure key={image.url} className="w-24">
+                <a href={image.url} target="_blank" rel="noreferrer">
+                  <img
+                    src={image.url}
+                    alt={image.label ?? 'Listing image'}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-24 w-24 rounded-md border bg-white object-contain"
+                  />
+                </a>
+                {image.label && (
+                  <figcaption className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                    {image.label}
+                  </figcaption>
+                )}
+              </figure>
             ))}
           </div>
         )}

@@ -7,10 +7,78 @@ import type {
   ModelTier,
 } from '@amz-spapi/ai-provider';
 
+/**
+ * Host-provided access to the media asset library. Implementations MUST
+ * ownership-check asset ids (they arrive from model tool calls).
+ */
+export interface SellerAssetStore {
+  loadImageBytes(
+    assetId: string
+  ): Promise<{ bytes: Uint8Array; mimeType: string } | null>;
+  saveGeneratedImage(params: {
+    dataUrl: string;
+  }): Promise<{ assetId: string; url: string }>;
+}
+
+/** A transformed image persisted back into the asset library. */
+export type EditedImage = {
+  assetId: string;
+  url: string;
+  width?: number;
+  height?: number;
+};
+
+/**
+ * Host-provided image transformations (sharp + segmentation on the host).
+ * Implementations MUST ownership-check asset ids.
+ */
+export interface SellerImageOps {
+  crop(params: {
+    assetId: string;
+    /** Crop rectangle as fractions of the source (0..1). */
+    rect?: { x: number; y: number; width: number; height: number };
+    /** Or crop to an aspect ratio like "1:1", positioned by gravity. */
+    aspect?: string;
+    gravity?: 'center' | 'top' | 'bottom' | 'left' | 'right';
+  }): Promise<EditedImage>;
+  resize(params: {
+    assetId: string;
+    width?: number;
+    height?: number;
+    fit?: 'inside' | 'cover';
+    allowUpscale?: boolean;
+  }): Promise<EditedImage>;
+  removeBackground(params: {
+    assetId: string;
+    background?: 'white' | 'transparent';
+  }): Promise<EditedImage>;
+  renderInfographic(params: {
+    template: 'benefit-grid' | 'callout-overlay';
+    productImageAssetId: string;
+    headline: string;
+    subheadline?: string;
+    benefits?: Array<{ icon: string; label: string; text?: string }>;
+    callouts?: Array<{ x: number; y: number; title: string; text?: string }>;
+    colors?: { background?: string; text?: string; accent?: string };
+  }): Promise<EditedImage>;
+  compose(params: {
+    foregroundAssetId: string;
+    backgroundAssetId: string;
+    /** Center of the foreground as fractions of the background (default 0.5/0.6). */
+    position?: { x: number; y: number };
+    /** Foreground width as a fraction of the background width (default 0.7). */
+    scale?: number;
+    /** Soft drop shadow under the foreground (default true). */
+    shadow?: boolean;
+  }): Promise<EditedImage>;
+}
+
 export interface SellerAgentConfig {
   spCache?: SpCache;
   provider: AIProvider;
   imageGenerator?: ImageGenerator;
+  assetStore?: SellerAssetStore;
+  imageOps?: SellerImageOps;
   modelTier?: ModelTier;
   marketplaceId: string;
   additionalInstructions?: string;
@@ -213,14 +281,627 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
   };
 }
 
-function getImageTools(imageGenerator: ImageGenerator) {
+/**
+ * Image slots inside Listings Items attributes: values are arrays of
+ * `{ media_location }`. Collected into a flat list the chat UI renders.
+ */
+function extractListingImages(
+  attributes: Record<string, unknown> | undefined
+): Array<{ slot: string; url: string }> {
+  if (!attributes) return [];
+  const images: Array<{ slot: string; url: string }> = [];
+  const slotNames = [
+    'main_product_image_locator',
+    ...Array.from(
+      { length: 8 },
+      (_, i) => `other_product_image_locator_${i + 1}`
+    ),
+    'swatch_product_image_locator',
+  ];
+  for (const slot of slotNames) {
+    const value = attributes[slot];
+    if (!Array.isArray(value)) continue;
+    for (const entry of value) {
+      const url = (entry as { media_location?: string })?.media_location;
+      if (url) images.push({ slot, url });
+    }
+  }
+  return images;
+}
+
+type ListingSummary = {
+  marketplaceId?: string;
+  asin?: string;
+  productType?: string;
+  status?: string[];
+  itemName?: string;
+  createdDate?: string;
+  lastUpdatedDate?: string;
+  mainImage?: { link?: string; height?: number; width?: number };
+};
+
+function getListingsTools(spCache: SpCache) {
+  return {
+    'get-my-listing': {
+      description:
+        "Get the seller's OWN listing for a seller SKU — the attributes actually submitted to Amazon " +
+        'plus any open validation issues. Different from get-listing (public catalog view). ' +
+        'Returns summaries, issues, and the listing images (which are shown to the user automatically). ' +
+        'Use search-my-listings first if you only have an ASIN or product name.',
+      inputSchema: z.object({
+        sku: z.string().min(1).describe('The seller SKU of the listing'),
+        includeAttributes: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also return the full attribute map (title, bullets, description, keywords). ' +
+              'Default false — request it when critiquing or preparing an update.'
+          ),
+      }),
+      execute: async (input: { sku: string; includeAttributes?: boolean }) => {
+        const result = await spCache.getListingsItem({
+          sku: input.sku,
+          includedData: ['summaries', 'attributes', 'issues'],
+        });
+        const attributes = result?.attributes as
+          | Record<string, unknown>
+          | undefined;
+        return {
+          sku: result?.sku,
+          summaries: result?.summaries,
+          issues: result?.issues,
+          images: extractListingImages(attributes),
+          ...(input.includeAttributes ? { attributes } : {}),
+        };
+      },
+    },
+
+    'search-my-listings': {
+      description:
+        "Search the seller's OWN listings. Filter by SKUs or ASINs, or list everything (paginated). " +
+        'Returns SKU, ASIN, title, status, and main image per listing. ' +
+        'Use this to resolve an ASIN or product name to the seller SKU that other listing tools need.',
+      inputSchema: z.object({
+        skus: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe('Filter by specific seller SKUs (max 20)'),
+        asins: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe(
+            'Filter by specific ASINs (max 20). Ignored if skus is set.'
+          ),
+        withIssuesOnly: z
+          .boolean()
+          .optional()
+          .describe('Only listings with WARNING or ERROR issues'),
+        pageSize: z.number().int().min(1).max(20).optional(),
+        pageToken: z.string().optional(),
+      }),
+      execute: async (input: {
+        skus?: string[];
+        asins?: string[];
+        withIssuesOnly?: boolean;
+        pageSize?: number;
+        pageToken?: string;
+      }) => {
+        const identifiers = input.skus?.length
+          ? { identifiers: input.skus, identifiersType: 'SKU' as const }
+          : input.asins?.length
+          ? { identifiers: input.asins, identifiersType: 'ASIN' as const }
+          : {};
+        const result = await spCache.searchListingsItems({
+          ...identifiers,
+          withIssueSeverity: input.withIssuesOnly
+            ? ['WARNING', 'ERROR']
+            : undefined,
+          includedData: ['summaries'],
+          pageSize: input.pageSize ?? 10,
+          pageToken: input.pageToken,
+        });
+        const items = (result?.items ?? []) as Array<{
+          sku?: string;
+          summaries?: ListingSummary[];
+        }>;
+        return {
+          numberOfResults: result?.numberOfResults,
+          nextToken: result?.pagination?.nextToken,
+          listings: items.map((item) => {
+            const summary = item.summaries?.[0];
+            return {
+              sku: item.sku,
+              asin: summary?.asin,
+              title: summary?.itemName,
+              status: summary?.status,
+              productType: summary?.productType,
+              lastUpdated: summary?.lastUpdatedDate,
+              mainImage: summary?.mainImage?.link,
+            };
+          }),
+        };
+      },
+    },
+  };
+}
+
+const LISTING_SHOT_TEMPLATES: Record<string, string> = {
+  'main-white':
+    'Professional Amazon MAIN listing image: the product alone on a pure white ' +
+    'seamless background (RGB 255,255,255), filling about 85% of the frame, even ' +
+    'studio lighting, tack-sharp focus, true-to-life colors. No props, no text, ' +
+    'no logos, no watermarks, no people, no reflections of other objects.',
+  lifestyle:
+    'Photorealistic lifestyle listing image: the product being used naturally in a ' +
+    'realistic, aspirational setting that matches its purpose. Authentic environment, ' +
+    'natural light, shallow depth of field. No overlaid text or graphics.',
+  detail:
+    'Macro detail listing image: a tight close-up of a distinguishing feature, ' +
+    'texture, or construction detail of the product. Crisp focus on the feature, ' +
+    'clean softly-lit background. No text or graphics.',
+  scale:
+    'Scale-reference listing image: the product held in a hand or placed beside an ' +
+    'everyday object so its true size is obvious. Neutral, clean setting. ' +
+    'No overlaid text, rulers rendered as graphics, or size callouts.',
+  packaging:
+    'Packaging listing image: the product together with its retail packaging on a ' +
+    'clean white background, studio lighting. No added text or graphics.',
+};
+
+function getPhotoTools(
+  imageGenerator: ImageGenerator,
+  assetStore: SellerAssetStore
+) {
+  return {
+    'propose-listing-photos': {
+      description:
+        'Generate proposed Amazon listing photos of the EXACT product shown in reference ' +
+        'photos (image-to-image). Provide 1-3 reference asset ids from photos the user ' +
+        'attached, and 1-4 shots to produce. Each proposal is saved to the asset library ' +
+        'and displayed to the user automatically with its label — refer to proposals by ' +
+        'label in conversation. Label each shot "Photo <letter>" continuing the letter ' +
+        'sequence already used in this conversation (uploads and earlier proposals).',
+      inputSchema: z.object({
+        referenceAssetIds: z
+          .array(z.string())
+          .min(1)
+          .max(3)
+          .describe(
+            "Asset ids of the user's product photos (from attachment manifests, " +
+              'e.g. the last path segment of /api/a-plus/assets/<assetId>)'
+          ),
+        productDescription: z
+          .string()
+          .min(10)
+          .describe(
+            'Factual product description: colors, materials, parts, finish — ' +
+              'the generator must reproduce the product faithfully'
+          ),
+        shots: z
+          .array(
+            z.object({
+              label: z
+                .string()
+                .regex(/^Photo [A-Z]{1,2}$/)
+                .describe(
+                  'Identifier like "Photo D" — continue the sequence of letters ' +
+                    'already used in this conversation (after Photo Z comes ' +
+                    'Photo AA, AB, ...)'
+                ),
+              shotType: z.enum([
+                'main-white',
+                'lifestyle',
+                'detail',
+                'scale',
+                'packaging',
+              ]),
+              brief: z
+                .string()
+                .optional()
+                .describe(
+                  'Scene specifics: setting, angle, which feature to highlight'
+                ),
+            })
+          )
+          .min(1)
+          .max(4),
+        quality: z.enum(['low', 'medium', 'high']).optional(),
+      }),
+      execute: async (input: {
+        referenceAssetIds: string[];
+        productDescription: string;
+        shots: { label: string; shotType: string; brief?: string }[];
+        quality?: 'low' | 'medium' | 'high';
+      }) => {
+        const references = (
+          await Promise.all(
+            input.referenceAssetIds.map((assetId) =>
+              assetStore.loadImageBytes(assetId)
+            )
+          )
+        ).filter((ref): ref is NonNullable<typeof ref> => ref !== null);
+
+        if (references.length === 0) {
+          return {
+            success: false,
+            error:
+              'None of the reference asset ids could be loaded. Use asset ids from ' +
+              "the user's attached photos.",
+          };
+        }
+
+        const referenceImages = references.map((ref) => ref.bytes);
+        const proposals = await Promise.all(
+          input.shots.map(async (shot) => {
+            const template =
+              LISTING_SHOT_TEMPLATES[shot.shotType] ??
+              LISTING_SHOT_TEMPLATES['lifestyle'];
+            const prompt = [
+              template,
+              `Product: ${input.productDescription}.`,
+              shot.brief ? `Scene: ${shot.brief}.` : '',
+              'Depict the EXACT product from the reference photos — identical ' +
+                'colors, materials, proportions, and markings. Do not invent ' +
+                'variants or accessories that are not in the reference photos.',
+            ]
+              .filter(Boolean)
+              .join(' ');
+
+            try {
+              const results = await imageGenerator.generate({
+                prompt,
+                size: '1024x1024',
+                quality: input.quality ?? 'medium',
+                referenceImages,
+              });
+              const first = results[0];
+              if (!first?.url) {
+                return { label: shot.label, error: 'No image returned.' };
+              }
+              const saved = await assetStore.saveGeneratedImage({
+                dataUrl: first.url,
+              });
+              return {
+                label: shot.label,
+                shotType: shot.shotType,
+                assetId: saved.assetId,
+                url: saved.url,
+                revisedPrompt: first.revisedPrompt,
+              };
+            } catch (error) {
+              return {
+                label: shot.label,
+                error:
+                  error instanceof Error ? error.message : 'Generation failed.',
+              };
+            }
+          })
+        );
+
+        return {
+          success: proposals.some((proposal) => 'assetId' in proposal),
+          proposals,
+          note:
+            'Proposals are displayed to the user automatically with their labels. ' +
+            'Do not repeat the image URLs; ask which proposals the user wants to keep.',
+        };
+      },
+    },
+  };
+}
+
+const PHOTO_LABEL_SCHEMA = z
+  .string()
+  .regex(/^Photo [A-Z]{1,2}$/)
+  .describe(
+    'Identifier like "Photo D" — continue the letter sequence already used in ' +
+      'this conversation (after Photo Z comes Photo AA, AB, ...)'
+  );
+
+const ASSET_ID_SCHEMA = z
+  .string()
+  .min(1)
+  .describe(
+    'Asset id of the source image (resolve the photo label via the PHOTO LABEL REGISTRY ' +
+      'or the manifest/tool result where it first appeared)'
+  );
+
+function getImageEditTools(imageOps: SellerImageOps) {
+  const wrap = async (
+    label: string,
+    edit: () => Promise<EditedImage>
+  ): Promise<
+    | { success: true; images: Array<EditedImage & { label: string }> }
+    | { success: false; error: string }
+  > => {
+    try {
+      const image = await edit();
+      return { success: true, images: [{ label, ...image }] };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Image edit failed.',
+      };
+    }
+  };
+
+  return {
+    'crop-image': {
+      description:
+        'Crop a photo — either a fractional rectangle or an aspect ratio with gravity ' +
+        '(e.g. square-crop for an Amazon main image). Produces a NEW labeled photo; ' +
+        'the original is untouched. The result is displayed to the user automatically.',
+      inputSchema: z.object({
+        assetId: ASSET_ID_SCHEMA,
+        label: PHOTO_LABEL_SCHEMA,
+        rect: z
+          .object({
+            x: z.number().min(0).max(1),
+            y: z.number().min(0).max(1),
+            width: z.number().min(0.01).max(1),
+            height: z.number().min(0.01).max(1),
+          })
+          .optional()
+          .describe('Crop rectangle as fractions of the source image'),
+        aspect: z
+          .string()
+          .regex(/^\d+(\.\d+)?:\d+(\.\d+)?$/)
+          .optional()
+          .describe(
+            'Target aspect ratio like "1:1" or "4:3" (max centered crop)'
+          ),
+        gravity: z
+          .enum(['center', 'top', 'bottom', 'left', 'right'])
+          .optional()
+          .describe('Which part of the image to keep for aspect crops'),
+      }),
+      execute: (input: {
+        assetId: string;
+        label: string;
+        rect?: { x: number; y: number; width: number; height: number };
+        aspect?: string;
+        gravity?: 'center' | 'top' | 'bottom' | 'left' | 'right';
+      }) =>
+        wrap(input.label, () =>
+          imageOps.crop({
+            assetId: input.assetId,
+            rect: input.rect,
+            aspect: input.aspect,
+            gravity: input.gravity,
+          })
+        ),
+    },
+
+    'scale-image': {
+      description:
+        'Scale a photo to target dimensions (Amazon listing images should be at least ' +
+        '1000px on the longest side for zoom; up to 10000px). fit "inside" preserves the ' +
+        'whole image, "cover" fills and crops. Produces a NEW labeled photo, displayed ' +
+        'to the user automatically.',
+      inputSchema: z.object({
+        assetId: ASSET_ID_SCHEMA,
+        label: PHOTO_LABEL_SCHEMA,
+        width: z.number().int().min(50).max(10000).optional(),
+        height: z.number().int().min(50).max(10000).optional(),
+        fit: z.enum(['inside', 'cover']).optional(),
+        allowUpscale: z
+          .boolean()
+          .optional()
+          .describe(
+            'Permit enlarging beyond the source size (needed to reach Amazon minimums ' +
+              'from small photos). Default false.'
+          ),
+      }),
+      execute: (input: {
+        assetId: string;
+        label: string;
+        width?: number;
+        height?: number;
+        fit?: 'inside' | 'cover';
+        allowUpscale?: boolean;
+      }) =>
+        wrap(input.label, () =>
+          imageOps.resize({
+            assetId: input.assetId,
+            width: input.width,
+            height: input.height,
+            fit: input.fit,
+            allowUpscale: input.allowUpscale,
+          })
+        ),
+    },
+
+    'generate-infographic': {
+      description:
+        'Render a professional infographic-style listing image (2000×2000) from ' +
+        'structured content — layout, typography, and icons are deterministic ' +
+        'templates, so text is always crisp and correct. The product appears as a ' +
+        'real photo (use a background-removed cutout assetId for best results). ' +
+        'Templates: "benefit-grid" (headline + product beside icon/label benefits) ' +
+        'and "callout-overlay" (product large with feature callout chips placed on ' +
+        'it). Produces a NEW labeled photo, displayed automatically. Ideal for ' +
+        'secondary listing images; never for the MAIN image.',
+      inputSchema: z.object({
+        template: z.enum(['benefit-grid', 'callout-overlay']),
+        label: PHOTO_LABEL_SCHEMA,
+        productImageAssetId: ASSET_ID_SCHEMA.describe(
+          'Product photo asset id — prefer a transparent cutout from remove-image-background'
+        ),
+        headline: z.string().min(3).max(60),
+        subheadline: z.string().max(90).optional(),
+        benefits: z
+          .array(
+            z.object({
+              icon: z
+                .string()
+                .describe(
+                  'One of the supported icon names (same set as A+ icon rows, ' +
+                    'e.g. shield, leaf, zap, check, droplet, thermometer)'
+                ),
+              label: z.string().min(2).max(40),
+              text: z.string().max(90).optional(),
+            })
+          )
+          .min(2)
+          .max(5)
+          .optional()
+          .describe('benefit-grid template: 2-5 benefits'),
+        callouts: z
+          .array(
+            z.object({
+              x: z.number().min(0).max(1),
+              y: z.number().min(0).max(1),
+              title: z.string().min(2).max(40),
+              text: z.string().max(80).optional(),
+            })
+          )
+          .min(2)
+          .max(6)
+          .optional()
+          .describe(
+            'callout-overlay template: 2-6 callouts. x/y are CANVAS fractions ' +
+              'placed ON the pictured feature — the product renders centered in ' +
+              'roughly the region x 0.15-0.85, y 0.25-0.9. Spread callouts apart.'
+          ),
+        colors: z
+          .object({
+            background: z.string().optional(),
+            text: z.string().optional(),
+            accent: z.string().optional(),
+          })
+          .optional()
+          .describe('Hex colors — use the brand palette when one is known'),
+      }),
+      execute: (input: {
+        template: 'benefit-grid' | 'callout-overlay';
+        label: string;
+        productImageAssetId: string;
+        headline: string;
+        subheadline?: string;
+        benefits?: Array<{ icon: string; label: string; text?: string }>;
+        callouts?: Array<{
+          x: number;
+          y: number;
+          title: string;
+          text?: string;
+        }>;
+        colors?: { background?: string; text?: string; accent?: string };
+      }) =>
+        wrap(input.label, () =>
+          imageOps.renderInfographic({
+            template: input.template,
+            productImageAssetId: input.productImageAssetId,
+            headline: input.headline,
+            subheadline: input.subheadline,
+            benefits: input.benefits,
+            callouts: input.callouts,
+            colors: input.colors,
+          })
+        ),
+    },
+
+    'compose-image': {
+      description:
+        'Layer one image on top of another — typically a transparent product cutout ' +
+        '(from remove-image-background with background "transparent") placed onto a ' +
+        'background/scene image. Position and scale control where and how large the ' +
+        'product appears. Produces a NEW labeled photo, displayed automatically. ' +
+        'Composites are for lifestyle/secondary/A+ imagery — an Amazon MAIN image must ' +
+        'be a real photo of the product on white, not a composite scene.',
+      inputSchema: z.object({
+        foregroundAssetId: ASSET_ID_SCHEMA.describe(
+          'Asset id of the image to place on top (transparent PNG cutouts look best)'
+        ),
+        backgroundAssetId: ASSET_ID_SCHEMA.describe(
+          'Asset id of the background/scene image'
+        ),
+        label: PHOTO_LABEL_SCHEMA,
+        position: z
+          .object({
+            x: z.number().min(0).max(1),
+            y: z.number().min(0).max(1),
+          })
+          .optional()
+          .describe(
+            'Center of the foreground as fractions of the background (default x 0.5, y 0.6)'
+          ),
+        scale: z
+          .number()
+          .min(0.05)
+          .max(1)
+          .optional()
+          .describe(
+            'Foreground width as a fraction of the background width (default 0.7)'
+          ),
+        shadow: z
+          .boolean()
+          .optional()
+          .describe(
+            'Soft drop shadow under the foreground so it sits naturally in the ' +
+              'scene (default true; disable for flat graphics)'
+          ),
+      }),
+      execute: (input: {
+        foregroundAssetId: string;
+        backgroundAssetId: string;
+        label: string;
+        position?: { x: number; y: number };
+        scale?: number;
+        shadow?: boolean;
+      }) =>
+        wrap(input.label, () =>
+          imageOps.compose({
+            foregroundAssetId: input.foregroundAssetId,
+            backgroundAssetId: input.backgroundAssetId,
+            position: input.position,
+            scale: input.scale,
+            shadow: input.shadow,
+          })
+        ),
+    },
+
+    'remove-image-background': {
+      description:
+        'Remove the background from a product photo (ML segmentation of the real pixels — ' +
+        'not AI regeneration, so the product stays authentic; required for Amazon main ' +
+        'images). background "white" flattens to pure white (Amazon main image), ' +
+        '"transparent" keeps a PNG cutout for compositing. Produces a NEW labeled photo, ' +
+        'displayed to the user automatically.',
+      inputSchema: z.object({
+        assetId: ASSET_ID_SCHEMA,
+        label: PHOTO_LABEL_SCHEMA,
+        background: z.enum(['white', 'transparent']).optional(),
+      }),
+      execute: (input: {
+        assetId: string;
+        label: string;
+        background?: 'white' | 'transparent';
+      }) =>
+        wrap(input.label, () =>
+          imageOps.removeBackground({
+            assetId: input.assetId,
+            background: input.background,
+          })
+        ),
+    },
+  };
+}
+
+function getImageTools(
+  imageGenerator: ImageGenerator,
+  assetStore?: SellerAssetStore
+) {
   return {
     'generate-image': {
       description:
-        'Generate an image for A+ content, lifestyle photos, infographics, or product ' +
-        'context. Provide a detailed prompt describing the image. The generated image is ' +
-        'NOT returned in the chat — it is saved separately. Tell the user to view and ' +
-        'download generated images from the A+ Content Studio review page.',
+        'Generate a standalone image from a text prompt (infographics, banners, ' +
+        'concept art). For listing photos of the actual product, use ' +
+        'propose-listing-photos instead — it works from the user’s reference ' +
+        'photos. Generated images are saved to the asset library and displayed ' +
+        'to the user automatically; label them "Photo <letter>" continuing the ' +
+        'sequence used in this conversation.',
       inputSchema: z.object({
         prompt: z
           .string()
@@ -229,6 +910,14 @@ function getImageTools(imageGenerator: ImageGenerator) {
             'Detailed description of the image to generate. Include: ' +
               '1) Subject/product description, 2) Setting/background, 3) Style (photorealistic, ' +
               'illustration, etc.), 4) Lighting, 5) Composition/angle.'
+          ),
+        label: z
+          .string()
+          .regex(/^Photo [A-Z]{1,2}$/)
+          .optional()
+          .describe(
+            'Identifier like "Photo D" — continue the letter sequence already ' +
+              'used (after Photo Z comes Photo AA, AB, ...)'
           ),
         size: z
           .enum(['1024x1024', '1792x1024', '1024x1792'])
@@ -239,33 +928,44 @@ function getImageTools(imageGenerator: ImageGenerator) {
       }),
       execute: async (input: {
         prompt: string;
+        label?: string;
         size?: '1024x1024' | '1792x1024' | '1024x1792';
       }) => {
-        console.log(
-          '[tool:generate-image] Generating with prompt:',
-          input.prompt.substring(0, 100) + '...'
-        );
         try {
           const results = await imageGenerator.generate({
             prompt: input.prompt,
             size: input.size || '1024x1024',
           });
-          console.log(
-            '[tool:generate-image] Success, generated',
-            results.length,
-            'image(s)'
-          );
+          const first = results[0];
+          if (!first?.url) {
+            return { success: false, error: 'No image returned.' };
+          }
+          if (!assetStore) {
+            return {
+              success: true,
+              mediaType: first.mediaType,
+              note: 'Image generated but no asset store is configured; it could not be saved.',
+            };
+          }
+          const saved = await assetStore.saveGeneratedImage({
+            dataUrl: first.url,
+          });
           return {
             success: true,
-            count: results.length,
-            mediaType: results[0]?.mediaType,
-            note: 'Image generated. Bytes are not returned in chat. Direct the user to the A+ Content Studio review page to view and download.',
+            images: [
+              {
+                label: input.label,
+                assetId: saved.assetId,
+                url: saved.url,
+              },
+            ],
+            revisedPrompt: first.revisedPrompt,
+            note: 'The image is displayed to the user automatically with its label.',
           };
-        } catch (err: any) {
-          console.error('[tool:generate-image] ERROR:', err.message);
+        } catch (err) {
           return {
             success: false,
-            error: err.message,
+            error: err instanceof Error ? err.message : 'Generation failed.',
           };
         }
       },
@@ -277,14 +977,31 @@ export function createSellerAgent({
   spCache,
   provider,
   imageGenerator,
+  assetStore,
+  imageOps,
   modelTier,
   marketplaceId,
   additionalInstructions,
 }: SellerAgentConfig) {
   // Only include Amazon tools if spCache is available (user has connected their Amazon account)
   const spTools = spCache ? getToolsForAgent(spCache, marketplaceId) : {};
-  const imageTools = imageGenerator ? getImageTools(imageGenerator) : {};
-  const tools = { ...spTools, ...imageTools };
+  // Listings tools additionally need the merchant token from the connection.
+  const listingsTools = spCache?.hasSellerId() ? getListingsTools(spCache) : {};
+  const imageTools = imageGenerator
+    ? getImageTools(imageGenerator, assetStore)
+    : {};
+  const photoTools =
+    imageGenerator && assetStore
+      ? getPhotoTools(imageGenerator, assetStore)
+      : {};
+  const imageEditTools = imageOps ? getImageEditTools(imageOps) : {};
+  const tools = {
+    ...spTools,
+    ...listingsTools,
+    ...imageTools,
+    ...photoTools,
+    ...imageEditTools,
+  };
 
   const hasAmazonConnection = !!spCache;
   const hasImageGeneration = !!imageGenerator;
@@ -304,7 +1021,7 @@ When asked to create images for A+ content or product listings:
    - Lighting and mood
    - Composition and angle
 3. Use appropriate size: 1792x1024 for banners, 1024x1024 for modules, 1024x1792 for mobile.
-4. Generate the image and present the URL to the user.
+4. Generate the image — it is displayed to the user automatically; never paste image URLs.
 5. Offer to generate variations or adjustments.
 
 Example prompt for a tea infuser:
@@ -313,6 +1030,70 @@ glass mug of amber tea, steam rising gently, on a light wood table with scattere
 and a small honey jar in soft focus background. Warm morning sunlight from left side, cozy kitchen
 setting, photorealistic style, 45-degree overhead angle."
 `
+    : '';
+
+  const hasPhotoTools = Boolean(imageGenerator && assetStore);
+  const photoInstructions = hasPhotoTools
+    ? `
+- propose-listing-photos: Generate proposed listing photos of the user's EXACT product
+  from their attached reference photos (image-to-image).
+
+PHOTO WORKFLOW (attachments, labels, proposals):
+- Users attach product photos as a manifest of markdown images labeled "Photo A",
+  "Photo B", ... The asset id is the last path segment of each image URL
+  (/api/a-plus/assets/<assetId>).
+- EVERY image in this conversation has a unique letter label. When you generate new
+  images (propose-listing-photos shots or generate-image), assign the next unused
+  letters — scan the conversation AND the PHOTO LABEL REGISTRY for labels already
+  taken (uploads AND earlier proposals) and continue the sequence. After Photo Z the
+  sequence continues Photo AA, Photo AB, and so on.
+- When the user refers to "Photo B", resolve it to its asset id from the manifest or
+  tool result where Photo B first appeared.
+- Proposing listing photos: use the user's attached photos as referenceAssetIds,
+  write a factual productDescription from what they've told you (colors, materials,
+  parts), and pick a useful shot mix — main-white first if they lack a clean main
+  image, then lifestyle/detail/scale. Ask about the product before proposing if you
+  know nothing about it.
+- All generated and listing images are DISPLAYED to the user automatically with
+  their labels. Never paste image URLs into your reply — refer to images by label.`
+    : '';
+
+  const imageEditInstructions = imageOps
+    ? `
+- crop-image / scale-image / remove-image-background: Edit an existing photo by asset id.
+  Each edit produces a NEW labeled photo (originals are never modified) and is displayed
+  to the user automatically.
+
+IMAGE EDITING GUIDANCE:
+- Amazon main images: remove-image-background with background "white", then crop-image
+  aspect "1:1" if framing needs it, then scale-image to at least 1000px (allowUpscale
+  when the source is small). Chain edits by feeding the previous result's assetId in.
+- remove-image-background is a real segmentation cutout of the photo's pixels — prefer
+  it over generating a new image when the user wants THEIR photo on a clean background.
+- Product-on-scene composites: remove-image-background with background "transparent",
+  then compose-image with the cutout as foreground over a background (an uploaded scene
+  photo or a generate-image backdrop). Composites are secondary/A+ imagery only — never
+  present a composite as the MAIN image.
+- Infographic listing images: prefer generate-infographic over generate-image whenever
+  the image needs READABLE TEXT (benefits, specs, feature callouts) — its text is
+  rendered type, never garbled. Feed it a transparent cutout, keep copy short and
+  factual (fact-sheet claims only), and use brand colors when known. For
+  callout-overlay, place x/y ON the pictured feature and spread callouts apart.
+- Ask before destructive-feeling choices (e.g. tight crops that drop parts of the
+  product); state which photo label each result came from.`
+    : '';
+
+  const hasListingsTools = Boolean(spCache?.hasSellerId());
+  const listingsInstructions = hasListingsTools
+    ? `
+- search-my-listings: Search the seller's OWN listings (by SKU, ASIN, or all). The way to
+  resolve an ASIN or product name to a seller SKU. A listing's identity is its seller SKU —
+  one ASIN can have several listings.
+- get-my-listing: The seller's OWN submitted listing for a SKU — real attributes plus Amazon's
+  open validation issues. Its images are displayed to the user automatically in the chat; you
+  do not need to repeat the image URLs in your reply, but DO comment on what the images show
+  and what is missing. Prefer this over get-listing when the question is about the seller's
+  own listing quality, issues, or images.`
     : '';
 
   const baseInstructions = hasAmazonConnection
@@ -325,7 +1106,7 @@ AVAILABLE TOOLS:
   Use this for listing analysis and critique.
 - get-orders: Get recent orders with filtering by date, status, fulfillment channel.
 - get-order-details: Get specific order details with line items.
-- get-inventory: Check FBA inventory levels by SKU.${imageInstructions}
+- get-inventory: Check FBA inventory levels by SKU.${listingsInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}
 
 LISTING CRITIQUE WORKFLOW:
 When asked to critique, analyze, or improve a listing:

@@ -5,70 +5,236 @@ import { DefaultChatTransport } from 'ai';
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Sparkles, Loader2, ArrowDown, Plus, AlertCircle } from 'lucide-react';
+import {
+  Send,
+  Sparkles,
+  Loader2,
+  ArrowDown,
+  Plus,
+  AlertCircle,
+  Paperclip,
+  X,
+  PanelLeft,
+  Trash2,
+  Square,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { uploadImageAsset } from '@/lib/asset-upload-client';
 import { MessageBubble, type AppMessage } from './message-bubble';
 
-const STORAGE_KEY = 'sellavant-chat';
+type PendingPhoto = {
+  label: string;
+  assetId: string;
+  url: string;
+  fileName: string;
+};
 
-function loadMessages(): AppMessage[] | undefined {
-  if (typeof window === 'undefined') return undefined;
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored) return JSON.parse(stored);
-  } catch {
-    // Ignore parse errors
+const PHOTO_LABEL_PATTERN = /Photo ([A-Z]{1,2})\b/g;
+
+/**
+ * Letters already used anywhere in the conversation (uploads and tool
+ * proposals both label images "Photo <letters>"), so new attachments continue
+ * the sequence instead of colliding.
+ */
+function usedPhotoLetters(
+  messages: AppMessage[],
+  pending: PendingPhoto[]
+): Set<string> {
+  const used = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      const text =
+        part.type === 'text'
+          ? (part as { text?: string }).text
+          : JSON.stringify((part as { output?: unknown }).output ?? '');
+      if (!text) continue;
+      for (const match of text.matchAll(PHOTO_LABEL_PATTERN)) {
+        used.add(match[1]);
+      }
+    }
   }
-  return undefined;
+  for (const photo of pending) {
+    const letter = photo.label.replace('Photo ', '');
+    used.add(letter);
+  }
+  return used;
 }
 
-function saveMessages(messages: AppMessage[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-  } catch {
-    // Ignore quota errors
+/** Spreadsheet-style sequence: A..Z, AA, AB, ... (702 labels). */
+function letterForIndex(index: number): string {
+  if (index < 26) return String.fromCharCode(65 + index);
+  const first = Math.floor(index / 26) - 1;
+  const second = index % 26;
+  return String.fromCharCode(65 + first) + String.fromCharCode(65 + second);
+}
+
+function nextPhotoLetters(used: Set<string>, count: number): string[] {
+  const letters: string[] = [];
+  for (let i = 0; i < 702 && letters.length < count; i++) {
+    const letter = letterForIndex(i);
+    if (!used.has(letter)) letters.push(letter);
   }
+  return letters;
+}
+
+function photoManifest(photos: PendingPhoto[]): string {
+  const lines = photos.map(
+    (photo) => `![${photo.label}](${photo.url} "${photo.fileName}")`
+  );
+  return `Attached product photos (refer to them by label):\n\n${lines.join(
+    '\n'
+  )}`;
+}
+
+// Conversations live server-side (Couchbase); the browser only remembers
+// which conversation it was on.
+const CHAT_ID_KEY = 'sellavant-chat-id';
+
+type ChatSummary = {
+  chatId: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
+};
+
+function newChatId(): string {
+  return `chat_${crypto.randomUUID()}`;
+}
+
+function relativeTime(timestamp: number): string {
+  const seconds = Math.round((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
 export default function ChatPage() {
   const [input, setInput] = useState('');
-  const [chatKey, setChatKey] = useState(0);
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  const [uploadingCount, setUploadingCount] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatIdRef = useRef<string | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatList, setChatList] = useState<ChatSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: '/api/chat' }),
+    () =>
+      new DefaultChatTransport({
+        api: '/api/chat',
+        // The conversation id lives in a ref so the transport always sends the
+        // CURRENT conversation without re-instantiating the chat hook.
+        prepareSendMessagesRequest: ({ id, messages }) => ({
+          body: { id: chatIdRef.current ?? id, messages },
+        }),
+      }),
     []
   );
 
-  const { messages, sendMessage, setMessages, status, error } = useChat<AppMessage>({
-    id: 'sellavant-chat',
-    transport,
-  });
+  const { messages, sendMessage, setMessages, stop, status, error } =
+    useChat<AppMessage>({
+      id: 'sellavant-chat',
+      transport,
+    });
 
   const isStreaming = status === 'submitted' || status === 'streaming';
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
 
-  // Restore messages from localStorage
+  // Resume the last conversation from the server (browser only remembers its id).
   useEffect(() => {
-    const stored = loadMessages();
-    if (stored && stored.length > 0) {
-      setMessages(stored);
-    }
-  }, [chatKey, setMessages]);
+    const storedId = window.localStorage.getItem(CHAT_ID_KEY);
+    const chatId =
+      storedId && /^chat_[a-zA-Z0-9-]{8,64}$/.test(storedId)
+        ? storedId
+        : newChatId();
+    chatIdRef.current = chatId;
+    setActiveChatId(chatId);
+    window.localStorage.setItem(CHAT_ID_KEY, chatId);
+    if (!storedId) return;
 
-  // Persist messages
-  useEffect(() => {
-    if (messages.length > 0) {
-      saveMessages(messages);
-    }
-  }, [messages]);
+    let cancelled = false;
+    fetch(`/api/chats/${chatId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { chat?: { messages?: AppMessage[] } } | null) => {
+        if (cancelled) return;
+        if (data?.chat?.messages?.length) setMessages(data.chat.messages);
+      })
+      .catch(() => {
+        // Offline / not yet saved — start empty.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setMessages]);
 
   const handleNewChat = useCallback(() => {
-    window.localStorage.removeItem(STORAGE_KEY);
+    const chatId = newChatId();
+    chatIdRef.current = chatId;
+    setActiveChatId(chatId);
+    window.localStorage.setItem(CHAT_ID_KEY, chatId);
     setMessages([]);
-    setChatKey((k) => k + 1);
+    setPendingPhotos([]);
   }, [setMessages]);
+
+  const refreshChatList = useCallback(async () => {
+    try {
+      const res = await fetch('/api/chats');
+      if (!res.ok) return;
+      const data = (await res.json()) as { chats?: ChatSummary[] };
+      setChatList(data.chats ?? []);
+    } catch {
+      // Listing is best-effort.
+    }
+  }, []);
+
+  const selectChat = useCallback(
+    async (chatId: string) => {
+      setSidebarOpen(false);
+      if (chatId === chatIdRef.current) return;
+      try {
+        const res = await fetch(`/api/chats/${chatId}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          chat?: { messages?: AppMessage[] };
+        };
+        chatIdRef.current = chatId;
+        setActiveChatId(chatId);
+        window.localStorage.setItem(CHAT_ID_KEY, chatId);
+        setMessages(data.chat?.messages ?? []);
+        setPendingPhotos([]);
+      } catch {
+        // Leave the current conversation in place on failure.
+      }
+    },
+    [setMessages]
+  );
+
+  const deleteChatById = useCallback(
+    async (chatId: string) => {
+      try {
+        await fetch(`/api/chats/${chatId}`, { method: 'DELETE' });
+        setChatList((current) =>
+          current.filter((chat) => chat.chatId !== chatId)
+        );
+        if (chatId === chatIdRef.current) handleNewChat();
+      } catch {
+        // Best-effort.
+      }
+    },
+    [handleNewChat]
+  );
+
+  // Keep the sidebar list fresh: on mount and after each completed turn
+  // (a first turn creates the conversation and gives it its title).
+  useEffect(() => {
+    if (!isStreaming) void refreshChatList();
+  }, [isStreaming, refreshChatList]);
 
   const suggestedPrompts = [
     'Critique my tea infusion listing',
@@ -99,13 +265,63 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const handleFilesSelected = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploadError(null);
+    const selected = Array.from(files).filter((file) =>
+      file.type.startsWith('image/')
+    );
+    if (!selected.length) return;
+
+    setUploadingCount((count) => count + selected.length);
+    try {
+      const uploaded = await Promise.all(
+        selected.map((file) => uploadImageAsset(file))
+      );
+      setPendingPhotos((current) => {
+        const used = usedPhotoLetters(messages, current);
+        const letters = nextPhotoLetters(used, uploaded.length);
+        const labeled = uploaded
+          .filter(
+            (asset) => !current.some((photo) => photo.assetId === asset.assetId)
+          )
+          .map((asset, index) => ({
+            label: `Photo ${letters[index] ?? '?'}`,
+            assetId: asset.assetId,
+            url: asset.url,
+            fileName: asset.fileName,
+          }));
+        return [...current, ...labeled];
+      });
+    } catch (error) {
+      setUploadError(
+        error instanceof Error ? error.message : 'Photo upload failed.'
+      );
+    } finally {
+      setUploadingCount((count) => count - selected.length);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const removePendingPhoto = (assetId: string) => {
+    setPendingPhotos((current) =>
+      current.filter((photo) => photo.assetId !== assetId)
+    );
+  };
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim();
-    if (!text || isStreaming) return;
+    if ((!text && pendingPhotos.length === 0) || isStreaming) return;
+    if (uploadingCount > 0) return;
 
+    const photos = pendingPhotos;
     setInput('');
-    await sendMessage({ text });
+    setPendingPhotos([]);
+    const combined = photos.length
+      ? `${text ? `${text}\n\n` : ''}${photoManifest(photos)}`
+      : text;
+    await sendMessage({ text: combined });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -119,112 +335,266 @@ export default function ChatPage() {
     setInput(prompt);
   };
 
+  const activeTitle =
+    chatList.find((chat) => chat.chatId === activeChatId)?.title ?? 'New chat';
+
   return (
-    <div className="relative flex h-[calc(100vh-3.5rem)] flex-col">
-      {/* Messages area */}
-      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          {messages.length === 0 ? (
-            <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
-              <div className="rounded-full bg-primary/10 p-4">
-                <Sparkles className="h-8 w-8 text-primary" />
-              </div>
-              <h3 className="mt-4 text-lg font-semibold">
-                How can I help grow your Amazon business?
-              </h3>
-              <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                I can analyze your listings, review orders, check inventory, and suggest
-                improvements to boost your sales.
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2 px-2">
-                {suggestedPrompts.map((prompt, i) => (
-                  <Button
-                    key={i}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePromptClick(prompt)}
-                    className="text-xs whitespace-normal h-auto py-2 text-left"
-                  >
-                    {prompt}
-                  </Button>
-                ))}
-              </div>
-            </div>
+    <div className="flex h-[calc(100vh-3.5rem)]">
+      {/* Mobile sidebar backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/30 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Conversation sidebar */}
+      <aside
+        className={cn(
+          'z-40 w-72 shrink-0 flex-col border-r bg-background',
+          'fixed bottom-0 left-0 top-14 md:static md:flex',
+          sidebarOpen ? 'flex' : 'hidden'
+        )}
+      >
+        <div className="p-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start gap-2"
+            disabled={isStreaming}
+            onClick={() => {
+              handleNewChat();
+              setSidebarOpen(false);
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            New chat
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 pb-3">
+          {chatList.length === 0 ? (
+            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+              No saved conversations yet.
+            </p>
           ) : (
-            <div className="space-y-6">
-              {messages.map((message, index) => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  isLast={index === messages.length - 1}
-                  isStreaming={isStreaming}
-                />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
+            chatList.map((chat) => (
+              <div
+                key={chat.chatId}
+                className={cn(
+                  'group flex items-center gap-1 rounded-md px-2 py-1.5',
+                  chat.chatId === activeChatId
+                    ? 'bg-muted'
+                    : 'hover:bg-muted/60'
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => void selectChat(chat.chatId)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block truncate text-sm">{chat.title}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {relativeTime(chat.updatedAt)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteChatById(chat.chatId)}
+                  className="invisible rounded p-1 text-muted-foreground hover:text-destructive group-hover:visible"
+                  title="Delete conversation"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))
           )}
         </div>
-      </div>
+      </aside>
 
-      {/* Scroll to bottom button */}
-      {showScrollButton && (
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={scrollToBottom}
-          className="absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full shadow-md"
+      {/* Chat column */}
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {/* Conversation header */}
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 md:hidden"
+            onClick={() => setSidebarOpen(true)}
+            title="Conversations"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </Button>
+          <span className="truncate text-sm font-medium">
+            {messages.length === 0 ? 'New chat' : activeTitle}
+          </span>
+        </div>
+
+        {/* Messages area */}
+        <div
+          ref={scrollContainerRef}
+          className="min-h-0 flex-1 overflow-y-auto"
         >
-          <ArrowDown className="h-4 w-4" />
-        </Button>
-      )}
-
-      {/* Error banner */}
-      {error && (
-        <div className="shrink-0 border-t border-destructive/30 bg-destructive/5 px-4 py-3">
-          <div className="mx-auto flex max-w-3xl items-start gap-2">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-            <p className="text-sm text-destructive">{error.message || 'Something went wrong'}</p>
+          <div className="mx-auto max-w-3xl px-4 py-6">
+            {messages.length === 0 ? (
+              <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
+                <div className="rounded-full bg-primary/10 p-4">
+                  <Sparkles className="h-8 w-8 text-primary" />
+                </div>
+                <h3 className="mt-4 text-lg font-semibold">
+                  How can I help grow your Amazon business?
+                </h3>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  I can analyze your listings, review orders, check inventory,
+                  and suggest improvements to boost your sales.
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2 px-2">
+                  {suggestedPrompts.map((prompt, i) => (
+                    <Button
+                      key={i}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePromptClick(prompt)}
+                      className="text-xs whitespace-normal h-auto py-2 text-left"
+                    >
+                      {prompt}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {messages.map((message, index) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    isLast={index === messages.length - 1}
+                    isStreaming={isStreaming}
+                  />
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Input area */}
-      <div className="shrink-0 border-t bg-background">
-        <div className="mx-auto max-w-3xl px-2 py-3 sm:px-4 sm:py-4">
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={handleNewChat}
-              disabled={isStreaming || messages.length === 0}
-              className="hidden sm:flex h-11 w-11 shrink-0 rounded-full"
-              title="New chat"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-            <Textarea
-              placeholder="Ask about listings, orders..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isStreaming}
-              className="h-11 min-h-11 max-h-11 flex-1 resize-none overflow-hidden rounded-2xl py-2.5 text-base sm:text-sm"
-              rows={1}
-            />
-            <Button
-              type="submit"
-              disabled={!input.trim() || isStreaming}
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full"
-            >
+        {/* Scroll to bottom button */}
+        {showScrollButton && (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={scrollToBottom}
+            className="absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full shadow-md"
+          >
+            <ArrowDown className="h-4 w-4" />
+          </Button>
+        )}
+
+        {/* Error banner */}
+        {error && (
+          <div className="shrink-0 border-t border-destructive/30 bg-destructive/5 px-4 py-3">
+            <div className="mx-auto flex max-w-3xl items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <p className="text-sm text-destructive">
+                {error.message || 'Something went wrong'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Input area */}
+        <div className="shrink-0 border-t bg-background">
+          <div className="mx-auto max-w-3xl px-2 py-3 sm:px-4 sm:py-4">
+            {(pendingPhotos.length > 0 ||
+              uploadingCount > 0 ||
+              uploadError) && (
+              <div className="mb-2">
+                {uploadError && (
+                  <p className="mb-1 text-xs text-destructive">{uploadError}</p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {pendingPhotos.map((photo) => (
+                    <figure key={photo.assetId} className="relative w-16">
+                      <img
+                        src={`${photo.url}?w=160`}
+                        alt={photo.label}
+                        className="h-16 w-16 rounded-md border bg-white object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removePendingPhoto(photo.assetId)}
+                        className="absolute -right-1.5 -top-1.5 rounded-full border bg-background p-0.5 shadow-sm"
+                        title={`Remove ${photo.label}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                      <figcaption className="mt-0.5 truncate text-center text-[10px] text-muted-foreground">
+                        {photo.label}
+                      </figcaption>
+                    </figure>
+                  ))}
+                  {uploadingCount > 0 && (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-md border">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            <form onSubmit={handleSubmit} className="flex gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => handleFilesSelected(e.target.files)}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isStreaming}
+                className="h-11 w-11 shrink-0 rounded-full"
+                title="Attach product photos"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <Textarea
+                placeholder="Ask about listings, orders..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isStreaming}
+                className="h-11 min-h-11 max-h-11 flex-1 resize-none overflow-hidden rounded-2xl py-2.5 text-base sm:text-sm"
+                rows={1}
+              />
               {isStreaming ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Button
+                  type="button"
+                  onClick={() => void stop()}
+                  size="icon"
+                  variant="destructive"
+                  className="h-11 w-11 shrink-0 rounded-full"
+                  title="Stop generating"
+                >
+                  <Square className="h-4 w-4" />
+                </Button>
               ) : (
-                <Send className="h-4 w-4" />
+                <Button
+                  type="submit"
+                  disabled={
+                    (!input.trim() && pendingPhotos.length === 0) ||
+                    uploadingCount > 0
+                  }
+                  size="icon"
+                  className="h-11 w-11 shrink-0 rounded-full"
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
               )}
-            </Button>
-          </form>
+            </form>
+          </div>
         </div>
       </div>
     </div>
