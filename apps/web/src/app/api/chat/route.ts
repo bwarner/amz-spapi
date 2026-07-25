@@ -8,17 +8,22 @@ import {
   createSellerAgent,
   trimHistory,
   type SellerAssetStore,
+  type SellerListingWrites,
 } from '@amz-spapi/seller-agent';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import { SpApiClient } from '@farvisionllc/sp-client';
 import { SpCache } from '@amz-spapi/sp-cache';
 import { auth0 } from '../../../lib/auth0';
 import { resolveAmazonConnection } from '../../../lib/amazon-connections';
+import { zipSync } from 'fflate';
 import {
   loadAssetBytes,
+  persistGeneratedFileAsset,
   persistGeneratedImageAsset,
 } from '../../../lib/media-assets';
 import { createImageOps } from '../../../lib/image-ops';
+import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
+import { createListingWrites } from '../../../lib/listing-writes';
 import {
   getChatMeta,
   isValidChatId,
@@ -34,6 +39,7 @@ const PHOTO_TOOL_PART_TYPES = new Set([
   'tool-propose-listing-photos',
   'tool-generate-image',
   'tool-crop-image',
+  'tool-trim-image',
   'tool-scale-image',
   'tool-remove-image-background',
   'tool-compose-image',
@@ -150,6 +156,7 @@ export async function POST(request: Request) {
   // Create SP client and cache only if credentials are available
   // The agent will work without Amazon connection for basic conversations
   let spCache: SpCache | undefined;
+  let listingWrites: SellerListingWrites | undefined;
 
   if (clientId && refreshToken) {
     const spClient = new SpApiClient({
@@ -165,6 +172,23 @@ export async function POST(request: Request) {
       sellerId,
       marketplaceId: userMarketplaceId,
     });
+
+    // Live listing writes: preview is Amazon's dry run; apply/revert sit
+    // behind chat-side human approval. Optional env allowlist restricts
+    // writes to designated test SKUs (the trust-ladder training wheels).
+    if (sellerId) {
+      const skuAllowlist = (process.env['LISTING_WRITE_SKU_ALLOWLIST'] ?? '')
+        .split(',')
+        .map((sku) => sku.trim())
+        .filter(Boolean);
+      listingWrites = createListingWrites({
+        userId: session.user.sub,
+        sellerId,
+        marketplaceId: userMarketplaceId,
+        spClient,
+        skuAllowlist: skuAllowlist.length ? skuAllowlist : undefined,
+      });
+    }
   }
 
   const imageGenerator = provider.imageGenerator?.();
@@ -185,6 +209,42 @@ export async function POST(request: Request) {
       return {
         assetId: asset.assetId,
         url: `/api/a-plus/assets/${asset.assetId}`,
+      };
+    },
+    exportPhotoZip: async ({ zipName, files }) => {
+      const entries: Record<string, Uint8Array> = {};
+      for (const file of files) {
+        const asset = await loadAssetBytes({
+          userId: chatUserId,
+          assetId: file.assetId,
+        });
+        if (!asset) {
+          throw new Error(
+            `Asset ${file.assetId} not found — use asset ids from this conversation's photos.`
+          );
+        }
+        // Model-chosen names could collide; suffix duplicates instead of
+        // silently overwriting an entry.
+        let name = file.fileName;
+        for (let n = 2; entries[name]; n++) {
+          name = file.fileName.replace(/(\.[a-z]+)$/i, `-${n}$1`);
+        }
+        entries[name] = asset.bytes;
+      }
+      // Photos are already compressed — store, don't deflate (same as the
+      // A+ export kit).
+      const zipped = zipSync(entries, { level: 0 });
+      const zipAsset = await persistGeneratedFileAsset({
+        userId: chatUserId,
+        bytes: Buffer.from(zipped),
+        mimeType: 'application/zip',
+        extension: 'zip',
+        feature: 'listings',
+      });
+      return {
+        downloadUrl: `/api/a-plus/assets/${zipAsset.assetId}?download=1&filename=${zipName}.zip`,
+        fileCount: files.length,
+        sizeBytes: zipAsset.sizeBytes,
       };
     },
   };
@@ -221,6 +281,9 @@ export async function POST(request: Request) {
     imageGenerator,
     assetStore,
     imageOps: createImageOps(chatUserId),
+    webOps: createWebOps(chatUserId),
+    sourcingOps: createSourcingOps(),
+    listingWrites,
     marketplaceId: userMarketplaceId,
     additionalInstructions: registryInstructions,
   });

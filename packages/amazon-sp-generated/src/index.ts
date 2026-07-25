@@ -19,6 +19,8 @@ const schemas = [
   'catalogItems_2022-04-01.json',
   'ordersV0.json',
   'listingsItems_2021-08-01.json',
+  'financesV0.json',
+  'fulfillmentInboundV0.json',
   // Add more SP-API schemas here as needed
 ];
 

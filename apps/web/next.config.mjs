@@ -25,6 +25,10 @@ const nextConfig = {
   serverExternalPackages: [
     '@vercel/oidc-aws-credentials-provider',
     '@aws-sdk/credential-provider-node',
+    // Background removal: native ONNX runtime + model files resolved relative
+    // to the package dir — bundling breaks both. Must load from node_modules.
+    '@imgly/background-removal-node',
+    'onnxruntime-node',
   ],
   webpack: (config) => {
     config.resolve.extensionAlias = {

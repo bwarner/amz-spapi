@@ -16,6 +16,9 @@ export interface AIProviderConfig {
 }
 
 export interface ImageGenerator {
+  /** Resolved backend model slug (e.g. "openai/gpt-image-1") — ground truth
+   * for anything user-facing, so the agent never guesses its own backend. */
+  readonly modelSlug?: string;
   generate(params: {
     prompt: string;
     size?: '1024x1024' | '1792x1024' | '1024x1792';

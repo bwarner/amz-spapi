@@ -12,6 +12,8 @@ const TTL = {
   ORDER_ITEMS: 15 * 60, // 15 minutes
   INVENTORY: 30 * 60, // 30 minutes — changes with sales
   LISTINGS: 5 * 60, // 5 minutes — the seller's own edits must read back fresh
+  FINANCES: 60 * 60, // 1 hour — settlements post slowly
+  INBOUND: 15 * 60, // 15 minutes — shipment status progresses
 } as const;
 
 const SCOPE = 'sp_cache';
@@ -21,6 +23,8 @@ const COLLECTIONS = {
   ORDERS: 'orders',
   INVENTORY: 'inventory',
   LISTINGS: 'listings',
+  FINANCES: 'finances',
+  INBOUND: 'inbound',
 } as const;
 
 function cacheKey(type: string, marketplace: string, id: string): string {
@@ -232,6 +236,143 @@ export class SpCache {
       result,
       TTL.LISTINGS
     );
+    return result;
+  }
+
+  /**
+   * Settlement groups (payout periods). Cached 1 hour. No buyer PII.
+   */
+  async listFinancialEventGroups(params?: {
+    startedAfter?: string;
+    startedBefore?: string;
+    maxResultsPerPage?: number;
+    nextToken?: string;
+  }) {
+    const cacheId = JSON.stringify([
+      this.sellerId,
+      params?.startedAfter,
+      params?.startedBefore,
+      params?.maxResultsPerPage,
+      params?.nextToken,
+    ]);
+    const key = cacheKey(
+      'finGroups',
+      this.marketplaceId,
+      Buffer.from(cacheId).toString('base64url')
+    );
+    if (!this.bypassCache) {
+      const cached = await getDocument<any>(SCOPE, COLLECTIONS.FINANCES, key);
+      if (cached) return cached;
+    }
+    const result = await this.spClient.listFinancialEventGroups(params);
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.FINANCES,
+      key,
+      result,
+      TTL.FINANCES
+    );
+    return result;
+  }
+
+  /**
+   * Financial events by window or for one order. Cached 1 hour. No buyer PII
+   * (events carry amounts, fees, order ids — not buyer identity).
+   */
+  async listFinancialEvents(params?: {
+    postedAfter?: string;
+    postedBefore?: string;
+    orderId?: string;
+    maxResultsPerPage?: number;
+    nextToken?: string;
+  }) {
+    const cacheId = JSON.stringify([
+      this.sellerId,
+      params?.postedAfter,
+      params?.postedBefore,
+      params?.orderId,
+      params?.maxResultsPerPage,
+      params?.nextToken,
+    ]);
+    const key = cacheKey(
+      'finEvents',
+      this.marketplaceId,
+      Buffer.from(cacheId).toString('base64url')
+    );
+    if (!this.bypassCache) {
+      const cached = await getDocument<any>(SCOPE, COLLECTIONS.FINANCES, key);
+      if (cached) return cached;
+    }
+    const result = params?.orderId
+      ? await this.spClient.listOrderFinancialEvents(params.orderId)
+      : await this.spClient.listFinancialEvents(params);
+    await upsertDocument(
+      SCOPE,
+      COLLECTIONS.FINANCES,
+      key,
+      result,
+      TTL.FINANCES
+    );
+    return result;
+  }
+
+  /**
+   * Inbound (FBA) shipments; optionally items for one shipment. Cached 15
+   * minutes. Ship-from address is the SELLER's — not buyer PII.
+   */
+  async getInboundShipments(params: {
+    shipmentStatusList?: (
+      | 'WORKING'
+      | 'READY_TO_SHIP'
+      | 'SHIPPED'
+      | 'RECEIVING'
+      | 'CANCELLED'
+      | 'DELETED'
+      | 'CLOSED'
+      | 'ERROR'
+      | 'IN_TRANSIT'
+      | 'DELIVERED'
+      | 'CHECKED_IN'
+    )[];
+    shipmentIdList?: string[];
+    lastUpdatedAfter?: string;
+    lastUpdatedBefore?: string;
+    nextToken?: string;
+  }) {
+    const cacheId = JSON.stringify([
+      this.sellerId,
+      params.shipmentStatusList?.slice().sort(),
+      params.shipmentIdList?.slice().sort(),
+      params.lastUpdatedAfter,
+      params.lastUpdatedBefore,
+      params.nextToken,
+    ]);
+    const key = cacheKey(
+      'inShipments',
+      this.marketplaceId,
+      Buffer.from(cacheId).toString('base64url')
+    );
+    if (!this.bypassCache) {
+      const cached = await getDocument<any>(SCOPE, COLLECTIONS.INBOUND, key);
+      if (cached) return cached;
+    }
+    const result = await this.spClient.getInboundShipments(params);
+    await upsertDocument(SCOPE, COLLECTIONS.INBOUND, key, result, TTL.INBOUND);
+    return result;
+  }
+
+  async getInboundShipmentItems(shipmentId: string) {
+    const key = cacheKey(
+      'inItems',
+      this.marketplaceId,
+      `${this.sellerId}:${shipmentId}`
+    );
+    if (!this.bypassCache) {
+      const cached = await getDocument<any>(SCOPE, COLLECTIONS.INBOUND, key);
+      if (cached) return cached;
+    }
+    const result = await this.spClient.getInboundShipmentItems({ shipmentId });
+    await upsertDocument(SCOPE, COLLECTIONS.INBOUND, key, result, TTL.INBOUND);
     return result;
   }
 

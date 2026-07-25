@@ -31,7 +31,14 @@ import * as couchbase from 'couchbase';
 const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
   {
     scope: 'sp_cache',
-    collections: ['catalog', 'orders', 'inventory', 'listings'],
+    collections: [
+      'catalog',
+      'orders',
+      'inventory',
+      'listings',
+      'finances',
+      'inbound',
+    ],
   },
   {
     scope: 'credentials',
@@ -47,8 +54,10 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
   },
   {
     // Platform-independent Product domain (Product → Variant → Listing).
+    // listing_versions: pre-write snapshots of live Amazon listing attributes
+    // (the undo for listing image writes).
     scope: 'catalog',
-    collections: ['products', 'variants', 'listings'],
+    collections: ['products', 'variants', 'listings', 'listing_versions'],
   },
   {
     // Seller-assistant chat: meta docs + one doc per message (TTL'd).
@@ -386,6 +395,16 @@ async function main() {
   await createPrimaryIndex(cluster, bucketName, 'catalog', 'products');
   await createPrimaryIndex(cluster, bucketName, 'catalog', 'variants');
   await createPrimaryIndex(cluster, bucketName, 'catalog', 'listings');
+  // catalog.listing_versions — pre-write listing snapshots, latest-first per SKU
+  await createPrimaryIndex(cluster, bucketName, 'catalog', 'listing_versions');
+  await createIndex(
+    cluster,
+    bucketName,
+    'catalog',
+    'listing_versions',
+    'idx_listing_versions_user_sku',
+    ['`userId`', '`sku`', '`capturedAt`']
+  );
   await createIndex(
     cluster,
     bucketName,

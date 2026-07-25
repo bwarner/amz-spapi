@@ -6,6 +6,8 @@ import axios, {
 import type { paths as CatalogPaths } from '@amz-spapi/amazon-sp-generated/lib/catalogItems_2022-04-01';
 import type { paths as OrdersPaths } from '@amz-spapi/amazon-sp-generated/lib/ordersV0';
 import type { paths as ListingsPaths } from '@amz-spapi/amazon-sp-generated/lib/listingsItems_2021-08-01';
+import type { paths as FinancesPaths } from '@amz-spapi/amazon-sp-generated/lib/financesV0';
+import type { paths as InboundPaths } from '@amz-spapi/amazon-sp-generated/lib/fulfillmentInboundV0';
 
 export interface SpApiClientConfig {
   clientId: string; // LWA Client ID
@@ -42,6 +44,39 @@ type ListingsItemResponse =
   ListingsPaths['/listings/2021-08-01/items/{sellerId}/{sku}']['get']['responses']['200']['content']['application/json'];
 type ListingsSearchResponse =
   ListingsPaths['/listings/2021-08-01/items/{sellerId}']['get']['responses']['200']['content']['application/json'];
+type ListingsPatchResponse =
+  ListingsPaths['/listings/2021-08-01/items/{sellerId}/{sku}']['patch']['responses']['200']['content']['application/json'];
+
+export type ListingsPatchOperation = {
+  op: 'add' | 'replace' | 'merge' | 'delete';
+  path: string;
+  value?: Array<Record<string, unknown>>;
+};
+
+type FinancialEventGroupsResponse =
+  FinancesPaths['/finances/v0/financialEventGroups']['get']['responses']['200']['content']['application/json'];
+type FinancialEventsResponse =
+  FinancesPaths['/finances/v0/financialEvents']['get']['responses']['200']['content']['application/json'];
+type OrderFinancialEventsResponse =
+  FinancesPaths['/finances/v0/orders/{orderId}/financialEvents']['get']['responses']['200']['content']['application/json'];
+
+type InboundShipmentsResponse =
+  InboundPaths['/fba/inbound/v0/shipments']['get']['responses']['200']['content']['application/json'];
+type InboundShipmentItemsResponse =
+  InboundPaths['/fba/inbound/v0/shipments/{shipmentId}/items']['get']['responses']['200']['content']['application/json'];
+
+export type InboundShipmentStatus =
+  | 'WORKING'
+  | 'READY_TO_SHIP'
+  | 'SHIPPED'
+  | 'RECEIVING'
+  | 'CANCELLED'
+  | 'DELETED'
+  | 'CLOSED'
+  | 'ERROR'
+  | 'IN_TRANSIT'
+  | 'DELIVERED'
+  | 'CHECKED_IN';
 
 export type ListingsIncludedData =
   | 'summaries'
@@ -430,6 +465,168 @@ export class SpApiClient {
       }
     );
 
+    return response.data;
+  }
+
+  /**
+   * Patch the seller's own listing (JSON Patch on attributes). Pass
+   * mode 'VALIDATION_PREVIEW' for Amazon's dry run — the full patch is
+   * validated with ZERO effect on the live listing.
+   * PATCH /listings/2021-08-01/items/{sellerId}/{sku}
+   */
+  async patchListingsItem(params: {
+    sku: string;
+    productType: string;
+    patches: ListingsPatchOperation[];
+    sellerId?: string;
+    marketplaceIds?: string[];
+    mode?: 'VALIDATION_PREVIEW';
+    issueLocale?: string;
+  }): Promise<ListingsPatchResponse> {
+    const sellerId = this.requireSellerId(params.sellerId);
+    const marketplaceIds = params.marketplaceIds || [this.config.marketplaceId];
+
+    const response = await this.httpClient.patch<ListingsPatchResponse>(
+      `/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(
+        params.sku
+      )}`,
+      {
+        productType: params.productType,
+        patches: params.patches,
+      },
+      {
+        params: {
+          marketplaceIds: marketplaceIds.join(','),
+          mode: params.mode,
+          issueLocale: params.issueLocale,
+        },
+      }
+    );
+
+    return response.data;
+  }
+
+  // ========================================
+  // Finances API (v0)
+  // ========================================
+
+  /**
+   * List settlement groups (payout periods with totals and status).
+   * GET /finances/v0/financialEventGroups
+   */
+  async listFinancialEventGroups(params?: {
+    startedAfter?: string;
+    startedBefore?: string;
+    maxResultsPerPage?: number;
+    nextToken?: string;
+  }): Promise<FinancialEventGroupsResponse> {
+    const response = await this.httpClient.get<FinancialEventGroupsResponse>(
+      '/finances/v0/financialEventGroups',
+      {
+        params: {
+          FinancialEventGroupStartedAfter: params?.startedAfter,
+          FinancialEventGroupStartedBefore: params?.startedBefore,
+          MaxResultsPerPage: params?.maxResultsPerPage,
+          NextToken: params?.nextToken,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  /**
+   * List financial events (fees, refunds, charges) by posted-date window.
+   * GET /finances/v0/financialEvents
+   */
+  async listFinancialEvents(params?: {
+    postedAfter?: string;
+    postedBefore?: string;
+    maxResultsPerPage?: number;
+    nextToken?: string;
+  }): Promise<FinancialEventsResponse> {
+    const response = await this.httpClient.get<FinancialEventsResponse>(
+      '/finances/v0/financialEvents',
+      {
+        params: {
+          PostedAfter: params?.postedAfter,
+          PostedBefore: params?.postedBefore,
+          MaxResultsPerPage: params?.maxResultsPerPage,
+          NextToken: params?.nextToken,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  /**
+   * Financial events for one order (fees/charges/promotions on that order).
+   * GET /finances/v0/orders/{orderId}/financialEvents
+   */
+  async listOrderFinancialEvents(
+    orderId: string
+  ): Promise<OrderFinancialEventsResponse> {
+    const response = await this.httpClient.get<OrderFinancialEventsResponse>(
+      `/finances/v0/orders/${encodeURIComponent(orderId)}/financialEvents`
+    );
+    return response.data;
+  }
+
+  // ========================================
+  // Fulfillment Inbound API (v0)
+  // ========================================
+
+  /**
+   * List inbound (FBA) shipments by status/ids or date range.
+   * GET /fba/inbound/v0/shipments
+   */
+  async getInboundShipments(params: {
+    shipmentStatusList?: InboundShipmentStatus[];
+    shipmentIdList?: string[];
+    lastUpdatedAfter?: string;
+    lastUpdatedBefore?: string;
+    nextToken?: string;
+    marketplaceId?: string;
+  }): Promise<InboundShipmentsResponse> {
+    const queryType = params.nextToken
+      ? 'NEXT_TOKEN'
+      : params.shipmentStatusList?.length || params.shipmentIdList?.length
+      ? 'SHIPMENT'
+      : 'DATE_RANGE';
+    const response = await this.httpClient.get<InboundShipmentsResponse>(
+      '/fba/inbound/v0/shipments',
+      {
+        params: {
+          QueryType: queryType,
+          ShipmentStatusList: params.shipmentStatusList?.join(','),
+          ShipmentIdList: params.shipmentIdList?.join(','),
+          LastUpdatedAfter: params.lastUpdatedAfter,
+          LastUpdatedBefore: params.lastUpdatedBefore,
+          NextToken: params.nextToken,
+          MarketplaceId: params.marketplaceId ?? this.config.marketplaceId,
+        },
+      }
+    );
+    return response.data;
+  }
+
+  /**
+   * Items in one inbound shipment (SKU, expected vs received quantities).
+   * GET /fba/inbound/v0/shipments/{shipmentId}/items
+   */
+  async getInboundShipmentItems(params: {
+    shipmentId: string;
+    marketplaceId?: string;
+  }): Promise<InboundShipmentItemsResponse> {
+    const response = await this.httpClient.get<InboundShipmentItemsResponse>(
+      `/fba/inbound/v0/shipments/${encodeURIComponent(
+        params.shipmentId
+      )}/items`,
+      {
+        params: {
+          MarketplaceId: params.marketplaceId ?? this.config.marketplaceId,
+        },
+      }
+    );
     return response.data;
   }
 

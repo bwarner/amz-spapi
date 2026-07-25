@@ -100,6 +100,7 @@ export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
       const model =
         IMAGE_MODELS[variant] ?? IMAGE_MODELS[DEFAULT_IMAGE_VARIANT];
       return {
+        modelSlug: model.slug,
         async generate(params: Parameters<ImageGenerator['generate']>[0]) {
           // Per-request quality wins over the model/env default; only the
           // size-based backend (gpt-image-1) honors it — others ignore it.

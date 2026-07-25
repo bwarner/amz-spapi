@@ -52,6 +52,15 @@ const TOOL_LABELS: Record<string, [string, string]> = {
   'get-orders': ['Fetching orders...', 'Orders retrieved'],
   'get-order-details': ['Fetching order details...', 'Order details retrieved'],
   'get-inventory': ['Checking inventory...', 'Inventory retrieved'],
+  'get-inbound-shipments': [
+    'Fetching inbound shipments...',
+    'Inbound shipments retrieved',
+  ],
+  'get-settlements': ['Fetching settlements...', 'Settlements retrieved'],
+  'get-financial-events': [
+    'Fetching financial events...',
+    'Financial events retrieved',
+  ],
   'get-my-listing': ['Fetching your listing...', 'Your listing retrieved'],
   'search-my-listings': [
     'Searching your listings...',
@@ -63,11 +72,52 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Photo proposals ready',
   ],
   'crop-image': ['Cropping image...', 'Image cropped'],
+  'trim-image': ['Trimming empty space...', 'Image trimmed'],
+  'read-page': ['Reading page...', 'Page read'],
   'compose-image': ['Compositing images...', 'Images composited'],
   'generate-infographic': ['Rendering infographic...', 'Infographic rendered'],
+  'export-photo-set': ['Bundling photo set...', 'Photo set ready to download'],
   'scale-image': ['Scaling image...', 'Image scaled'],
   'remove-image-background': ['Removing background...', 'Background removed'],
+  'preview-listing-images': [
+    'Validating with Amazon (dry run)...',
+    'Amazon validation preview complete',
+  ],
+  'apply-listing-images': [
+    'Updating the live listing...',
+    'Listing update submitted',
+  ],
+  'revert-listing-images': [
+    'Reverting listing images...',
+    'Listing revert submitted',
+  ],
+  'check-listing-status': [
+    'Checking listing health...',
+    'Listing status retrieved',
+  ],
 };
+
+/** Human-readable descriptions for approval-gated (live write) tools. */
+const APPROVAL_TOOL_SUMMARIES: Record<string, string> = {
+  'apply-listing-images':
+    'Write these images to the LIVE Amazon listing (a snapshot is saved first)',
+  'revert-listing-images':
+    'Restore this listing’s images from the stored snapshot',
+};
+
+function approvalSummary(toolName: string, input: unknown): string {
+  const base = APPROVAL_TOOL_SUMMARIES[toolName] ?? `Run ${toolName}`;
+  const sku = (input as { sku?: string } | null)?.sku;
+  const count = (input as { imageAssetIds?: string[] } | null)?.imageAssetIds
+    ?.length;
+  return [
+    base,
+    sku ? `— SKU ${sku}` : '',
+    count ? `(${count} image${count === 1 ? '' : 's'})` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
 
 const LISTING_IMAGE_TOOL_TYPES = new Set([
   'tool-get-my-listing',
@@ -75,6 +125,7 @@ const LISTING_IMAGE_TOOL_TYPES = new Set([
   'tool-propose-listing-photos',
   'tool-generate-image',
   'tool-crop-image',
+  'tool-trim-image',
   'tool-scale-image',
   'tool-remove-image-background',
   'tool-compose-image',
@@ -204,10 +255,12 @@ export function MessageBubble({
   message,
   isLast,
   isStreaming,
+  onApprovalResponse,
 }: {
   message: AppMessage;
   isLast: boolean;
   isStreaming: boolean;
+  onApprovalResponse?: (id: string, approved: boolean) => void;
 }) {
   const isUser = message.role === 'user';
 
@@ -215,6 +268,11 @@ export function MessageBubble({
   const toolCalls: { toolName: string; state: string }[] = [];
   const aplusDocs: APlusDocument[] = [];
   const listingImages: Array<{ url: string; label?: string }> = [];
+  const pendingApprovals: Array<{
+    approvalId: string;
+    toolName: string;
+    input: unknown;
+  }> = [];
   const seenImageUrls = new Set<string>();
   let textContent = '';
 
@@ -228,6 +286,18 @@ export function MessageBubble({
       if (!toolName) continue;
 
       toolCalls.push({ toolName, state: part.state ?? 'input-streaming' });
+
+      if (part.state === 'approval-requested') {
+        const approval = (part as unknown as { approval?: { id?: string } })
+          .approval;
+        if (approval?.id) {
+          pendingApprovals.push({
+            approvalId: approval.id,
+            toolName,
+            input: (part as unknown as { input?: unknown }).input,
+          });
+        }
+      }
 
       if (
         part.type === APLUS_TOOL_PART_TYPE &&
@@ -290,6 +360,43 @@ export function MessageBubble({
           <div className="mb-3 space-y-4">
             {aplusDocs.map((doc, i) => (
               <APlusPreview key={i} doc={doc} />
+            ))}
+          </div>
+        )}
+
+        {/* Live-write approval prompts */}
+        {pendingApprovals.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {pendingApprovals.map((approval) => (
+              <div
+                key={approval.approvalId}
+                className="rounded-lg border border-amber-400/60 bg-amber-50 p-3 dark:bg-amber-950/30"
+              >
+                <p className="text-sm font-medium">Approval required</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {approvalSummary(approval.toolName, approval.input)}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onApprovalResponse?.(approval.approvalId, true)
+                    }
+                    className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onApprovalResponse?.(approval.approvalId, false)
+                    }
+                    className="rounded-md border px-3 py-1.5 text-sm"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         )}

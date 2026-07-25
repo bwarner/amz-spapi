@@ -3,7 +3,9 @@ import { getDocument, upsertDocument } from '@amz-spapi/couchbase-utils';
 
 const SCOPE = 'a_plus';
 const COLLECTION = 'source_cache';
-const SCHEMA_VERSION = 1;
+// v3 stores {facts, text, details}; older docs are ignored and overwritten on
+// the next read of the same URL.
+const SCHEMA_VERSION = 3;
 
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_AMAZON_TTL_SECONDS = 6 * 60 * 60;

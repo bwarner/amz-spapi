@@ -1,7 +1,10 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
+import {
+  DefaultChatTransport,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+} from 'ai';
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -135,11 +138,21 @@ export default function ChatPage() {
     []
   );
 
-  const { messages, sendMessage, setMessages, stop, status, error } =
-    useChat<AppMessage>({
-      id: 'sellavant-chat',
-      transport,
-    });
+  const {
+    messages,
+    sendMessage,
+    setMessages,
+    stop,
+    status,
+    error,
+    addToolApprovalResponse,
+  } = useChat<AppMessage>({
+    id: 'sellavant-chat',
+    transport,
+    // Approval-gated tools (live listing writes) pause the agent; once the
+    // user responds, the turn continues automatically.
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
+  });
 
   const isStreaming = status === 'submitted' || status === 'streaming';
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -469,6 +482,9 @@ export default function ChatPage() {
                     message={message}
                     isLast={index === messages.length - 1}
                     isStreaming={isStreaming}
+                    onApprovalResponse={(id, approved) =>
+                      void addToolApprovalResponse({ id, approved })
+                    }
                   />
                 ))}
                 <div ref={messagesEndRef} />

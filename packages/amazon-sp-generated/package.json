@@ -26,6 +26,16 @@
       "import": "./src/lib/listingsItems_2021-08-01.ts",
       "default": "./src/lib/listingsItems_2021-08-01.ts"
     },
+    "./lib/financesV0": {
+      "types": "./src/lib/financesV0.ts",
+      "import": "./src/lib/financesV0.ts",
+      "default": "./src/lib/financesV0.ts"
+    },
+    "./lib/fulfillmentInboundV0": {
+      "types": "./src/lib/fulfillmentInboundV0.ts",
+      "import": "./src/lib/fulfillmentInboundV0.ts",
+      "default": "./src/lib/fulfillmentInboundV0.ts"
+    },
     "./package.json": "./package.json"
   },
   "devDependencies": {
