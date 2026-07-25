@@ -5,6 +5,7 @@ import { stripHtmlToText } from './brand-guide-extraction';
 import { getCredentialStore } from './credential-store';
 import { listAmazonConnections } from './amazon-connections';
 import { getCachedSourceFacts, setCachedSourceFacts } from './source-cache';
+import { withPaidCall } from './cost-ledger';
 
 /**
  * Reads a public product/supplier page and distills it to facts plus readable
@@ -978,45 +979,63 @@ function factsFromApifyItem(
   };
 }
 
-async function extractWithApify(url: string, timeoutMs = 55_000) {
+async function extractWithApify(
+  url: string,
+  owner: { userId: string; chatId?: string },
+  timeoutMs = 55_000
+) {
   const token = process.env['APIFY_TOKEN'];
   if (!token) return null;
 
   const plan = apifyPlan(url);
-  const response = await fetch(
-    `https://api.apify.com/v2/acts/${encodeURIComponent(
-      plan.actorPath
-    )}/run-sync-get-dataset-items?format=json&clean=true`,
+  // One actor run per page read; the cap check runs before it starts.
+  return withPaidCall(
     {
-      method: 'POST',
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(plan.input),
+      userId: owner.userId,
+      chatId: owner.chatId,
+      feature: 'page-read',
+      vendor: 'apify',
+      operation: plan.actorPath,
+      expectedUnits: 1,
+    },
+    async (report) => {
+      const response = await fetch(
+        `https://api.apify.com/v2/acts/${encodeURIComponent(
+          plan.actorPath
+        )}/run-sync-get-dataset-items?format=json&clean=true`,
+        {
+          method: 'POST',
+          signal: AbortSignal.timeout(timeoutMs),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(plan.input),
+        }
+      );
+
+      if (!response.ok) {
+        return {
+          error: `Apify fallback failed (HTTP ${response.status}).`,
+        };
+      }
+
+      const items = (await response.json()) as ApifyDatasetItem[];
+      const firstItem = Array.isArray(items)
+        ? items.find((item) => item && typeof item === 'object')
+        : undefined;
+      if (!firstItem) {
+        return {
+          error: 'Apify fallback did not return readable page content.',
+        };
+      }
+
+      report(1);
+      return plan.kind === 'alibaba-product'
+        ? factsFromAlibabaItem(firstItem, url)
+        : factsFromApifyItem(firstItem, url);
     }
   );
-
-  if (!response.ok) {
-    return {
-      error: `Apify fallback failed (HTTP ${response.status}).`,
-    };
-  }
-
-  const items = (await response.json()) as ApifyDatasetItem[];
-  const firstItem = Array.isArray(items)
-    ? items.find((item) => item && typeof item === 'object')
-    : undefined;
-  if (!firstItem) {
-    return {
-      error: 'Apify fallback did not return readable page content.',
-    };
-  }
-
-  return plan.kind === 'alibaba-product'
-    ? factsFromAlibabaItem(firstItem, url)
-    : factsFromApifyItem(firstItem, url);
 }
 
 type CatalogItemResult = {
@@ -1276,6 +1295,8 @@ const BROWSER_HEADERS = {
 export async function readSourcePage(params: {
   url: string;
   userId: string;
+  /** Attributes the spend to a conversation in the ledger. */
+  chatId?: string;
   /** Cap the Apify sync run; keep under the caller's own timeout. */
   apifyTimeoutMs?: number;
 }): Promise<SourceReadResult> {
@@ -1350,6 +1371,7 @@ export async function readSourcePage(params: {
   }): Promise<SourceReadResult> => {
     const apifyResult = await extractWithApify(
       url.toString(),
+      { userId: params.userId, chatId: params.chatId },
       params.apifyTimeoutMs
     );
     if (apifyResult && 'facts' in apifyResult && apifyResult.facts) {
@@ -1405,6 +1427,7 @@ export async function readSourcePage(params: {
     if (shouldTryApify) {
       const apifyResult = await extractWithApify(
         url.toString(),
+        { userId: params.userId, chatId: params.chatId },
         params.apifyTimeoutMs
       );
       if (

@@ -16,12 +16,13 @@ const APIFY_TIMEOUT_MS = 45_000;
  * source reader (URL validation, direct fetch, Apify fallback, Couchbase
  * cache) and trims the result to something worth spending context on.
  */
-export function createWebOps(userId: string): SellerWebOps {
+export function createWebOps(userId: string, chatId?: string): SellerWebOps {
   return {
     async readPage({ url, maxChars }) {
       const result = await readSourcePage({
         url,
         userId,
+        chatId,
         apifyTimeoutMs: APIFY_TIMEOUT_MS,
       });
 
@@ -63,11 +64,15 @@ export function createWebOps(userId: string): SellerWebOps {
 }
 
 /**
- * Host implementation of supplier sourcing search. Stateless — the search is
- * keyword-driven and cached by input hash, so it needs no user context.
+ * Host implementation of supplier sourcing search. Takes the user id so the
+ * per-result spend lands on the right ledger and daily cap.
  */
-export function createSourcingOps(): SellerSourcingOps {
+export function createSourcingOps(
+  userId: string,
+  chatId?: string
+): SellerSourcingOps {
   return {
-    searchSuppliers: (params) => searchAlibabaSuppliers(params),
+    searchSuppliers: (params) =>
+      searchAlibabaSuppliers({ ...params, userId, chatId }),
   };
 }

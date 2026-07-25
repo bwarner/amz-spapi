@@ -23,6 +23,7 @@ import {
 } from '../../../lib/media-assets';
 import { createImageOps } from '../../../lib/image-ops';
 import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
+import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
 import {
   getChatMeta,
@@ -191,7 +192,16 @@ export async function POST(request: Request) {
     }
   }
 
-  const imageGenerator = provider.imageGenerator?.();
+  // Image generation is the priciest per-call vendor in a chat turn and the
+  // agent fires it on its own initiative (proposal fan-outs run several at
+  // once), so it goes through the same cap and ledger as the scrapers.
+  const rawImageGenerator = provider.imageGenerator?.();
+  const imageGenerator = rawImageGenerator
+    ? meterImageGenerator(rawImageGenerator, {
+        userId: session.user.sub,
+        chatId,
+      })
+    : undefined;
 
   // Asset ids reaching these callbacks come from model tool calls — both
   // operations are scoped to the session user (ownership-checked reads,
@@ -281,8 +291,8 @@ export async function POST(request: Request) {
     imageGenerator,
     assetStore,
     imageOps: createImageOps(chatUserId),
-    webOps: createWebOps(chatUserId),
-    sourcingOps: createSourcingOps(),
+    webOps: createWebOps(chatUserId, chatId),
+    sourcingOps: createSourcingOps(chatUserId, chatId),
     listingWrites,
     marketplaceId: userMarketplaceId,
     additionalInstructions: registryInstructions,

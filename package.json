@@ -44,6 +44,7 @@
     "@farvisionllc/sp-client": "0.0.1",
     "@hookform/resolvers": "^5.2.1",
     "@imgly/background-removal-node": "^1.4.5",
+    "@opentelemetry/api": "^1.9.1",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.7",

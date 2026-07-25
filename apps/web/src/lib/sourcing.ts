@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getCachedSourceFacts, setCachedSourceFacts } from './source-cache';
+import { withPaidCall } from './cost-ledger';
 
 /**
  * Supplier sourcing search over Alibaba.
@@ -50,6 +51,9 @@ export type SupplierProduct = {
 };
 
 export type SourcingSearchParams = {
+  /** Owner of the spend — required for the ledger and the daily cap. */
+  userId: string;
+  chatId?: string;
   keywords: string[];
   maxResults?: number;
   maxMoq?: number;
@@ -250,53 +254,77 @@ export async function searchAlibabaSuppliers(
   const actor = (
     process.env['APIFY_SOURCING_ACTOR_ID'] || SOURCING_ACTOR
   ).replace('/', '~');
-  let response: Response;
-  try {
-    response = await fetch(
-      `https://api.apify.com/v2/acts/${encodeURIComponent(
-        actor
-      )}/run-sync-get-dataset-items?format=json&clean=true`,
-      {
-        method: 'POST',
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(input),
+
+  // Billed per result, so the cap is checked against the requested count before
+  // the run starts and the ledger is written with the count actually returned.
+  return withPaidCall(
+    {
+      userId: params.userId,
+      chatId: params.chatId,
+      feature: 'sourcing-search',
+      vendor: 'apify',
+      operation: actor,
+      expectedUnits: maxResults * keywords.length,
+    },
+    async (report) => {
+      let response: Response;
+      try {
+        response = await fetch(
+          `https://api.apify.com/v2/acts/${encodeURIComponent(
+            actor
+          )}/run-sync-get-dataset-items?format=json&clean=true`,
+          {
+            method: 'POST',
+            signal: AbortSignal.timeout(timeoutMs),
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(input),
+          }
+        );
+      } catch (error) {
+        const timedOut =
+          error instanceof Error && error.name === 'TimeoutError';
+        report(0);
+        return {
+          products: [],
+          error: timedOut
+            ? 'The supplier search timed out. Try fewer keywords or fewer results.'
+            : 'The supplier search could not be run.',
+        };
       }
-    );
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === 'TimeoutError';
-    return {
-      products: [],
-      error: timedOut
-        ? 'The supplier search timed out. Try fewer keywords or fewer results.'
-        : 'The supplier search could not be run.',
-    };
-  }
 
-  if (!response.ok) {
-    return {
-      products: [],
-      error: `The supplier search failed (HTTP ${response.status}).`,
-    };
-  }
+      if (!response.ok) {
+        report(0);
+        return {
+          products: [],
+          error: `The supplier search failed (HTTP ${response.status}).`,
+        };
+      }
 
-  const body = await response.json();
-  if (!Array.isArray(body)) {
-    return { products: [], error: 'The supplier search returned no results.' };
-  }
-  const products = body
-    .map((item) => normalize(asRecord(item)))
-    .filter((product): product is SupplierProduct => Boolean(product));
-  if (!products.length) {
-    return {
-      products: [],
-      error: 'No suppliers matched. Try broader keywords or relax the filters.',
-    };
-  }
+      const body = await response.json();
+      const items = Array.isArray(body) ? body : [];
+      report(items.length);
+      if (!items.length) {
+        return {
+          products: [],
+          error: 'The supplier search returned no results.',
+        };
+      }
+      const products = items
+        .map((item) => normalize(asRecord(item)))
+        .filter((product): product is SupplierProduct => Boolean(product));
+      if (!products.length) {
+        return {
+          products: [],
+          error:
+            'No suppliers matched. Try broader keywords or relax the filters.',
+        };
+      }
 
-  void setCachedSourceFacts(cacheKey, { products });
-  return { products };
+      void setCachedSourceFacts(cacheKey, { products });
+      return { products };
+    }
+  );
 }

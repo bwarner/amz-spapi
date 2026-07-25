@@ -191,7 +191,31 @@ LWA_CLIENT_ID, LWA_CLIENT_SECRET, ADS_CLIENT_ID, ADS_CLIENT_SECRET
 COUCHBASE_CONNSTR, COUCHBASE_USERNAME, COUCHBASE_PASSWORD, COUCHBASE_BUCKET
 AWS_REGION, SES_INBOUND_RULESET
 BEDROCK/OPENAI/CLAUDE_KEYS (depending on provider)
+APIFY_TOKEN, APIFY_SOURCE_ACTOR_ID, APIFY_ALIBABA_ACTOR_ID, APIFY_SOURCING_ACTOR_ID
+COST_CAP_DAILY_USD, COST_DEFAULT_CALL_USD, COST_UNIT_PRICE_<OPERATION>
 ```
+
+### Metered spend (cost ledger)
+
+Scraper runs and image generation bill per call, and the agent invokes them on
+its own initiative. Both go through `apps/web/src/lib/cost-ledger.ts`:
+
+- **`ops.cost_ledger`** — one doc per paid call (user, feature, vendor,
+  operation, units, cost, `priceKnown`, chatId). The auditable record; reconcile
+  it against the vendor invoice. 400-day TTL.
+- **`ops.spend_counters`** — per-user daily total in micro-USD, so the
+  pre-flight cap check is one key lookup instead of an aggregate scan.
+- **`COST_CAP_DAILY_USD`** (default 10) refuses paid calls past the ceiling;
+  `0` disables enforcement. The cap fails OPEN on a Couchbase error.
+- Costs are **estimated** from a dated list-price table, never measured — the
+  vendor invoice is the authority. Set `COST_UNIT_PRICE_<OPERATION>` (operation
+  upper-cased, non-alphanumerics as `_`) to correct a price without a code
+  change; unpriced calls consume `COST_DEFAULT_CALL_USD` so the cap can't be
+  bypassed by an unknown vendor.
+
+Cost also lands on OTel spans (`sellavant.cost.usd`, `sellavant.units`,
+`sellavant.cache.hit`) for per-turn diagnosis — see `lib/telemetry.ts`. Spans are
+sampled and expire; the ledger is the system of record.
 
 ---
 

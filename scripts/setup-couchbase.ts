@@ -64,6 +64,14 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
     scope: 'chat',
     collections: ['conversations', 'messages'],
   },
+  {
+    // Metered vendor spend. cost_ledger is the auditable record (one doc per
+    // paid call, reconcilable against the vendor invoice); spend_counters holds
+    // per-user daily totals in micro-USD so the cap check is a single key
+    // lookup instead of an aggregate scan.
+    scope: 'ops',
+    collections: ['cost_ledger', 'spend_counters'],
+  },
 ];
 
 function getEnvVar(...names: string[]): string {
