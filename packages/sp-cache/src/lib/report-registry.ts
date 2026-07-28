@@ -1,0 +1,301 @@
+/**
+ * FBA report definitions for inventory reconciliation.
+ *
+ * The reports answer "where did my units go": the ledger is the event log,
+ * removals and reimbursements explain the exits, stranded explains the units
+ * that are present but unsellable. They join on FNSKU and on the ledger's
+ * reference id, which carries the inbound shipment id for receipts, the removal
+ * order id for removals, and the case id for reimbursements.
+ *
+ * Column mapping is HEADER-DRIVEN, not positional, and every logical field has
+ * a list of accepted header spellings. Amazon varies these by marketplace and
+ * changes them without notice, so a positional or single-name mapping would
+ * silently produce empty columns. Unmapped columns are never discarded — they
+ * are kept verbatim in `raw`.
+ */
+
+export type ReportKind =
+  | 'ledger-detail'
+  | 'ledger-summary'
+  | 'stranded'
+  | 'removal-order'
+  | 'removal-shipment'
+  | 'reimbursement'
+  | 'inbound-performance';
+
+/** Logical fields we can join and reconcile on. */
+export type ReportFieldName =
+  | 'date'
+  | 'fnsku'
+  | 'msku'
+  | 'asin'
+  | 'title'
+  | 'eventType'
+  | 'referenceId'
+  | 'quantity'
+  | 'disposition'
+  | 'reason'
+  | 'fulfillmentCenter'
+  | 'country'
+  | 'orderId'
+  | 'shipmentDate'
+  | 'trackingNumber'
+  | 'requestDate'
+  | 'status'
+  | 'reimbursementId'
+  | 'caseId'
+  | 'amountTotal'
+  | 'currency'
+  | 'strandedReason'
+  | 'recommendedAction'
+  | 'shipmentId'
+  | 'cartonId'
+  | 'quantityExpected'
+  | 'quantityReceived'
+  | 'problemType'
+  /**
+   * Inventory Ledger SUMMARY columns. That report is WIDE — one row per
+   * SKU/date/location with a column per event type — so each movement needs its
+   * own field. Mapping only a balance leaves the lost/damaged/found figures,
+   * which are the entire point of reconciliation, unqueryable.
+   */
+  | 'startingBalance'
+  | 'endingBalance'
+  | 'inTransit'
+  | 'receipts'
+  | 'customerShipments'
+  | 'customerReturns'
+  | 'vendorReturns'
+  | 'warehouseTransfer'
+  | 'found'
+  | 'lost'
+  | 'damaged'
+  | 'disposed'
+  | 'otherEvents'
+  | 'unknownEvents'
+  | 'store'
+  /**
+   * Inventory Ledger DETAIL reconciliation columns. Amazon's own statement of
+   * whether it has settled a discrepancy: an Adjustments row with an
+   * unreconciled quantity is a unit still owed, which is precisely the set of
+   * rows worth opening a case about.
+   */
+  | 'reconciledQuantity'
+  | 'unreconciledQuantity'
+  /** Precise event timestamp, where `date` is only the day. */
+  | 'eventTimestamp';
+
+export type ReportDefinition = {
+  kind: ReportKind;
+  /** SP-API reportType enum. Verified against Amazon's public docs 2026-07-27. */
+  reportType: string;
+  label: string;
+  /** Ledger reports need reportOptions; the rest take a plain date range. */
+  requiresReportOptions?: boolean;
+  defaultReportOptions?: Record<string, string>;
+  /**
+   * A point-in-time list rather than an event log. Two snapshots taken on
+   * different days are legitimately different rows even when every column
+   * matches, so identity has to include when it was taken.
+   */
+  snapshot?: boolean;
+  /**
+   * Whether the reportOptions used to fetch it are part of a row's IDENTITY.
+   *
+   * Events are facts: a receipt of 120 units is the same fact whether it came
+   * from an eventType=ALL pull or an eventType=Receipts pull, so the filter must
+   * NOT be part of identity or the two pulls would store it twice.
+   *
+   * Aggregates are defined BY their aggregation: a DAILY summary row and a
+   * MONTHLY one describe different things and must not be conflated — or summed
+   * together, which would double count.
+   */
+  identityIncludesOptions?: boolean;
+  /** Header spellings accepted for each logical field, normalised. */
+  fields: Partial<Record<ReportFieldName, string[]>>;
+};
+
+/** Lowercase, strip everything non-alphanumeric: "Reference ID" -> "referenceid". */
+export function normalizeHeader(header: string): string {
+  return (
+    header
+      // Amazon prefixes the first header with a UTF-8 BOM; as a literal it is an
+      // invisible character in source, so match it by escape.
+      .replace(/^\uFEFF/, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '')
+  );
+}
+
+const COMMON = {
+  fnsku: ['fnsku', 'fulfillmentnetworksku'],
+  msku: ['msku', 'sku', 'sellersku', 'merchantsku'],
+  asin: ['asin'],
+  title: ['title', 'productname', 'itemname'],
+  disposition: ['disposition', 'detailedddisposition', 'detaileddisposition'],
+  fulfillmentCenter: [
+    'fulfillmentcenter',
+    'fulfillmentcenterid',
+    'warehouse',
+    'fcname',
+  ],
+  country: ['country', 'countrycode', 'marketplace'],
+};
+
+export const REPORTS: Record<ReportKind, ReportDefinition> = {
+  'ledger-detail': {
+    kind: 'ledger-detail',
+    reportType: 'GET_LEDGER_DETAIL_VIEW_DATA',
+    label: 'Inventory Ledger — Detail',
+    requiresReportOptions: true,
+    // Without this the report aggregates and the per-event rows that make
+    // reconciliation possible are lost.
+    defaultReportOptions: { eventType: 'ALL' },
+    // Verified against a real export 2026-07-27: 16 columns, all mapped.
+    fields: {
+      date: ['date', 'eventdate'],
+      ...COMMON,
+      eventType: ['eventtype'],
+      referenceId: ['referenceid'],
+      quantity: ['quantity'],
+      // NOT aliased to reconciledquantity: they are unrelated columns, and on a
+      // file without a Reason column a quantity would land in a reason field.
+      reason: ['reason'],
+      reconciledQuantity: ['reconciledquantity'],
+      unreconciledQuantity: ['unreconciledquantity'],
+      eventTimestamp: ['dateandtime', 'datetime'],
+      store: ['store'],
+      strandedReason: [],
+    },
+  },
+  'ledger-summary': {
+    kind: 'ledger-summary',
+    reportType: 'GET_LEDGER_SUMMARY_VIEW_DATA',
+    label: 'Inventory Ledger — Summary',
+    requiresReportOptions: true,
+    identityIncludesOptions: true,
+    defaultReportOptions: {
+      aggregateByLocation: 'COUNTRY',
+      aggregatedByTimePeriod: 'DAILY',
+    },
+    // Verified against a real export 2026-07-27: 22 columns, all mapped.
+    fields: {
+      date: ['date', 'enddate'],
+      ...COMMON,
+      // "Location" is the FC (or country) the row aggregates to.
+      fulfillmentCenter: [
+        'location',
+        'fulfillmentcenter',
+        'fulfillmentcenterid',
+        'warehouse',
+        'fcname',
+      ],
+      store: ['store'],
+      startingBalance: ['startingwarehousebalance'],
+      endingBalance: ['endingwarehousebalance'],
+      quantity: ['endingwarehousebalance'],
+      inTransit: ['intransitbetweenwarehouses'],
+      receipts: ['receipts'],
+      customerShipments: ['customershipments'],
+      customerReturns: ['customerreturns'],
+      vendorReturns: ['vendorreturns'],
+      warehouseTransfer: ['warehousetransferinout'],
+      found: ['found'],
+      lost: ['lost'],
+      damaged: ['damaged'],
+      disposed: ['disposed'],
+      otherEvents: ['otherevents'],
+      unknownEvents: ['unknownevents'],
+    },
+  },
+  stranded: {
+    kind: 'stranded',
+    reportType: 'GET_STRANDED_INVENTORY_UI_DATA',
+    label: 'Stranded Inventory',
+    snapshot: true,
+    fields: {
+      ...COMMON,
+      quantity: ['quantity', 'afnfulfillablequantity', 'availablequantity'],
+      strandedReason: ['strandedreason', 'errormessage', 'issue'],
+      recommendedAction: ['recommendedaction', 'action'],
+      status: ['status'],
+      date: ['datestranded', 'snapshotdate'],
+    },
+  },
+  'removal-order': {
+    kind: 'removal-order',
+    reportType: 'GET_FBA_FULFILLMENT_REMOVAL_ORDER_DETAIL_DATA',
+    label: 'Removal Order Detail',
+    fields: {
+      requestDate: ['requestdate', 'orderdate'],
+      orderId: ['orderid', 'removalorderid'],
+      ...COMMON,
+      quantity: ['requestedquantity', 'quantity'],
+      status: ['orderstatus', 'status'],
+      reason: ['removalordertype', 'ordertype'],
+      date: ['lastupdateddate', 'requestdate'],
+    },
+  },
+  'removal-shipment': {
+    kind: 'removal-shipment',
+    reportType: 'GET_FBA_FULFILLMENT_REMOVAL_SHIPMENT_DETAIL_DATA',
+    label: 'Removal Shipment Detail',
+    fields: {
+      shipmentDate: ['shipmentdate', 'requestdate'],
+      orderId: ['orderid', 'removalorderid'],
+      ...COMMON,
+      quantity: ['shippedquantity', 'quantity'],
+      trackingNumber: ['trackingnumber'],
+      status: ['removalordertype', 'status'],
+      date: ['shipmentdate'],
+    },
+  },
+  reimbursement: {
+    kind: 'reimbursement',
+    reportType: 'GET_FBA_REIMBURSEMENTS_DATA',
+    label: 'Reimbursements',
+    fields: {
+      date: ['approvaldate', 'reimbursementdate'],
+      reimbursementId: ['reimbursementid'],
+      caseId: ['caseid', 'amazonorderid'],
+      ...COMMON,
+      quantity: [
+        'quantityreimbursedtotal',
+        'quantityreimbursedcash',
+        'quantity',
+      ],
+      amountTotal: ['amounttotal', 'amountpercent', 'amountperunit'],
+      currency: ['currencyunit', 'currency'],
+      reason: ['reason'],
+      referenceId: ['caseid', 'amazonorderid'],
+    },
+  },
+  'inbound-performance': {
+    kind: 'inbound-performance',
+    reportType: 'GET_FBA_FULFILLMENT_INBOUND_NONCOMPLIANCE_DATA',
+    label: 'FBA Inbound Performance (expected vs received)',
+    fields: {
+      date: ['issuedate', 'shipmentcreatedate', 'date'],
+      shipmentId: ['shipmentid', 'fbashipmentid'],
+      cartonId: ['cartonid'],
+      ...COMMON,
+      quantityExpected: [
+        'quantityexpected',
+        'expectedquantity',
+        'quantityshipped',
+        'shippedquantity',
+      ],
+      quantityReceived: ['quantityreceived', 'receivedquantity'],
+      problemType: ['problemtype', 'issuetype', 'noncompliancetype', 'reason'],
+      status: ['alertstatus', 'status'],
+    },
+  },
+};
+
+export const REPORT_KINDS = Object.keys(REPORTS) as ReportKind[];
+
+export function reportByType(reportType: string): ReportDefinition | undefined {
+  return REPORT_KINDS.map((kind) => REPORTS[kind]).find(
+    (report) => report.reportType === reportType
+  );
+}

@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 import axios, {
   AxiosInstance,
   AxiosError,
@@ -914,5 +915,155 @@ export class SpApiClient {
       request || {}
     );
     return response.data;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reports API (2021-06-30)
+  //
+  // Reports are asynchronous: create → poll until DONE → fetch the document's
+  // presigned URL → download (usually GZIP'd TSV). Amazon generates them on
+  // their side, so the same window requested twice can return the same rows —
+  // deduplication is the caller's job, not something the API guarantees.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Request a report. Returns the reportId to poll.
+   *
+   * `reportOptions` is required by the ledger reports (aggregateByLocation,
+   * aggregatedByTimePeriod, eventType, FNSKU/MSKU/ASIN) and ignored by the rest.
+   */
+  async createReport(params: {
+    reportType: string;
+    dataStartTime?: string;
+    dataEndTime?: string;
+    marketplaceIds?: string[];
+    reportOptions?: Record<string, string>;
+  }): Promise<{ reportId: string }> {
+    const response = await this.httpClient.post<{ reportId: string }>(
+      '/reports/2021-06-30/reports',
+      {
+        reportType: params.reportType,
+        marketplaceIds: params.marketplaceIds ?? [this.config.marketplaceId],
+        ...(params.dataStartTime
+          ? { dataStartTime: params.dataStartTime }
+          : {}),
+        ...(params.dataEndTime ? { dataEndTime: params.dataEndTime } : {}),
+        ...(params.reportOptions
+          ? { reportOptions: params.reportOptions }
+          : {}),
+      }
+    );
+    return response.data;
+  }
+
+  /** Poll a report's processing status. */
+  async getReport(reportId: string): Promise<{
+    reportId: string;
+    reportType: string;
+    processingStatus:
+      | 'IN_QUEUE'
+      | 'IN_PROGRESS'
+      | 'DONE'
+      | 'CANCELLED'
+      | 'FATAL';
+    reportDocumentId?: string;
+    dataStartTime?: string;
+    dataEndTime?: string;
+    createdTime?: string;
+  }> {
+    const response = await this.httpClient.get(
+      `/reports/2021-06-30/reports/${encodeURIComponent(reportId)}`
+    );
+    return response.data;
+  }
+
+  /** Presigned URL + compression for a finished report. */
+  async getReportDocument(reportDocumentId: string): Promise<{
+    reportDocumentId: string;
+    url: string;
+    compressionAlgorithm?: 'GZIP';
+  }> {
+    const response = await this.httpClient.get(
+      `/reports/2021-06-30/documents/${encodeURIComponent(reportDocumentId)}`
+    );
+    return response.data;
+  }
+
+  /**
+   * Download a report document to text. The presigned URL is NOT an SP-API
+   * endpoint — it must be fetched without the SP-API auth headers, which is why
+   * this bypasses the configured client.
+   */
+  async downloadReportDocument(document: {
+    url: string;
+    compressionAlgorithm?: 'GZIP';
+  }): Promise<string> {
+    const response = await axios.get<ArrayBuffer>(document.url, {
+      responseType: 'arraybuffer',
+      // Reports can be large; a slow S3 read should not hang forever.
+      timeout: 120_000,
+    });
+    const body = Buffer.from(response.data);
+    const bytes =
+      document.compressionAlgorithm === 'GZIP' ? gunzipSync(body) : body;
+    // Amazon emits some FBA reports as Latin-1; UTF-8 decoding those mangles
+    // accented SKUs and product titles.
+    const text = bytes.toString('utf8');
+    return text.includes('\uFFFD') ? bytes.toString('latin1') : text;
+  }
+
+  /**
+   * Create → poll → download in one call. Polls with backoff up to
+   * `timeoutMs`; report generation commonly takes 30s-several minutes.
+   */
+  async runReport(params: {
+    reportType: string;
+    dataStartTime?: string;
+    dataEndTime?: string;
+    marketplaceIds?: string[];
+    reportOptions?: Record<string, string>;
+    timeoutMs?: number;
+    onStatus?: (status: string) => void;
+  }): Promise<{ reportId: string; text: string; dataEndTime?: string }> {
+    const { reportId } = await this.createReport(params);
+    const deadline = Date.now() + (params.timeoutMs ?? 10 * 60_000);
+    let waitMs = 2_000;
+
+    for (;;) {
+      const report = await this.getReport(reportId);
+      params.onStatus?.(report.processingStatus);
+
+      if (report.processingStatus === 'DONE' && report.reportDocumentId) {
+        const document = await this.getReportDocument(report.reportDocumentId);
+        return {
+          reportId,
+          text: await this.downloadReportDocument(document),
+          dataEndTime: report.dataEndTime,
+        };
+      }
+      if (
+        report.processingStatus === 'CANCELLED' ||
+        report.processingStatus === 'FATAL'
+      ) {
+        // CANCELLED usually means "no data for that window", which is a normal
+        // outcome worth distinguishing from a real failure.
+        throw new Error(
+          `Report ${params.reportType} finished as ${report.processingStatus}` +
+            (report.processingStatus === 'CANCELLED'
+              ? ' — usually means there was no data in that date range.'
+              : '.')
+        );
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `Report ${params.reportType} still ${report.processingStatus} after ` +
+            `${Math.round(
+              (params.timeoutMs ?? 600_000) / 1000
+            )}s (reportId ${reportId}).`
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      waitMs = Math.min(waitMs * 1.5, 30_000);
+    }
   }
 }

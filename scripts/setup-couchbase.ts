@@ -65,6 +65,14 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
     collections: ['conversations', 'messages'],
   },
   {
+    // Ingested Amazon report rows (content-addressed, so re-imports collapse)
+    // plus the import ledger that records which windows and filters were
+    // actually loaded — without it, "no receipts" and "never imported
+    // receipts" are indistinguishable.
+    scope: 'reports',
+    collections: ['rows', 'imports'],
+  },
+  {
     // Metered vendor spend. cost_ledger is the auditable record (one doc per
     // paid call, reconcilable against the vendor invoice); spend_counters holds
     // per-user daily totals in micro-USD so the cap check is a single key
@@ -455,6 +463,53 @@ async function main() {
     'listings',
     'idx_listings_user_asin',
     ['`userId`', '`platform`', '`marketplaceId`', '`external`.`asin`']
+  );
+
+  // reports.rows — every reconciliation query filters by seller + report kind,
+  // then joins on FNSKU or the ledger's reference id (which carries the inbound
+  // shipment id). Without these each lookup is a full collection scan.
+  await createIndex(
+    cluster,
+    bucketName,
+    'reports',
+    'rows',
+    'idx_report_rows_seller_kind',
+    ['`sellerId`', '`reportKind`', '`fields`.`date`']
+  );
+  await createIndex(
+    cluster,
+    bucketName,
+    'reports',
+    'rows',
+    'idx_report_rows_fnsku',
+    ['`sellerId`', '`fields`.`fnsku`', '`reportKind`']
+  );
+  // The join key that links ledger receipts to a shipment, removal or case.
+  await createIndex(
+    cluster,
+    bucketName,
+    'reports',
+    'rows',
+    'idx_report_rows_reference',
+    ['`sellerId`', '`fields`.`referenceId`']
+  );
+  // Coverage lookups: which windows/filters were ingested for a kind.
+  await createIndex(
+    cluster,
+    bucketName,
+    'reports',
+    'imports',
+    'idx_report_imports_seller_kind',
+    ['`sellerId`', '`kind`', '`observedFrom`']
+  );
+  // ops.cost_ledger — per-user spend rollups and invoice reconciliation.
+  await createIndex(
+    cluster,
+    bucketName,
+    'ops',
+    'cost_ledger',
+    'idx_cost_ledger_user_day',
+    ['`userId`', '`day`']
   );
 
   console.log('\n✅ Couchbase setup complete!\n');
