@@ -204,6 +204,44 @@ export interface SellerComplianceOps {
   }>;
 }
 
+/** What an ingest produced. */
+export type ReportIngestResult = {
+  kind: string;
+  rowsParsed: number;
+  rowsNew: number;
+  rowsDuplicate: number;
+  observedFrom?: string;
+  observedTo?: string;
+  unmappedHeaders?: string[];
+  error?: string;
+};
+
+/** Which windows and filters have actually been ingested. */
+export type ReportCoverage = {
+  kind: string;
+  covered: Array<{ from: string; to: string }>;
+  gaps: Array<{ from: string; to: string }>;
+  filtersUsed: Array<Record<string, string>>;
+  imports: number;
+};
+
+/**
+ * Host-provided FBA report ingestion. Two paths: pull from SP-API (needs the
+ * report's role) or use rows the seller already uploaded from Seller Central.
+ */
+export interface SellerReportOps {
+  syncReport(params: {
+    kind: string;
+    from: string;
+    to: string;
+  }): Promise<ReportIngestResult>;
+  getCoverage(params: {
+    kind: string;
+    from?: string;
+    to?: string;
+  }): Promise<ReportCoverage>;
+}
+
 /**
  * Host-provided LIVE listing writes. Implementations must ownership-check
  * assets, snapshot before writing, and honor any SKU allowlist.
@@ -318,6 +356,7 @@ export interface SellerAgentConfig {
   webOps?: SellerWebOps;
   sourcingOps?: SellerSourcingOps;
   complianceOps?: SellerComplianceOps;
+  reportOps?: SellerReportOps;
   listingWrites?: SellerListingWrites;
   modelTier?: ModelTier;
   marketplaceId: string;
@@ -2075,6 +2114,96 @@ function getWebTools(webOps: SellerWebOps) {
   };
 }
 
+function getReportTools(reportOps: SellerReportOps) {
+  const kindSchema = z.enum([
+    'ledger-detail',
+    'ledger-summary',
+    'stranded',
+    'removal-order',
+    'removal-shipment',
+    'reimbursement',
+    'inbound-performance',
+  ]);
+
+  return {
+    'check-report-coverage': {
+      description:
+        'What FBA report data has actually been ingested for a window, and where ' +
+        'the holes are. CALL THIS BEFORE answering any question about lost, ' +
+        'damaged, removed or reimbursed inventory: rows alone cannot tell "nothing ' +
+        'happened" apart from "never imported", and reporting units as missing over ' +
+        'a gap is worse than saying you do not know. Returns covered windows, gaps, ' +
+        'and the filters each import used — a pull filtered to one event type is NOT ' +
+        'full coverage of that window. Free and instant.',
+      inputSchema: z.object({
+        kind: kindSchema,
+        from: z.string().optional().describe('YYYY-MM-DD'),
+        to: z.string().optional().describe('YYYY-MM-DD'),
+      }),
+      execute: async (input: { kind: string; from?: string; to?: string }) => {
+        try {
+          const coverage = await reportOps.getCoverage(input);
+          return {
+            success: true as const,
+            ...coverage,
+            note: coverage.gaps.length
+              ? 'There are gaps. Say so explicitly rather than treating missing ' +
+                'rows as evidence of missing units, and offer to sync or ask the ' +
+                'user to upload the export for those windows.'
+              : undefined,
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not read report coverage.',
+          };
+        }
+      },
+    },
+
+    'sync-report': {
+      description:
+        'Pull an FBA report from Amazon for a date range and ingest it. Rows are ' +
+        'de-duplicated, so overlapping ranges are safe to re-sync. Reports are ' +
+        'generated asynchronously and can take 30s-several minutes. ' +
+        'If this fails with a 403, the SP-API app lacks the role for FBA reports — ' +
+        'tell the user they can instead download that report in Seller Central and ' +
+        'upload the file, which needs no role at all.',
+      inputSchema: z.object({
+        kind: kindSchema.describe(
+          'ledger-detail is the event log (receipts, adjustments, removals) and the ' +
+            'one to use for "where did my units go"'
+        ),
+        from: z.string().describe('YYYY-MM-DD'),
+        to: z.string().describe('YYYY-MM-DD'),
+      }),
+      execute: async (input: { kind: string; from: string; to: string }) => {
+        try {
+          const result = await reportOps.syncReport(input);
+          if (result.error)
+            return { success: false as const, error: result.error };
+          return {
+            success: true as const,
+            ...result,
+            note:
+              `${result.rowsNew} new rows, ${result.rowsDuplicate} already held. ` +
+              'Duplicates are expected when re-syncing an overlapping window.',
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error ? error.message : 'Report sync failed.',
+          };
+        }
+      },
+    },
+  };
+}
+
 function getComplianceTools(complianceOps: SellerComplianceOps) {
   const platforms = complianceOps.supportedPlatforms();
   return {
@@ -2385,6 +2514,7 @@ export function createSellerAgent({
   webOps,
   sourcingOps,
   complianceOps,
+  reportOps,
   listingWrites,
   modelTier,
   marketplaceId,
@@ -2408,6 +2538,7 @@ export function createSellerAgent({
   const complianceTools = complianceOps
     ? getComplianceTools(complianceOps)
     : {};
+  const reportTools = reportOps ? getReportTools(reportOps) : {};
   const listingWriteTools = listingWrites
     ? getListingWriteTools(listingWrites)
     : {};
@@ -2421,6 +2552,7 @@ export function createSellerAgent({
     ...webTools,
     ...sourcingTools,
     ...complianceTools,
+    ...reportTools,
     ...listingWriteTools,
   };
 
@@ -2679,6 +2811,29 @@ AVAILABLE TOOLS:
   Amazon pay me").
 - get-financial-events: itemized fees/charges/refunds for a date window or one
   order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}
+
+FBA INVENTORY RECONCILIATION (where did my units go):
+- check-report-coverage FIRST, every time, before saying anything about lost, damaged,
+  removed or reimbursed units. Missing ROWS are not evidence of missing UNITS — they are
+  usually evidence of a window nobody imported. Name the gap instead of guessing.
+- The chain is: inbound shipment (expected vs received) -> ledger Receipts -> ledger
+  Adjustments (lost/damaged) -> Reimbursements -> what is still owed. They join on FNSKU
+  and on the ledger's reference id, which carries the shipment id, removal order id or
+  case id.
+- inbound-performance carries expected-vs-received per shipment and is the way to get
+  the shipped side WITHOUT the FBA inbound API role: the user downloads "FBA Inbound
+  Performance" in Seller Central and uploads it. Note what it is though — a PROBLEM
+  report. A shipment absent from it means Amazon flagged no discrepancy, NOT that the
+  shipment does not exist, so never read absence as "nothing arrived".
+- Two ways to get data in, and the upload path needs NO Amazon permissions: sync-report
+  pulls from SP-API (and 403s if the app lacks the FBA role), or the user downloads the
+  report in Seller Central and uploads the file. When a sync 403s, offer the upload
+  route rather than leaving them stuck.
+- Re-syncing an overlapping window is safe — rows de-duplicate — so prefer widening a
+  range over reasoning about a partial one.
+- Quantities in these reports are the seller's evidence for a claim. Quote them exactly,
+  say which report and window each figure came from, and never estimate a number that a
+  report would have told you.
 
 WHEN AN AMAZON CALL FAILS:
 - Read the error. It carries the status, Amazon's error code and the path, e.g.

@@ -26,6 +26,7 @@ import {
 import { createImageOps } from '../../../lib/image-ops';
 import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
+import { createReportOps } from '../../../lib/report-ops';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
 import {
@@ -162,6 +163,7 @@ export async function POST(request: Request) {
   // The agent will work without Amazon connection for basic conversations
   let spCache: SpCache | undefined;
   let listingWrites: SellerListingWrites | undefined;
+  let reportOps: ReturnType<typeof createReportOps> | undefined;
 
   if (clientId && refreshToken) {
     const spClient = new SpApiClient({
@@ -177,6 +179,16 @@ export async function POST(request: Request) {
       sellerId,
       marketplaceId: userMarketplaceId,
     });
+
+    // Report rows are stored against the seller account, so this needs a
+    // resolved sellerId — without one there is nothing to key them to.
+    if (sellerId) {
+      reportOps = createReportOps({
+        sellerId,
+        spClient,
+        marketplaceId: userMarketplaceId,
+      });
+    }
 
     // Live listing writes: preview is Amazon's dry run; apply/revert sit
     // behind chat-side human approval. Optional env allowlist restricts
@@ -309,6 +321,7 @@ export async function POST(request: Request) {
     webOps: createWebOps(chatUserId, chatId),
     sourcingOps: createSourcingOps(chatUserId, chatId),
     complianceOps: createComplianceOps(chatUserId),
+    reportOps,
     listingWrites,
     marketplaceId: userMarketplaceId,
     additionalInstructions: registryInstructions,
