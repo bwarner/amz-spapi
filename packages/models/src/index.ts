@@ -8,3 +8,6 @@ export * from './lib/experience-lift.js';
 export * from './lib/aplus-compiler.js';
 export * from './lib/aplus-evaluate.js';
 export * from './lib/product.js';
+export * from './lib/document-extract.js';
+export * from './lib/document-recognize.js';
+export * from './lib/fba-box-label.js';
