@@ -1,4 +1,6 @@
 import { parseFbaBoxLabel, recognizeDocument } from '@farvisionllc/models';
+import { storeBoxLabel } from '@amz-spapi/sp-cache';
+import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
 import { auth0 } from '../../../../lib/auth0';
 import {
   extensionForMime,
@@ -102,6 +104,38 @@ export async function POST(request: Request) {
       feature: 'documents',
     });
 
+    // A box label is only useful once it is a record that reconciliation can
+    // read. Failing to store it must not fail the upload — the file is kept
+    // either way, and the seller is told which happened.
+    let shipmentLabelStored: string | undefined;
+    if (boxLabel?.shipmentId) {
+      try {
+        const resolved = await resolveAmazonConnection({
+          apiType: 'SP_API',
+          userId: session.user.sub,
+        });
+        const sellerId = resolved.connected
+          ? resolved.connection.profile.seller_id
+          : undefined;
+        if (sellerId) {
+          const stored = await storeBoxLabel({
+            sellerId,
+            label: boxLabel,
+            assetId: asset.assetId,
+            fileName: file.name,
+            text,
+          });
+          shipmentLabelStored = stored.shipmentId;
+        }
+      } catch (error) {
+        console.error(
+          '[documents] box label not stored',
+          file.name,
+          error instanceof Error ? `${error.name}: ${error.message}` : error
+        );
+      }
+    }
+
     return Response.json({
       assetId: asset.assetId,
       url: `/api/a-plus/assets/${asset.assetId}`,
@@ -111,6 +145,7 @@ export async function POST(request: Request) {
       // persistGeneratedFileAsset dedupes on sha256, so re-uploading the same
       // file returns the original rather than storing it twice.
       duplicate: asset.status === 'duplicate' || asset.sizeBytes !== file.size,
+      shipmentLabelStored,
       recognition: {
         kind: recognition.kind,
         confidence: recognition.confidence,

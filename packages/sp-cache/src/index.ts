@@ -45,3 +45,11 @@ export type {
   ReconciledLine,
   ShipmentReconciliation,
 } from './lib/reconcile-shipments.js';
+
+export {
+  storeBoxLabel,
+  listBoxLabels,
+  boxLabelStorage,
+  BoxLabelError,
+} from './lib/box-label-store.js';
+export type { StoredBoxLabel, BoxLabelInput } from './lib/box-label-store.js';

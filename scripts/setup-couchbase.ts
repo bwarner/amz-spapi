@@ -70,7 +70,7 @@ const REQUIRED_STRUCTURES: Array<{ scope: string; collections: string[] }> = [
     // actually loaded — without it, "no receipts" and "never imported
     // receipts" are indistinguishable.
     scope: 'reports',
-    collections: ['rows', 'imports'],
+    collections: ['rows', 'imports', 'box_labels'],
   },
   {
     // Metered vendor spend. cost_ledger is the auditable record (one doc per
@@ -463,6 +463,17 @@ async function main() {
     'listings',
     'idx_listings_user_asin',
     ['`userId`', '`platform`', '`marketplaceId`', '`external`.`asin`']
+  );
+
+  // reports.box_labels — the shipped side of reconciliation, always read by
+  // seller and joined on shipment id.
+  await createIndex(
+    cluster,
+    bucketName,
+    'reports',
+    'box_labels',
+    'idx_box_labels_seller_shipment',
+    ['`sellerId`', '`shipmentId`', '`boxNumber`']
   );
 
   // reports.rows — every reconciliation query filters by seller + report kind,

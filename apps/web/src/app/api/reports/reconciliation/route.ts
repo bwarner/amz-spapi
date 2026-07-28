@@ -1,4 +1,10 @@
-import { queryLedgerRows, reconcileShipments } from '@amz-spapi/sp-cache';
+import {
+  listBoxLabels,
+  queryLedgerRows,
+  reconcileShipments,
+  type ShippedLine,
+} from '@amz-spapi/sp-cache';
+import { summariseBoxLabels } from '@farvisionllc/models';
 import { auth0 } from '../../../../lib/auth0';
 import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
 
@@ -35,15 +41,32 @@ export async function GET() {
   }
 
   try {
-    const rows = await queryLedgerRows({ sellerId, view: 'ledger-detail' });
-    // The shipped side needs box labels persisted as structured records; until
-    // then this reports what Amazon received and how it churned, and says so
-    // rather than implying every shipment balanced.
-    const shipments = reconcileShipments({ rows });
+    const [rows, labels] = await Promise.all([
+      queryLedgerRows({ sellerId, view: 'ledger-detail' }),
+      listBoxLabels({ sellerId }),
+    ]);
+
+    // Rolling the labels up here rather than in the store keeps the dedup and
+    // completeness rules in one place — the same ones the import panel shows.
+    const shipped: ShippedLine[] = summariseBoxLabels(labels).flatMap(
+      (summary) =>
+        summary.units.map((unit) => ({
+          shipmentId: summary.shipmentId,
+          sku: unit.sku,
+          quantity: unit.quantity,
+          complete: summary.complete,
+          boxesSeen: summary.boxesSeen,
+          boxesDeclared: summary.boxesDeclared,
+        }))
+    );
+
     return Response.json({
-      shipments,
+      shipments: reconcileShipments({ rows, shipped }),
       rowsConsidered: rows.length,
-      shippedSideAvailable: false,
+      boxLabelsHeld: labels.length,
+      // False only when nothing is held at all: a partial set still gives a
+      // real comparison, and the floor marker says where it is partial.
+      shippedSideAvailable: shipped.length > 0,
     });
   } catch (error) {
     console.error(
