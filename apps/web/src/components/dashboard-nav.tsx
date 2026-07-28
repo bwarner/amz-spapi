@@ -11,6 +11,8 @@ import {
   Activity,
   BookTemplate,
   Package,
+  FileSpreadsheet,
+  Scale,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -25,6 +27,8 @@ const navItems = [
   { href: '/products', label: 'Products', icon: Package },
   { href: '/a-plus', label: 'A+ Content', icon: LayoutTemplate },
   { href: '/brand-guides', label: 'Brand Guides', icon: BookTemplate },
+  { href: '/import', label: 'Import', icon: FileSpreadsheet },
+  { href: '/reconciliation', label: 'Reconcile', icon: Scale },
   { href: '/connections', label: 'Connections', icon: Activity },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

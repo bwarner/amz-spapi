@@ -1,18 +1,10 @@
-import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { promisify } from 'node:util';
 import { auth0 } from '../../../../../lib/auth0';
+import { extractPdfText } from '../../../../../lib/pdf-text';
 import {
   inferSuggestion,
   stripHtmlToText,
   type ExtractedBrandGuideSuggestion,
 } from '../../../../../lib/brand-guide-extraction';
-
-const execFileAsync = promisify(execFile);
-const PYTHON_BIN =
-  '/Users/bwarner/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3';
 
 function isPrivateHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
@@ -49,37 +41,14 @@ function isTextLike(contentType: string, sourceLabel = '') {
   );
 }
 
-async function extractPdfText(buffer: Buffer) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'sellavant-pdf-'));
-  const pdfPath = path.join(tempDir, 'source.pdf');
-  try {
-    await writeFile(pdfPath, buffer);
-    const { stdout } = await execFileAsync(
-      PYTHON_BIN,
-      [
-        '-c',
-        [
-          'import json, sys',
-          'from pypdf import PdfReader',
-          'reader = PdfReader(sys.argv[1])',
-          'parts = []',
-          'for page in reader.pages[:10]:',
-          '    try:',
-          '        parts.append(page.extract_text() or "")',
-          '    except Exception:',
-          '        pass',
-          'text = "\\n".join(parts)',
-          'print(json.dumps({"text": text[:50000]}))',
-        ].join('\n'),
-        pdfPath,
-      ],
-      { timeout: 15000, maxBuffer: 1024 * 1024 * 2 }
-    );
-    const parsed = JSON.parse(stdout) as { text?: string };
-    return parsed.text || '';
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+/** Brand guides only need the opening pages, and a 200-page catalogue would
+ * otherwise flood the inference prompt. */
+const GUIDE_MAX_PAGES = 10;
+const GUIDE_MAX_CHARS = 50_000;
+
+async function guidePdfText(buffer: Buffer): Promise<string> {
+  const { pages } = await extractPdfText(buffer);
+  return pages.slice(0, GUIDE_MAX_PAGES).join('\n').slice(0, GUIDE_MAX_CHARS);
 }
 
 async function extractFromTextSource(params: {
@@ -94,7 +63,7 @@ async function extractFromFile(file: File) {
   const mimeType = file.type || 'application/octet-stream';
 
   if (isPdfMimeType(mimeType, sourceLabel)) {
-    const text = await extractPdfText(Buffer.from(await file.arrayBuffer()));
+    const text = await guidePdfText(Buffer.from(await file.arrayBuffer()));
     return extractFromTextSource({ text, sourceLabel });
   }
 
@@ -141,9 +110,7 @@ async function extractFromUrl(rawUrl: string) {
   const contentType = response.headers.get('content-type') || '';
 
   if (isPdfMimeType(contentType, url.pathname)) {
-    const text = await extractPdfText(
-      Buffer.from(await response.arrayBuffer())
-    );
+    const text = await guidePdfText(Buffer.from(await response.arrayBuffer()));
     return extractFromTextSource({ text, sourceLabel: rawUrl });
   }
 

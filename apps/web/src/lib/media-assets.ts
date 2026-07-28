@@ -12,7 +12,13 @@ import {
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
 
-export type MediaAssetFeature = 'a-plus' | 'ads' | 'listings' | 'shared';
+export type MediaAssetFeature =
+  | 'a-plus'
+  | 'ads'
+  | 'listings'
+  | 'shared'
+  /** Invoices, receipts, customs paperwork — evidence, not creative. */
+  | 'documents';
 
 export type MediaAssetStatus = 'pending_upload' | 'uploaded' | 'duplicate';
 
@@ -163,6 +169,16 @@ export async function upsertHashPointer(asset: MediaAsset): Promise<void> {
 export function extensionForMime(mime: string): string {
   if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
   if (mime.includes('webp')) return 'webp';
+  // Falling through to 'png' for every unknown type meant a PDF invoice was
+  // stored as invoice.png — harmless to S3, confusing to every human and tool
+  // that later opens it.
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('heic') || mime.includes('heif')) return 'heic';
+  if (mime.includes('tiff')) return 'tiff';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('zip')) return 'zip';
+  if (mime.includes('illustrator')) return 'ai';
+  if (mime.includes('postscript')) return 'eps';
   return 'png';
 }
 

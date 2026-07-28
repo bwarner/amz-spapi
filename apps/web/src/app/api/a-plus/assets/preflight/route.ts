@@ -56,6 +56,29 @@ function isValidSha256(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
 }
 
+/** Non-image types accepted for documents and design artwork. */
+const DOCUMENT_MIME_TYPES = new Set([
+  'application/pdf',
+  // Adobe Illustrator. Browsers disagree about .ai — Chrome commonly reports
+  // application/postscript, some report application/pdf (modern .ai files ARE
+  // PDF-compatible), and some report nothing at all.
+  'application/postscript',
+  'application/illustrator',
+  'application/x-illustrator',
+  'application/octet-stream',
+]);
+
+/**
+ * Extensions accepted when the browser's mime type is useless. Design files are
+ * the common case: rejecting a .ai because Chrome called it octet-stream would
+ * be indistinguishable, to the user, from the feature being broken.
+ */
+const DOCUMENT_EXTENSIONS = new Set(['pdf', 'ai', 'eps', 'psd']);
+
+function extensionOf(fileName: string): string {
+  return fileName.split('.').pop()?.toLowerCase() ?? '';
+}
+
 export async function POST(request: Request) {
   const session = await auth0.getSession();
   if (!session?.user?.sub) {
@@ -78,16 +101,27 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Invalid asset metadata.' }, { status: 400 });
   }
 
-  if (!body.mimeType.startsWith('image/')) {
+  // Images for listing work, PDFs for business documents (invoices, receipts,
+  // customs paperwork). HEIC matters more than it looks: it is what an iPhone
+  // photo of a paper receipt actually is.
+  const isImage = body.mimeType.startsWith('image/');
+  const isDocument =
+    DOCUMENT_MIME_TYPES.has(body.mimeType) ||
+    DOCUMENT_EXTENSIONS.has(extensionOf(body.fileName));
+  if (!isImage && !isDocument) {
     return Response.json(
-      { error: 'Only image files are supported.' },
+      {
+        error:
+          'Unsupported file type. Upload an image, a PDF or an Illustrator ' +
+          'file (.ai) for documents and packaging artwork.',
+      },
       { status: 400 }
     );
   }
 
   if (body.sizeBytes <= 0 || body.sizeBytes > MAX_FILE_SIZE_BYTES) {
     return Response.json(
-      { error: 'Image must be between 1 byte and 25 MB.' },
+      { error: 'File must be between 1 byte and 25 MB.' },
       { status: 400 }
     );
   }

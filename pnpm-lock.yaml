@@ -225,7 +225,7 @@ importers:
         version: 11.0.0
       openai:
         specifier: ^6.33.0
-        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.0)(ws@8.18.0)(zod@3.25.76)
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.0)(ws@8.21.0)(zod@3.25.76)
       pino:
         specifier: ^9.7.0
         version: 9.14.0
@@ -280,6 +280,9 @@ importers:
       tw-animate-css:
         specifier: ^1.3.8
         version: 1.4.0
+      unpdf:
+        specifier: ^1.8.0
+        version: 1.8.0
       vaul:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@19.0.0)(@types/react@19.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -17767,6 +17770,18 @@ packages:
         integrity: sha512-8rMeVYWSIyccIJscb9NdCfZKSRBKYTeVnwmiRYT2ulE3qd1RaDQ0xQDP+rI3ccIWbhu/zuo5cgN8z73belNZgw==,
       }
 
+  unpdf@1.8.0:
+    resolution:
+      {
+        integrity: sha512-jQlkckbe5nKxRHQdbvo9IKHlU6Cjq00UlxxB8lrCIxvS2o5IbAL1wM+4a1Yc3+BIohg9p5AsoaftwO+G4Aq/qQ==,
+      }
+    engines: { node: '>=22' }
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.69 || ^1.0.0
+    peerDependenciesMeta:
+      '@napi-rs/canvas':
+        optional: true
+
   unpipe@1.0.0:
     resolution:
       {
@@ -28669,11 +28684,11 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.0)(ws@8.18.0)(zod@3.25.76):
+  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.0)(ws@8.21.0)(zod@3.25.76):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.60
       '@smithy/signature-v4': 5.6.0
-      ws: 8.18.0
+      ws: 8.21.0
       zod: 3.25.76
 
   openapi-types@12.1.3: {}
@@ -30911,6 +30926,8 @@ snapshots:
   universalify@2.0.1: {}
 
   unix-crypt-td-js@1.1.4: {}
+
+  unpdf@1.8.0: {}
 
   unpipe@1.0.0: {}
 
