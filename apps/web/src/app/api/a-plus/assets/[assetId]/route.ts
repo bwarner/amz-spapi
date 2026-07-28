@@ -56,7 +56,15 @@ export async function GET(
   let asset;
   try {
     asset = await getAsset(assetId);
-  } catch {
+  } catch (error) {
+    // A bare `catch {}` here turned every lookup failure into an unexplained
+    // "500 in 254ms" in the dev log. A 500 is our bug by definition, so the
+    // cause has to reach the terminal.
+    console.error(
+      '[assets] lookup failed',
+      assetId,
+      error instanceof Error ? `${error.name}: ${error.message}` : error
+    );
     return Response.json({ error: 'Asset lookup failed.' }, { status: 500 });
   }
 
@@ -105,8 +113,15 @@ export async function GET(
           },
         });
       }
-    } catch {
-      // Fall through to the full-resolution signed URL below.
+    } catch (error) {
+      // Falling through to the signed URL is the right behaviour — the preview
+      // still works — but silently means a permanently broken thumbnail path
+      // looks like success. Warn, don't fail.
+      console.warn(
+        '[assets] thumbnail failed, serving full resolution',
+        assetId,
+        error instanceof Error ? `${error.name}: ${error.message}` : error
+      );
     }
   }
 

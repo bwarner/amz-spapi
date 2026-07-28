@@ -199,6 +199,36 @@ export async function loadAssetBytes(params: {
  * content hash. The `generated-` file-name prefix marks it eligible for
  * asset GC (user uploads are never collected).
  */
+/**
+ * Custom S3 object metadata, so an object is self-describing without the DB.
+ *
+ * Couchbase stays the source of truth — this exists so the BUCKET can be
+ * reconciled against it (orphans from failed confirms, docs whose object is
+ * gone) and so a lost DB could be rebuilt from the objects. It is also what S3
+ * Metadata's `user_metadata` column would expose if those tables get enabled.
+ *
+ * Only immutable facts belong here: object metadata cannot be changed without
+ * copying the object, so mutable state (status, links) would silently go stale.
+ * `userId` adds no new exposure — it is already a path segment in the key.
+ *
+ * Values must be US-ASCII and the whole set is capped at 2KB by S3.
+ */
+function assetObjectMetadata(fields: {
+  assetId: string;
+  userId: string;
+  feature: string;
+  sha256?: string;
+}): Record<string, string> {
+  const clean = (value: string) =>
+    value.replace(/[^\x20-\x7E]/g, '').slice(0, 256);
+  return {
+    assetId: clean(fields.assetId),
+    userId: clean(fields.userId),
+    feature: clean(fields.feature),
+    ...(fields.sha256 ? { sha256: clean(fields.sha256) } : {}),
+  };
+}
+
 export async function persistGeneratedFileAsset(params: {
   userId: string;
   bytes: Buffer;
@@ -222,6 +252,14 @@ export async function persistGeneratedFileAsset(params: {
       Key: key,
       Body: params.bytes,
       ContentType: params.mimeType,
+      // Parity with the presigned upload path, which has always tagged objects
+      // with sha256/originalFileName — generated assets were the blind spot.
+      Metadata: assetObjectMetadata({
+        assetId,
+        userId: params.userId,
+        feature: params.feature ?? 'a-plus',
+        sha256,
+      }),
     })
   );
   const now = Date.now();

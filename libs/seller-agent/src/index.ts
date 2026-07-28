@@ -6,10 +6,12 @@ export type {
   SellerImageOps,
   SellerWebOps,
   SellerSourcingOps,
+  SellerComplianceOps,
+  ImageComplianceReport,
   SupplierOffer,
   SellerListingWrites,
   EditedImage,
   ReadPageResult,
 } from './seller-agent.js';
-export { trimHistory } from './history.js';
+export { trimHistory, dropStaleToolImages } from './history.js';
 export type { HistoryConfig } from './history.js';

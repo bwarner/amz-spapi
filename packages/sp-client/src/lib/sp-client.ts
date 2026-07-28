@@ -105,6 +105,36 @@ export interface UploadDestinationRequest {
   contentType?: string;
 }
 
+/**
+ * Rewrite an SP-API failure's `message` to carry the status, Amazon's error code
+ * and the path. Mutates rather than wraps so callers reading `error.response`
+ * keep working.
+ */
+function describeSpApiError(error: AxiosError): void {
+  const status = error.response?.status;
+  if (!status) return;
+
+  const body = error.response?.data as
+    | { errors?: Array<{ code?: string; message?: string; details?: string }> }
+    | undefined;
+  const first = body?.errors?.[0];
+  const path = error.config?.url ?? 'unknown path';
+
+  const parts = [`SP-API ${status}`];
+  if (first?.code) parts.push(first.code);
+  const detail = first?.message ?? first?.details;
+  const hint =
+    status === 403 && !detail
+      ? 'Access denied for this operation. If other SP-API calls are working, ' +
+        'the application is missing the role for THIS API rather than being ' +
+        'unauthenticated — check the roles on the SP-API app, then re-authorize.'
+      : undefined;
+
+  error.message = [parts.join(' '), detail ?? hint, `(${path})`]
+    .filter(Boolean)
+    .join(' — ');
+}
+
 export class SpApiClient {
   private httpClient: AxiosInstance;
   private config: SpApiClientConfig;
@@ -202,6 +232,12 @@ export class SpApiClient {
           }
         }
 
+        // Enrich the message with Amazon's own error code before rejecting.
+        // Axios alone says "Request failed with status code 403", which reads as
+        // "not authenticated" and sends callers off re-linking accounts — when a
+        // 403 on ONE operation while others succeed means the application lacks
+        // that API's role. The response body says which; pass it on.
+        describeSpApiError(error);
         return Promise.reject(error);
       }
     );

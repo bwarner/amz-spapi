@@ -18,10 +18,17 @@ export interface SellerAssetStore {
   saveGeneratedImage(params: {
     dataUrl: string;
   }): Promise<{ assetId: string; url: string }>;
-  /** Bundle owned assets into a downloadable zip; returns its download URL. */
+  /**
+   * Bundle owned assets into a downloadable zip; returns its download URL.
+   *
+   * Files carry EITHER an explicit fileName or an Amazon `variant` code — with a
+   * variant the host builds "<productId>.<VARIANT>.<ext>", deriving the
+   * extension from the asset's real format rather than trusting a guess.
+   */
   exportPhotoZip(params: {
     zipName: string;
-    files: Array<{ assetId: string; fileName: string }>;
+    productId?: string;
+    files: Array<{ assetId: string; fileName?: string; variant?: string }>;
   }): Promise<{ downloadUrl: string; fileCount: number; sizeBytes: number }>;
 }
 
@@ -53,6 +60,19 @@ export interface SellerImageOps {
     aspect?: string;
     gravity?: 'center' | 'top' | 'bottom' | 'left' | 'right';
   }): Promise<EditedImage>;
+  /**
+   * Return a photo as image bytes the MODEL can look at, plus its measured
+   * dimensions and subject box. This is what turns the agent from "blind and
+   * guessing defaults" into something that can judge framing.
+   */
+  inspect(params: { assetId: string; maxDimension?: number }): Promise<{
+    mediaType: string;
+    base64: string;
+    width: number;
+    height: number;
+    hasAlpha: boolean;
+    subject?: { x: number; y: number; width: number; height: number };
+  }>;
   /**
    * Crop away empty margins by measuring the subject from the pixels (alpha
    * for cutouts, uniform border color otherwise), optionally re-framing it on
@@ -90,6 +110,16 @@ export interface SellerImageOps {
     /** Pixels of edge to drop when refining (default scales with the image). */
     edgeShrink?: number;
   }): Promise<EditedImage>;
+  /**
+   * Render a model-authored graphic through the deterministic type pipeline:
+   * every glyph is real rendered type, so text is never garbled.
+   */
+  renderGraphic(params: {
+    size?: number;
+    aspect?: string;
+    background?: string;
+    nodes: Array<Record<string, unknown>>;
+  }): Promise<EditedImage>;
   renderInfographic(params: {
     template: 'benefit-grid' | 'callout-overlay';
     productImageAssetId: string;
@@ -126,6 +156,52 @@ export interface SellerImageOps {
      */
     trimForeground?: boolean;
   }): Promise<EditedImage>;
+}
+
+/** Measured, platform-specific verdict on one image. */
+export type ImageComplianceReport = {
+  platform: string;
+  role: 'main' | 'secondary';
+  verdict: 'pass' | 'review' | 'fail';
+  measurements: Record<string, unknown>;
+  blockers: Array<{
+    id: string;
+    message: string;
+    actual: string;
+    required: string;
+  }>;
+  warnings: Array<{
+    id: string;
+    message: string;
+    actual: string;
+    required: string;
+  }>;
+  /** Questions the tool cannot answer — settle them by LOOKING at the image. */
+  manualChecks: string[];
+  provenance: string;
+};
+
+/**
+ * Host-provided marketplace image compliance. Deterministic by design: a
+ * pass/fail that gates a live listing write must not vary between runs.
+ */
+export interface SellerComplianceOps {
+  supportedPlatforms(): string[];
+  checkImage(params: {
+    assetId: string;
+    platform?: string;
+    role?: 'main' | 'secondary';
+    containsSyntheticPerson?: boolean;
+  }): Promise<ImageComplianceReport>;
+  /** Embed the AI-person disclosure keyword; returns a NEW tagged asset. */
+  tagSyntheticPerformer(params: { assetId: string }): Promise<{
+    assetId: string;
+    url: string;
+    /** Already carried the keyword — nothing was duplicated. */
+    alreadyTagged: boolean;
+    /** False when unparseable existing XMP had to be replaced. */
+    preservedExisting: boolean;
+  }>;
 }
 
 /**
@@ -241,6 +317,7 @@ export interface SellerAgentConfig {
   imageOps?: SellerImageOps;
   webOps?: SellerWebOps;
   sourcingOps?: SellerSourcingOps;
+  complianceOps?: SellerComplianceOps;
   listingWrites?: SellerListingWrites;
   modelTier?: ModelTier;
   marketplaceId: string;
@@ -754,6 +831,24 @@ const PHOTO_LABEL_SCHEMA = z
       'this conversation (after Photo Z comes Photo AA, AB, ...)'
   );
 
+/**
+ * Amazon image variant codes, from Seller Central "Image variants".
+ *
+ * Required in the filename when using the bulk image upload path, which is what
+ * makes a downloaded zip self-assigning. Encoded as a pattern rather than a
+ * prose hint so an invalid code fails here instead of at Amazon: PT tops out at
+ * 99 (not 08, which is the number that gets remembered), and the safety,
+ * interior, angle, ingredient, energy-guide and multipack families exist too.
+ */
+const IMAGE_VARIANT_PATTERN =
+  /^(MAIN|SWCH|INGR|EEGL|DTLS|TOPP|BOTT|LEFT|RGHT|FRNT|BACK|SIDE|PS0[1-6]|PT(?:0[1-9]|[1-9][0-9])|IN(?:0[1-9]|[1-9][0-9]))$/;
+
+const IMAGE_VARIANT_HELP =
+  'MAIN (primary, shown in search) | PT01-PT99 (extra angles, in use, details) | ' +
+  'SWCH (colour swatch thumbnail) | PS01-PS06 (safety/compliance info) | ' +
+  'IN01-IN99 (interior/sample pages) | TOPP BOTT LEFT RGHT FRNT BACK SIDE (angles) | ' +
+  'INGR (ingredients) | EEGL (energy guide) | DTLS (multipack)';
+
 const ASSET_ID_SCHEMA = z
   .string()
   .min(1)
@@ -877,9 +972,11 @@ function getAssetTools(assetStore: SellerAssetStore) {
       description:
         'Bundle a finished set of photos into ONE downloadable zip so the user can ' +
         'save everything in a single click instead of right-clicking each image. ' +
-        'Name files in Amazon upload order with a numeric prefix and role, e.g. ' +
-        '"1-main-image.jpg", "2-lifestyle-espresso.jpg". Returns a download link — ' +
-        'present it to the user as a markdown link.',
+        'Two naming choices. PREFERRED: pass productId plus a `variant` code per ' +
+        'file, and the zip is named so Amazon assigns every image itself on upload ' +
+        `(${IMAGE_VARIANT_HELP}). Otherwise pass readable fileNames and the user ` +
+        'assigns them by hand in Assign Images. ' +
+        'Returns a download link — present it to the user as a markdown link.',
       inputSchema: z.object({
         zipName: z
           .string()
@@ -887,16 +984,45 @@ function getAssetTools(assetStore: SellerAssetStore) {
           .describe(
             'Zip base name, kebab-case, e.g. "acme-coffee-listing-photos"'
           ),
+        productId: z
+          .string()
+          .regex(
+            /^[A-Za-z0-9]{4,40}$/,
+            'Product identifier with dashes and spaces stripped'
+          )
+          .optional()
+          .describe(
+            'ASIN, SKU, UPC, EAN, GTIN, JAN or ISBN, dashes and spaces stripped. ' +
+              'Required when using `variant`: filenames are built as ' +
+              '"<productId>.<VARIANT>.<ext>" so Amazon assigns each image itself.'
+          ),
         files: z
           .array(
             z.object({
               assetId: ASSET_ID_SCHEMA,
+              variant: z
+                .string()
+                .regex(IMAGE_VARIANT_PATTERN)
+                .optional()
+                .describe(
+                  `Amazon variant code — ${IMAGE_VARIANT_HELP}. Give this (with ` +
+                    'productId) for a self-assigning upload; the host builds the ' +
+                    'filename with the right extension for each asset.'
+                ),
               fileName: z
                 .string()
-                .regex(/^[a-z0-9][a-z0-9._-]{1,60}\.(jpg|jpeg|png|webp)$/)
+                // Case-sensitive on purpose: Amazon's auto-assign convention is
+                // "<productId>.MAIN.jpg" with an UPPERCASE variant code, which a
+                // lowercase-only pattern silently forbids. webp is excluded —
+                // Amazon accepts JPEG, TIFF, PNG and non-animated GIF only.
+                .regex(
+                  /^[A-Za-z0-9][A-Za-z0-9._-]{1,60}\.(jpg|jpeg|png|tif|tiff|gif)$/
+                )
                 .describe(
-                  'File name inside the zip — numeric prefix for build order, ' +
-                    'e.g. "1-main-image.jpg"'
+                  'File name inside the zip. Either "<productId>.MAIN.jpg" / ' +
+                    '"<productId>.PT01.jpg" so Amazon auto-assigns each image on ' +
+                    'upload, or a readable "1-main-image.jpg" when the user will ' +
+                    'assign them by hand.'
                 ),
             })
           )
@@ -905,9 +1031,33 @@ function getAssetTools(assetStore: SellerAssetStore) {
       }),
       execute: async (input: {
         zipName: string;
-        files: Array<{ assetId: string; fileName: string }>;
+        productId?: string;
+        files: Array<{
+          assetId: string;
+          fileName?: string;
+          variant?: string;
+        }>;
       }) => {
         try {
+          const usesVariants = input.files.some((file) => file.variant);
+          if (usesVariants && !input.productId) {
+            return {
+              success: false,
+              error:
+                'Variant codes need productId — the filename is ' +
+                '"<productId>.<VARIANT>.<ext>". Ask the user for the ASIN or SKU, ' +
+                'or drop the variant codes and use readable fileNames instead.',
+            };
+          }
+          const unnamed = input.files.filter(
+            (file) => !file.variant && !file.fileName
+          );
+          if (unnamed.length) {
+            return {
+              success: false,
+              error: 'Every file needs either a variant code or a fileName.',
+            };
+          }
           const result = await assetStore.exportPhotoZip(input);
           return {
             success: true,
@@ -915,6 +1065,21 @@ function getAssetTools(assetStore: SellerAssetStore) {
             note:
               'Give the user this markdown link so one click downloads the whole set: ' +
               `[Download ${input.zipName}.zip](${result.downloadUrl})`,
+            // Verified from Seller Central "Assign Images". Each of these breaks
+            // a handoff quietly, so tell the user rather than assume they know.
+            uploadNotes: [
+              'Upload in Seller Central under Catalog > Upload Images. Auto-assign ' +
+                'by filename also needs the country/region and seller code chosen ' +
+                'during that upload — the filename alone is not enough.',
+              'Anything that does not get assigned sits in Assign Images for 30 ' +
+                'DAYS and is then deleted. Assign within that window or re-upload.',
+              'Images apply only to listings in the country/region of the account ' +
+                'used to upload. Selling in several regions means uploading from ' +
+                'each of those accounts.',
+              'For a variation family, "Copy to siblings" (on by default) pushes ' +
+                'the set to sibling ASINs of the same color/style — no need to ' +
+                'repeat images per sibling.',
+            ],
           };
         } catch (error) {
           return {
@@ -1159,6 +1324,123 @@ function getImageEditTools(imageOps: SellerImageOps) {
         ),
     },
 
+    'look-at-photo': {
+      description:
+        'LOOK at a photo — the image itself is returned to you, so you can see what ' +
+        'the product is, how it is lit, what surfaces and space the scene has, and ' +
+        'whether an edit came out right. Use it BEFORE composing or generating from a ' +
+        'photo (so scale, position and lightingMatch are judged, not guessed) and AFTER ' +
+        'an edit you are unsure about. Also returns measured width/height and the ' +
+        "subject's bounding box as fractions. Each look spends context, so look once " +
+        'per photo and remember what you saw; never look at the same unchanged photo twice.',
+      inputSchema: z.object({
+        assetId: ASSET_ID_SCHEMA,
+        detail: z
+          .enum(['normal', 'high'])
+          .optional()
+          .describe(
+            'normal (default) is enough to judge framing, lighting and placement; ' +
+              'high doubles the detail for fine texture or small print, at more context cost'
+          ),
+      }),
+      execute: async (input: {
+        assetId: string;
+        detail?: 'normal' | 'high';
+      }) => {
+        try {
+          const image = await imageOps.inspect({
+            assetId: input.assetId,
+            maxDimension: input.detail === 'high' ? 1536 : 1024,
+          });
+          // Deliberately WITHOUT the base64: this output is streamed to the
+          // browser and persisted in the conversation store. The pixels reach
+          // the model through toModelOutput below, which re-loads them.
+          return {
+            success: true as const,
+            assetId: input.assetId,
+            detail: input.detail ?? 'normal',
+            width: image.width,
+            height: image.height,
+            hasAlpha: image.hasAlpha,
+            subject: image.subject,
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            assetId: input.assetId,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not read the photo.',
+          };
+        }
+      },
+      // Attach the actual image to the model's view of the tool result.
+      toModelOutput: async ({
+        output,
+      }: {
+        output: {
+          success: boolean;
+          assetId: string;
+          detail?: 'normal' | 'high';
+          width?: number;
+          height?: number;
+          hasAlpha?: boolean;
+          subject?: { x: number; y: number; width: number; height: number };
+          error?: string;
+        };
+      }) => {
+        if (!output.success) {
+          return {
+            type: 'error-text' as const,
+            value: output.error ?? 'Could not read the photo.',
+          };
+        }
+        try {
+          const image = await imageOps.inspect({
+            assetId: output.assetId,
+            maxDimension: output.detail === 'high' ? 1536 : 1024,
+          });
+          const subject = image.subject
+            ? `Subject occupies x ${image.subject.x}-${(
+                image.subject.x + image.subject.width
+              ).toFixed(3)}, y ${image.subject.y}-${(
+                image.subject.y + image.subject.height
+              ).toFixed(3)} of the frame.`
+            : 'No distinct subject box could be measured.';
+          return {
+            type: 'content' as const,
+            value: [
+              {
+                type: 'text' as const,
+                text:
+                  `${image.width}x${image.height}px, ` +
+                  `${
+                    image.hasAlpha ? 'has transparency' : 'opaque'
+                  }. ${subject}`,
+              },
+              {
+                // image-data, NOT file-data: the Anthropic provider maps
+                // file-data to a document block only for application/pdf and
+                // drops anything else with "unsupported tool content part type".
+                type: 'image-data' as const,
+                data: image.base64,
+                mediaType: image.mediaType,
+              },
+            ],
+          };
+        } catch (error) {
+          return {
+            type: 'error-text' as const,
+            value:
+              error instanceof Error
+                ? error.message
+                : 'Could not read the photo.',
+          };
+        }
+      },
+    },
+
     'trim-image': {
       description:
         'Crop away the empty space around the product — the bounding box is MEASURED ' +
@@ -1273,6 +1555,191 @@ function getImageEditTools(imageOps: SellerImageOps) {
             height: input.height,
             fit: input.fit,
             allowUpscale: input.allowUpscale,
+          })
+        ),
+    },
+
+    'render-graphic': {
+      description:
+        'Render a listing graphic YOU art-direct, with real rendered type — the ' +
+        'fix for both failure modes you have hit: generate-image garbles text at ' +
+        'any size, and generate-infographic keeps text legible but cannot be ' +
+        'relaid out. Here you place every element: background, framing boxes, ' +
+        'rules, product photos (by assetId), and copy in Playfair (serif) or ' +
+        'Inter (sans). All coordinates and sizes are FRACTIONS of the canvas ' +
+        '(0-1), so the layout is resolution-independent. ' +
+        'ALWAYS put copy in a `column` node rather than absolutely positioned ' +
+        'text: a column flows top-down so wrapped lines push the next item down, ' +
+        'while absolute text overlaps whatever follows the moment a string wraps ' +
+        'longer than you predicted — and you cannot predict line counts. ' +
+        'Then LOOK at the result with look-at-photo and adjust. Produces a NEW ' +
+        'labeled photo. For an Amazon MAIN image use a real photo instead; this is ' +
+        'for secondary/A+ imagery.',
+      inputSchema: z.object({
+        label: PHOTO_LABEL_SCHEMA,
+        size: z
+          .number()
+          .int()
+          .min(600)
+          .max(4000)
+          .optional()
+          .describe('Longest edge in px (default 2000)'),
+        aspect: z
+          .string()
+          .regex(/^\d+(\.\d+)?:\d+(\.\d+)?$/)
+          .optional()
+          .describe('Canvas ratio, default "1:1"'),
+        background: z.string().optional().describe('CSS color for the canvas'),
+        nodes: z
+          .array(
+            z.discriminatedUnion('type', [
+              z.object({
+                type: z.literal('column'),
+                x: z.number().min(0).max(1),
+                y: z.number().min(0).max(1),
+                width: z.number().min(0.05).max(1),
+                gap: z
+                  .number()
+                  .min(0)
+                  .max(0.2)
+                  .optional()
+                  .describe(
+                    'Space between children, fraction of canvas height'
+                  ),
+                align: z.enum(['left', 'center', 'right']).optional(),
+                children: z
+                  .array(
+                    z.discriminatedUnion('type', [
+                      z.object({
+                        type: z.literal('text'),
+                        text: z.string().min(1).max(400),
+                        fontSize: z
+                          .number()
+                          .min(0.008)
+                          .max(0.3)
+                          .describe(
+                            'Fraction of canvas HEIGHT — 0.06 is a big headline, 0.022 body'
+                          ),
+                        font: z
+                          .enum(['serif', 'sans'])
+                          .optional()
+                          .describe(
+                            'serif = Playfair Display (display copy), sans = Inter (body)'
+                          ),
+                        weight: z
+                          .union([
+                            z.literal(400),
+                            z.literal(600),
+                            z.literal(700),
+                          ])
+                          .optional(),
+                        color: z.string().optional(),
+                        align: z.enum(['left', 'center', 'right']).optional(),
+                        letterSpacing: z
+                          .number()
+                          .min(-0.05)
+                          .max(0.4)
+                          .optional()
+                          .describe(
+                            'Fraction of font size; 0.15 gives tracked small caps'
+                          ),
+                        lineHeight: z.number().min(0.8).max(2.5).optional(),
+                        uppercase: z.boolean().optional(),
+                      }),
+                      z.object({
+                        type: z.literal('rule'),
+                        color: z.string(),
+                        thickness: z.number().min(0.0005).max(0.02).optional(),
+                        width: z
+                          .number()
+                          .min(0.05)
+                          .max(1)
+                          .optional()
+                          .describe('Fraction of the COLUMN width'),
+                      }),
+                    ])
+                  )
+                  .min(1)
+                  .max(12),
+              }),
+              z.object({
+                type: z.literal('box'),
+                x: z.number().min(0).max(1),
+                y: z.number().min(0).max(1),
+                width: z.number().min(0).max(1),
+                height: z.number().min(0).max(1),
+                background: z.string().optional(),
+                borderColor: z.string().optional(),
+                borderWidth: z.number().min(0.0005).max(0.02).optional(),
+                radius: z.number().min(0).max(0.5).optional(),
+              }),
+              z.object({
+                type: z.literal('image'),
+                assetId: ASSET_ID_SCHEMA,
+                x: z.number().min(0).max(1),
+                y: z.number().min(0).max(1),
+                width: z.number().min(0.02).max(1),
+                height: z.number().min(0.02).max(1),
+                fit: z
+                  .enum(['contain', 'cover'])
+                  .optional()
+                  .describe(
+                    'contain keeps the whole product visible (default)'
+                  ),
+              }),
+              z.object({
+                type: z.literal('text'),
+                x: z.number().min(0).max(1),
+                y: z.number().min(0).max(1),
+                width: z.number().min(0.05).max(1),
+                text: z.string().min(1).max(400),
+                fontSize: z
+                  .number()
+                  .min(0.008)
+                  .max(0.3)
+                  .describe(
+                    'Fraction of canvas HEIGHT — 0.06 is a big headline, 0.022 body'
+                  ),
+                font: z
+                  .enum(['serif', 'sans'])
+                  .optional()
+                  .describe(
+                    'serif = Playfair Display (display copy), sans = Inter (body)'
+                  ),
+                weight: z
+                  .union([z.literal(400), z.literal(600), z.literal(700)])
+                  .optional(),
+                color: z.string().optional(),
+                align: z.enum(['left', 'center', 'right']).optional(),
+                letterSpacing: z
+                  .number()
+                  .min(-0.05)
+                  .max(0.4)
+                  .optional()
+                  .describe(
+                    'Fraction of font size; 0.15 gives tracked small caps'
+                  ),
+                lineHeight: z.number().min(0.8).max(2.5).optional(),
+                uppercase: z.boolean().optional(),
+              }),
+            ])
+          )
+          .min(1)
+          .max(24),
+      }),
+      execute: (input: {
+        label: string;
+        size?: number;
+        aspect?: string;
+        background?: string;
+        nodes: Array<Record<string, unknown>>;
+      }) =>
+        wrap(input.label, () =>
+          imageOps.renderGraphic({
+            size: input.size,
+            aspect: input.aspect,
+            background: input.background,
+            nodes: input.nodes,
           })
         ),
     },
@@ -1608,6 +2075,117 @@ function getWebTools(webOps: SellerWebOps) {
   };
 }
 
+function getComplianceTools(complianceOps: SellerComplianceOps) {
+  const platforms = complianceOps.supportedPlatforms();
+  return {
+    'tag-synthetic-performer': {
+      description:
+        "Embed Amazon's required disclosure keyword (contains-synthetic-performer) " +
+        "into an image's metadata, producing a NEW asset to upload in its place. " +
+        'Required when an image shows a fully AI-generated photorealistic person. ' +
+        'Do NOT use it on images of real people (even AI-edited), stylised or ' +
+        'non-photorealistic figures, or images with no people — a false disclosure ' +
+        'is its own problem.',
+      inputSchema: z.object({
+        assetId: ASSET_ID_SCHEMA,
+        label: PHOTO_LABEL_SCHEMA,
+      }),
+      execute: async (input: { assetId: string; label: string }) => {
+        try {
+          const tagged = await complianceOps.tagSyntheticPerformer({
+            assetId: input.assetId,
+          });
+          const { alreadyTagged, preservedExisting, ...image } = tagged;
+          return {
+            success: true as const,
+            images: [{ label: input.label, ...image }],
+            alreadyTagged,
+            note: [
+              'Upload THIS asset instead of the untagged original.',
+              alreadyTagged
+                ? 'It already carried the disclosure; nothing was duplicated.'
+                : '',
+              preservedExisting
+                ? ''
+                : 'WARNING: the file had XMP metadata in a form that could not ' +
+                  'be merged, so it was replaced. Tell the user their original ' +
+                  'image metadata (e.g. copyright, camera data) did not carry over.',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not tag the image.',
+          };
+        }
+      },
+    },
+
+    'check-image-compliance': {
+      description:
+        "MEASURE an image against a marketplace's image rules before it goes live: " +
+        'resolution and zoom minimums, file size and format, how much of the frame the ' +
+        'product fills, whether the background is actually pure white at the edge, ' +
+        'leftover transparency, and a blur proxy. Returns blockers (will be rejected or ' +
+        'suppressed), warnings, and manualChecks — the things it CANNOT measure (text, ' +
+        'logos, watermarks, props, whether it is the right product), which you settle ' +
+        'with look-at-photo. Deterministic and free: run it on every image you are about ' +
+        'to propose for a listing, and always before preview-listing-images. ' +
+        `Platforms: ${platforms.join(', ')}.`,
+      inputSchema: z.object({
+        assetId: ASSET_ID_SCHEMA,
+        role: z
+          .enum(['main', 'secondary'])
+          .optional()
+          .describe(
+            'main (default) applies the strict main-image rules — white background, ' +
+              'frame coverage, no transparency. secondary skips those; lifestyle and ' +
+              'infographic images are held only to the technical rules.'
+          ),
+        platform: z
+          .enum(platforms as [string, ...string[]])
+          .optional()
+          .describe('Destination marketplace (default amazon)'),
+        containsSyntheticPerson: z
+          .boolean()
+          .optional()
+          .describe(
+            'TRUE only if the image shows a fully AI-GENERATED photorealistic ' +
+              'person — Amazon requires that disclosed in the file metadata, and ' +
+              'no tool can detect it, so you must say. Not needed for real people ' +
+              '(even AI-edited), non-photorealistic figures, or images with no ' +
+              'people. Set it whenever you generated a lifestyle shot containing ' +
+              'a person.'
+          ),
+      }),
+      execute: async (input: {
+        assetId: string;
+        role?: 'main' | 'secondary';
+        platform?: string;
+        containsSyntheticPerson?: boolean;
+      }) => {
+        try {
+          const report = await complianceOps.checkImage(input);
+          return { success: true as const, ...report };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not check the image.',
+          };
+        }
+      },
+    },
+  };
+}
+
 function getSourcingTools(sourcingOps: SellerSourcingOps) {
   return {
     'search-suppliers': {
@@ -1806,6 +2384,7 @@ export function createSellerAgent({
   imageOps,
   webOps,
   sourcingOps,
+  complianceOps,
   listingWrites,
   modelTier,
   marketplaceId,
@@ -1826,6 +2405,9 @@ export function createSellerAgent({
   const assetTools = assetStore ? getAssetTools(assetStore) : {};
   const webTools = webOps ? getWebTools(webOps) : {};
   const sourcingTools = sourcingOps ? getSourcingTools(sourcingOps) : {};
+  const complianceTools = complianceOps
+    ? getComplianceTools(complianceOps)
+    : {};
   const listingWriteTools = listingWrites
     ? getListingWriteTools(listingWrites)
     : {};
@@ -1838,6 +2420,7 @@ export function createSellerAgent({
     ...assetTools,
     ...webTools,
     ...sourcingTools,
+    ...complianceTools,
     ...listingWriteTools,
   };
 
@@ -1909,6 +2492,11 @@ PHOTO WORKFLOW (attachments, labels, proposals):
   image becomes MAIN).
 
 LISTING WRITE SAFETY (non-negotiable):
+0. Run check-image-compliance on EVERY image first — role "main" for the image going
+   into slot 0, "secondary" for the rest. Fix blockers before proposing anything (it is
+   free and deterministic, unlike a rejection). Then settle its manualChecks by calling
+   look-at-photo: it cannot see text, logos, props or whether it is the right product,
+   and it says so. Report the numbers you got, not a general reassurance.
 1. NEVER call apply-listing-images without running preview-listing-images in the
    SAME conversation first and showing the user the per-slot diff and any
    validation issues.
@@ -1930,11 +2518,25 @@ LISTING WRITE SAFETY (non-negotiable):
   is displayed to the user automatically.
 
 IMAGE EDITING GUIDANCE:
-- YOU CANNOT SEE PIXELS. Never invent a crop rect to cut off empty space or to center a
-  product — you have no way to know where the product actually sits. Use trim-image,
-  which measures the bounding box from the pixels, and read the \`subject\` box it returns.
-  crop-image with an explicit rect is only for crops the USER described in relative terms
-  ("keep the left half", "drop the bottom third").
+- YOU CAN SEE A PHOTO — call look-at-photo. Do it before you compose, generate from, or
+  critique a photo, and never claim you cannot see an image or that you only know what
+  the user told you. What you CANNOT do is measure precisely by eye: for crops and
+  framing use trim-image (which measures the bounding box from the pixels) and read the
+  \`subject\` box that edits return. crop-image with an explicit rect is only for crops
+  the USER described in relative terms ("keep the left half", "drop the bottom third").
+- Looking is how you choose parameters instead of defaulting them: look at the product
+  to judge what it is and how it is lit, look at the scene to find the surface it should
+  sit on and how warm/bright it is, then set compose-image's scale, position (y on the
+  surface line), lightingMatch and shadow accordingly. Say what you saw and why you chose
+  those numbers, so the user can correct your judgment rather than your arithmetic.
+- After an edit the user questions, look at the RESULT before theorizing about causes.
+  One look beats three guesses.
+- UPSCALING IS NOT DETAIL. scale-image with allowUpscale reaches Amazon's zoom size but
+  invents no new detail, so a soft-looking result is genuinely soft. Say what the source
+  resolution was ("upscaled from 1024px, so zoom detail is limited") instead of
+  presenting the output size as native quality, and do NOT dismiss a sharpness warning
+  on an upscaled image because it looks acceptable at a glance — that warning is the
+  upscale showing.
 - Amazon main images: remove-image-background with background "white", then trim-image
   with aspect "1:1", background "white", coverage 0.85 (product filling ~85% of a square
   white frame), then scale-image to at least 1000px (allowUpscale when the source is
@@ -1949,9 +2551,15 @@ IMAGE EDITING GUIDANCE:
   so \`scale\` is the product's width as a fraction of the background and \`position\` is the
   product's center. Composites are secondary/A+ imagery only — never present a composite
   as the MAIN image.
-- Infographic listing images: prefer generate-infographic over generate-image whenever
-  the image needs READABLE TEXT (benefits, specs, feature callouts) — its text is
-  rendered type, never garbled. Feed it a transparent cutout, keep copy short and
+- ANY image containing text: use render-graphic (you art-direct the layout) or
+  generate-infographic (fixed templates). NEVER generate-image — image models garble
+  text at every size and always will; that is a model limitation, not a prompt problem.
+  render-graphic is the right choice when the fixed templates clip copy, leave dead
+  space, or the brand needs real typography; put all copy in \`column\` nodes so wrapped
+  lines never collide, then LOOK at the render and adjust rather than describing what
+  you intended.
+- Infographic listing images: generate-infographic still suits simple benefit grids and
+  callout overlays — its text is rendered type, never garbled. Feed it a transparent cutout, keep copy short and
   factual (fact-sheet claims only), and use brand colors when known. For
   callout-overlay, place x/y ON the pictured feature and spread callouts apart.
 - Ask before destructive-feeling choices (e.g. tight crops that drop parts of the
@@ -1965,9 +2573,10 @@ DIAGNOSING A COMPOSITE THAT LOOKS WRONG — read this before theorizing:
 - A dark band or frame around/under the product = the contact shadow. Lower it
   (shadow: 0.2) or turn it off (shadow: false).
 - A light outline hugging the product = leftover background color at the mask edge.
-  remove-image-background and compose-image strip it by default; if the user still sees
-  it, raise edgeShrink (try 6) on compose-image. Always work from the original photo's
-  cutout, never from an already-composited copy.
+  remove-image-background and compose-image strip it and then MEASURE the result,
+  escalating automatically if a halo survives — so look at the result before claiming
+  one is there. If you can genuinely see it, pass edgeShrink: 8 explicitly. Always work
+  from the original photo's cutout, never from an already-composited copy.
 - Product looks lit differently from the scene = raise lightingMatch toward 1. Set it
   to 0 when the product's true color must not shift.
 - A rectangle of the ORIGINAL photo's background around the product means the source
@@ -1998,7 +2607,13 @@ READING OUTSIDE PAGES:
   content (they go stale and Amazon rejects them); use them for the seller's own
   cost/margin analysis.
 - Reading a page can take up to a minute. Tell the user what you're reading before a
-  batch of reads, and read each URL once.
+  batch of reads, and don't re-read a page that already gave you what you need.
+- DO re-read when an earlier attempt in this conversation failed, was blocked, or came
+  back WITHOUT the fields now being discussed. Never answer "the page couldn't be read"
+  from memory of an earlier turn — reads are cached and tooling changes, so the earlier
+  failure may be stale. Call the tool and report what THIS attempt returned.
+- Never present an earlier turn's summary as current findings without saying it is a
+  recap; if the user is asking again, they want the gap filled, not the summary repeated.
 - Read the result's \`warnings\` and \`details\` before concluding anything is missing.
   \`details\` holds the scalar fields the scraper got (price, currency, sku, rating,
   availability, categories) — a price there is the listing's HEADLINE figure.
@@ -2064,6 +2679,20 @@ AVAILABLE TOOLS:
   Amazon pay me").
 - get-financial-events: itemized fees/charges/refunds for a date window or one
   order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}
+
+WHEN AN AMAZON CALL FAILS:
+- Read the error. It carries the status, Amazon's error code and the path, e.g.
+  "SP-API 403 AccessDenied — ... (/fba/inbound/v0/shipments)". Quote that to the user
+  instead of paraphrasing it as a connection problem.
+- A 403 on ONE operation while OTHER SP-API calls in this conversation are succeeding
+  does NOT mean the account is disconnected or the session expired. It means the
+  application is not authorized for that specific API — the SP-API app is missing that
+  role, and adding it requires re-authorizing so the refresh token carries it. Say that;
+  do not tell the user to re-link an account that is demonstrably working.
+- Before blaming authentication, check whether you have already called another
+  account-connected tool successfully in this conversation. If you have, say so — it is
+  the evidence that separates "not authorized for this API" from "not connected".
+- 401 across every call, or a token refresh failure, IS an authentication problem.
 
 FINANCE ANSWERS:
 - Settlement totals are per payout period; financial events itemize them. When asked

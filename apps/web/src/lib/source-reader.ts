@@ -1273,12 +1273,45 @@ export type SourceReadResult = {
   cacheHit?: boolean;
 };
 
+/**
+ * Bump whenever extraction changes what a read can produce (a new actor, a new
+ * mapper, a new field). Entries written by an older reader are treated as
+ * misses, so an improvement takes effect immediately instead of waiting out a
+ * 24h TTL on results the previous code was incapable of getting.
+ */
+const READER_VERSION = 2;
+
 /** Shape stored in the shared source cache. */
 type CachedSource = {
+  readerVersion?: number;
   facts: ExtractedProductFacts;
   text?: string;
   details?: Record<string, string>;
 };
+
+/** A read this thin is a failure in substance — don't let it squat for a day. */
+const WEAK_CACHE_TTL_SECONDS = 15 * 60;
+
+function isWeakExtraction(
+  facts: ExtractedProductFacts,
+  details?: Record<string, string>
+): boolean {
+  // A bot-wall page still yields a <title> and meta description, which looks
+  // like a successful extraction and is worthless for sourcing.
+  const thin =
+    (facts.extractionSource === 'meta-tags' ||
+      facts.extractionSource === 'heuristic') &&
+    !facts.features.length &&
+    !facts.pricePoint;
+  const gated = facts.warnings.some((warning) =>
+    /login|subscription|captcha|anti-bot|partially gated|not captured/i.test(
+      warning
+    )
+  );
+  const marketplaceWithoutTerms =
+    hasTieredPricing(facts.finalUrl ?? '') && !details?.['priceTiers'];
+  return thin || gated || marketplaceWithoutTerms;
+}
 
 const BROWSER_HEADERS = {
   'User-Agent':
@@ -1322,7 +1355,7 @@ export async function readSourcePage(params: {
 
   const cacheKeyUrl = cleanUrl(url.toString());
   const cached = await getCachedSourceFacts<CachedSource>(cacheKeyUrl);
-  if (cached?.facts) {
+  if (cached?.facts && cached.readerVersion === READER_VERSION) {
     console.log('[source-reader] cache HIT', cacheKeyUrl);
     return {
       facts: cached.facts,
@@ -1332,18 +1365,24 @@ export async function readSourcePage(params: {
       cacheHit: true,
     };
   }
-  console.log('[source-reader] cache MISS', cacheKeyUrl);
+  console.log(
+    '[source-reader] cache MISS',
+    cacheKeyUrl,
+    cached?.facts
+      ? `(reader v${cached.readerVersion ?? 1} → v${READER_VERSION})`
+      : ''
+  );
 
   const succeed = (
     facts: ExtractedProductFacts,
     text?: string,
     details?: Record<string, string>
   ) => {
-    void setCachedSourceFacts<CachedSource>(cacheKeyUrl, {
-      facts,
-      text,
-      details,
-    });
+    void setCachedSourceFacts<CachedSource>(
+      cacheKeyUrl,
+      { readerVersion: READER_VERSION, facts, text, details },
+      isWeakExtraction(facts, details) ? WEAK_CACHE_TTL_SECONDS : undefined
+    );
     return { facts, text, details, apifyConfigured };
   };
 

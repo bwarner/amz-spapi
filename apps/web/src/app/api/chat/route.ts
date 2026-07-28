@@ -6,6 +6,7 @@ import {
 } from 'ai';
 import {
   createSellerAgent,
+  dropStaleToolImages,
   trimHistory,
   type SellerAssetStore,
   type SellerListingWrites,
@@ -17,12 +18,14 @@ import { auth0 } from '../../../lib/auth0';
 import { resolveAmazonConnection } from '../../../lib/amazon-connections';
 import { zipSync } from 'fflate';
 import {
+  extensionForMime,
   loadAssetBytes,
   persistGeneratedFileAsset,
   persistGeneratedImageAsset,
 } from '../../../lib/media-assets';
 import { createImageOps } from '../../../lib/image-ops';
 import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
+import { createComplianceOps } from '../../../lib/compliance-ops';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
 import {
@@ -45,6 +48,7 @@ const PHOTO_TOOL_PART_TYPES = new Set([
   'tool-remove-image-background',
   'tool-compose-image',
   'tool-generate-infographic',
+  'tool-render-graphic',
 ]);
 
 /**
@@ -221,7 +225,7 @@ export async function POST(request: Request) {
         url: `/api/a-plus/assets/${asset.assetId}`,
       };
     },
-    exportPhotoZip: async ({ zipName, files }) => {
+    exportPhotoZip: async ({ zipName, productId, files }) => {
       const entries: Record<string, Uint8Array> = {};
       for (const file of files) {
         const asset = await loadAssetBytes({
@@ -233,11 +237,22 @@ export async function POST(request: Request) {
             `Asset ${file.assetId} not found — use asset ids from this conversation's photos.`
           );
         }
+        // Amazon's auto-assign convention: <productId>.<VARIANT>.<ext>. The
+        // extension comes from the stored asset, not from the model — a .jpg
+        // name on PNG bytes is rejected on upload.
+        const baseName = file.variant
+          ? `${productId}.${file.variant}.${extensionForMime(asset.mimeType)}`
+          : file.fileName;
+        if (!baseName) {
+          throw new Error(
+            `File for asset ${file.assetId} has neither a variant code nor a fileName.`
+          );
+        }
         // Model-chosen names could collide; suffix duplicates instead of
         // silently overwriting an entry.
-        let name = file.fileName;
+        let name = baseName;
         for (let n = 2; entries[name]; n++) {
-          name = file.fileName.replace(/(\.[a-z]+)$/i, `-${n}$1`);
+          name = baseName.replace(/(\.[a-z]+)$/i, `-${n}$1`);
         }
         entries[name] = asset.bytes;
       }
@@ -293,6 +308,7 @@ export async function POST(request: Request) {
     imageOps: createImageOps(chatUserId),
     webOps: createWebOps(chatUserId, chatId),
     sourcingOps: createSourcingOps(chatUserId, chatId),
+    complianceOps: createComplianceOps(chatUserId),
     listingWrites,
     marketplaceId: userMarketplaceId,
     additionalInstructions: registryInstructions,
@@ -303,9 +319,16 @@ export async function POST(request: Request) {
     minRecentMessages: 10,
   });
 
-  const modelMessages = await convertToModelMessages(trimmedMessages, {
-    ignoreIncompleteToolCalls: true,
-  });
+  // `tools` is what enables multi-modal tool results: without it, a persisted
+  // tool part is converted back as plain JSON and any image a tool returned via
+  // toModelOutput is silently dropped — so look-at-photo would show the model
+  // geometry and never the pixels.
+  const modelMessages = dropStaleToolImages(
+    await convertToModelMessages(trimmedMessages, {
+      ignoreIncompleteToolCalls: true,
+      tools: agent.tools,
+    })
+  );
 
   let result;
   try {

@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import type { SellerImageOps } from '@amz-spapi/seller-agent';
 import { loadAssetBytes, persistGeneratedImageAsset } from './media-assets';
 import { renderListingInfographic } from './listing-infographic';
+import { renderListingGraphic, type GraphicNode } from './listing-graphic';
 
 const BG_REMOVAL_DIST = 'node_modules/@imgly/background-removal-node/dist';
 
@@ -345,6 +346,109 @@ function featherAlpha(alpha: Uint8Array, width: number, height: number): void {
 /** How many pixels of edge to drop — the fringe scales with the cutout. */
 function defaultEdgeShrink(width: number, height: number): number {
   return Math.min(Math.max(Math.round(Math.min(width, height) / 400), 1), 4);
+}
+
+/**
+ * How much brighter the cutout's outer rim is than its body, in luma.
+ *
+ * A positive score is the halo the user sees as a light outline once the cutout
+ * lands on a dark scene: leftover background pixels clinging to the edge. This
+ * is measurable, so the fix does not need a human to report it — compose()
+ * escalates the erosion until the score drops.
+ */
+function edgeHaloScore(
+  data: Buffer | Uint8Array,
+  alpha: Uint8Array,
+  width: number,
+  height: number
+): number {
+  let rimSum = 0;
+  let rimCount = 0;
+  let bodySum = 0;
+  let bodyCount = 0;
+
+  const luma = (i: number) =>
+    data[i * 4] * 0.3 + data[i * 4 + 1] * 0.59 + data[i * 4 + 2] * 0.11;
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      const a = alpha[i];
+      // Fully transparent pixels are invisible whatever color they hold.
+      if (a < 10) continue;
+      // The rim is every PARTIAL pixel plus the solid ones touching them. A
+      // soft mask puts the whole halo in partial alpha, so counting only opaque
+      // rim pixels scores a wide fringe as zero and never escalates.
+      const onRim =
+        a < 250 ||
+        alpha[i - 1] < 200 ||
+        alpha[i + 1] < 200 ||
+        alpha[i - width] < 200 ||
+        alpha[i + width] < 200;
+      if (onRim) {
+        rimSum += luma(i);
+        rimCount++;
+      } else {
+        bodySum += luma(i);
+        bodyCount++;
+      }
+    }
+  }
+  if (!rimCount || !bodyCount) return 0;
+  return rimSum / rimCount - bodySum / bodyCount;
+}
+
+/** Above this the rim reads as a halo rather than as the product's own highlight. */
+const HALO_TOLERANCE = 14;
+const MAX_AUTO_SHRINK = 8;
+
+/**
+ * Refine edges, then verify the result and escalate if a halo survives.
+ *
+ * The default shrink is a function of resolution, which is right for a typical
+ * mask but not for a soft one shot against a bright backdrop. Rather than make
+ * the user notice a white outline and ask for `edgeShrink: 6`, measure it and
+ * step up. An explicit `shrink` is honoured as-is — the caller has overridden
+ * the judgment.
+ */
+export async function refineCutoutEdgesAuto(
+  input: Buffer,
+  shrink?: number
+): Promise<{ buffer: Buffer; shrink: number; halo: number }> {
+  if (shrink !== undefined) {
+    return {
+      buffer: await refineCutoutEdges(input, shrink),
+      shrink,
+      halo: await measureHalo(input),
+    };
+  }
+
+  const meta = await sharp(input).metadata();
+  let steps = defaultEdgeShrink(meta.width ?? 0, meta.height ?? 0);
+  let buffer = await refineCutoutEdges(input, steps);
+  let halo = await measureHalo(buffer);
+
+  // Two escalations at most: past that we are eating the product, not the halo.
+  for (let attempt = 0; attempt < 2 && halo > HALO_TOLERANCE; attempt++) {
+    const next = Math.min(steps + 2, MAX_AUTO_SHRINK);
+    if (next === steps) break;
+    steps = next;
+    buffer = await refineCutoutEdges(input, steps);
+    halo = await measureHalo(buffer);
+  }
+  return { buffer, shrink: steps, halo };
+}
+
+/** Halo score of an encoded image. */
+export async function measureHalo(input: Buffer): Promise<number> {
+  const { data, info } = await sharp(input)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  if (info.channels !== 4 || !info.width || !info.height) return 0;
+  const alpha = new Uint8Array(info.width * info.height);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3];
+  return edgeHaloScore(data, alpha, info.width, info.height);
 }
 
 /**
@@ -726,6 +830,51 @@ export function createImageOps(userId: string): SellerImageOps {
       return save(buffer, format.mime);
     },
 
+    async inspect(params) {
+      const { bytes, mimeType } = await load(params.assetId);
+      const source = Buffer.from(bytes);
+      const meta = await sharp(source).metadata();
+      const width = meta.width ?? 0;
+      const height = meta.height ?? 0;
+      if (!width || !height) {
+        throw new Error('Could not read image dimensions.');
+      }
+
+      // Cap the long edge: the model pays tokens per pixel, and no framing
+      // decision needs more than this.
+      const limit = Math.min(Math.max(params.maxDimension ?? 1024, 384), 1536);
+      const hasAlpha = meta.hasAlpha ?? false;
+      const pipeline = sharp(source).resize({
+        width: limit,
+        height: limit,
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+      // Keep alpha visible for cutouts; JPEG is far cheaper for opaque photos.
+      const encoded = hasAlpha
+        ? await pipeline.png().toBuffer()
+        : await pipeline.jpeg({ quality: 82 }).toBuffer();
+
+      const box = await subjectBoundingBox(source);
+      return {
+        mediaType: hasAlpha ? 'image/png' : 'image/jpeg',
+        base64: encoded.toString('base64'),
+        width,
+        height,
+        hasAlpha,
+        sourceMimeType: mimeType,
+        subject:
+          box && width && height
+            ? {
+                x: round3(box.left / width),
+                y: round3(box.top / height),
+                width: round3(box.width / width),
+                height: round3(box.height / height),
+              }
+            : undefined,
+      };
+    },
+
     async trim(params) {
       const { bytes, mimeType } = await load(params.assetId);
       // With an aspect, `coverage` sets the margin — padding first would make
@@ -793,6 +942,52 @@ export function createImageOps(userId: string): SellerImageOps {
       return save(buffer, format.mime);
     },
 
+    async renderGraphic(params) {
+      // Resolve asset references to data URLs here: the model never supplies a
+      // URL, so there is nothing for the renderer to fetch.
+      // The tool's zod schema has already validated shape; narrow here for the
+      // one field that must be resolved server-side.
+      type ImageNodeInput = {
+        type: 'image';
+        assetId: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        fit?: 'contain' | 'cover';
+      };
+      const nodes: GraphicNode[] = [];
+      for (const node of params.nodes) {
+        if (node['type'] !== 'image') {
+          nodes.push(node as unknown as GraphicNode);
+          continue;
+        }
+        const imageNode = node as unknown as ImageNodeInput;
+        const asset = await load(imageNode.assetId);
+        nodes.push({
+          type: 'image',
+          dataUrl: `data:${asset.mimeType};base64,${Buffer.from(
+            asset.bytes
+          ).toString('base64')}`,
+          x: imageNode.x,
+          y: imageNode.y,
+          width: imageNode.width,
+          height: imageNode.height,
+          fit: imageNode.fit,
+        });
+      }
+
+      const size = params.size ?? 2000;
+      const aspect = params.aspect ? parseAspect(params.aspect) : 1;
+      const buffer = await renderListingGraphic({
+        width: aspect >= 1 ? size : Math.round(size * aspect),
+        height: aspect >= 1 ? Math.round(size / aspect) : size,
+        background: params.background,
+        nodes,
+      });
+      return save(buffer, 'image/png');
+    },
+
     async renderInfographic(params) {
       const product = await load(params.productImageAssetId);
       // Templates size the product by its image box, so an untrimmed cutout
@@ -842,7 +1037,7 @@ export function createImageOps(userId: string): SellerImageOps {
       const fgClean =
         params.refineEdges === false
           ? fgSource
-          : await refineCutoutEdges(fgSource, params.edgeShrink);
+          : (await refineCutoutEdgesAuto(fgSource, params.edgeShrink)).buffer;
 
       const scale = params.scale ?? 0.7;
       const fgTargetWidth = Math.max(Math.round(bgWidth * scale), 8);
@@ -941,7 +1136,8 @@ export function createImageOps(userId: string): SellerImageOps {
       const decontaminated =
         params.refineEdges === false
           ? cutoutBuffer
-          : await refineCutoutEdges(cutoutBuffer, params.edgeShrink);
+          : (await refineCutoutEdgesAuto(cutoutBuffer, params.edgeShrink))
+              .buffer;
 
       // Segmentation leaves the product surrounded by whatever empty space the
       // original photo had. Crop to the cutout's alpha bounding box by default

@@ -144,6 +144,11 @@ export async function POST(request: Request) {
         Metadata: {
           sha256: body.sha256.toLowerCase(),
           originalFileName: encodeURIComponent(body.fileName),
+          // Match the server-side path so every object in the bucket carries
+          // the same identifying facts, whoever wrote it.
+          assetId: asset.assetId,
+          userId: session.user.sub.replace(/[^\x20-\x7E]/g, '').slice(0, 256),
+          feature: asset.createdForFeature,
         },
       }),
       { expiresIn: 10 * 60 }
