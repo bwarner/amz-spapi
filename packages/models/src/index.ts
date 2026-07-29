@@ -11,3 +11,4 @@ export * from './lib/product.js';
 export * from './lib/document-extract.js';
 export * from './lib/document-recognize.js';
 export * from './lib/fba-box-label.js';
+export * from './lib/design-revisions.js';
