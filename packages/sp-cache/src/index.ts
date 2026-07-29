@@ -22,6 +22,7 @@ export {
   recordImport,
   getCoverage,
   queryLedgerRows,
+  queryReceiptAggregates,
   deleteReportRows,
   deleteReportImports,
   LEDGER_AUTHORITY,
@@ -31,6 +32,7 @@ export type {
   ReportSource,
   Coverage,
   LedgerQuery,
+  ReceiptAggregate,
 } from './lib/report-store.js';
 export {
   ingestReportBuffer,
@@ -39,7 +41,10 @@ export {
 } from './lib/report-sync.js';
 export type { IngestOutcome, IngestError } from './lib/report-sync.js';
 
-export { reconcileShipments } from './lib/reconcile-shipments.js';
+export {
+  reconcileShipments,
+  aggregateReceipts,
+} from './lib/reconcile-shipments.js';
 export type {
   ShippedLine,
   ReconciledLine,

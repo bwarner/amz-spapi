@@ -1,6 +1,6 @@
 import {
   listBoxLabels,
-  queryLedgerRows,
+  queryReceiptAggregates,
   reconcileShipments,
   type ShippedLine,
 } from '@amz-spapi/sp-cache';
@@ -41,8 +41,11 @@ export async function GET() {
   }
 
   try {
-    const [rows, labels] = await Promise.all([
-      queryLedgerRows({ sellerId, view: 'ledger-detail' }),
+    // Both sides are already reduced before they reach here: receipts are
+    // grouped and summed by the query service, and box labels are one document
+    // per box. Nothing transfers a row this view does not use.
+    const [receipts, labels] = await Promise.all([
+      queryReceiptAggregates({ sellerId }),
       listBoxLabels({ sellerId }),
     ]);
 
@@ -61,8 +64,8 @@ export async function GET() {
     );
 
     return Response.json({
-      shipments: reconcileShipments({ rows, shipped }),
-      rowsConsidered: rows.length,
+      shipments: reconcileShipments({ receipts, shipped }),
+      receiptGroups: receipts.length,
       boxLabelsHeld: labels.length,
       // False only when nothing is held at all: a partial set still gives a
       // real comparison, and the floor marker says where it is partial.

@@ -15,6 +15,7 @@
  */
 
 import type { ReportRow } from './report-ingest.js';
+import type { ReceiptAggregate } from './report-store.js';
 
 /** One SKU's shipped quantity, as read from box labels. */
 export type ShippedLine = {
@@ -80,20 +81,62 @@ function day(row: ReportRow): string {
   return (row.fields.eventTimestamp ?? '').slice(0, 10);
 }
 
+/**
+ * Reduce raw ledger rows to the same shape the query service returns.
+ *
+ * Exists so reconciliation can be exercised against a downloaded export with no
+ * database, and so the N1QL aggregate has a reference implementation to be
+ * checked against. Production reads go through queryReceiptAggregates, which
+ * does this work in the index rather than transferring every event.
+ */
+export function aggregateReceipts(rows: ReportRow[]): ReceiptAggregate[] {
+  const groups = new Map<string, ReportRow[]>();
+  for (const row of rows) {
+    if (row.fields.eventType !== 'Receipts' || !row.fields.referenceId)
+      continue;
+    const key = `${row.fields.referenceId}\u0000${row.fields.msku ?? ''}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+
+  return [...groups.values()].map((group) => {
+    const quantities = group.map((r) => Number(r.fields.quantity ?? 0));
+    const days = group.map(day).filter(Boolean).sort();
+    const reversalDays = group
+      .filter((r) => Number(r.fields.quantity ?? 0) < 0)
+      .map(day)
+      .filter(Boolean)
+      .sort();
+    return {
+      shipmentId: group[0].fields.referenceId as string,
+      sku: group[0].fields.msku,
+      fnsku: group[0].fields.fnsku,
+      receivedGross: quantities.filter((q) => q > 0).reduce((t, q) => t + q, 0),
+      reversed: Math.abs(
+        quantities.filter((q) => q < 0).reduce((t, q) => t + q, 0)
+      ),
+      firstReceipt: days[0],
+      lastReceipt: days[days.length - 1],
+      lastReversal: reversalDays[reversalDays.length - 1],
+      reversalEvents: reversalDays.length,
+      fulfillmentCenters: [
+        ...new Set(group.map((r) => r.fields.fulfillmentCenter ?? '')),
+      ].filter(Boolean),
+    };
+  });
+}
+
 export function reconcileShipments(params: {
-  /** Ledger rows. Only detail-view Receipts rows carry a reference id. */
-  rows: ReportRow[];
+  /** Pre-aggregated receipts, from N1QL or from aggregateReceipts. */
+  receipts: ReceiptAggregate[];
   /** Shipped quantities from box labels, when held. */
   shipped?: ShippedLine[];
 }): ShipmentReconciliation[] {
-  const receipts = params.rows.filter(
-    (row) => row.fields.eventType === 'Receipts' && row.fields.referenceId
-  );
-
-  const byShipment = new Map<string, ReportRow[]>();
-  for (const row of receipts) {
-    const id = row.fields.referenceId as string;
-    byShipment.set(id, [...(byShipment.get(id) ?? []), row]);
+  const byShipment = new Map<string, ReceiptAggregate[]>();
+  for (const entry of params.receipts) {
+    byShipment.set(entry.shipmentId, [
+      ...(byShipment.get(entry.shipmentId) ?? []),
+      entry,
+    ]);
   }
 
   // Shipments named only by a box label still deserve a row: "you shipped this
@@ -103,9 +146,9 @@ export function reconcileShipments(params: {
   }
 
   const result: ShipmentReconciliation[] = [];
-  for (const [shipmentId, rows] of byShipment) {
+  for (const [shipmentId, entries] of byShipment) {
     const skus = new Set<string>([
-      ...rows.map((r) => r.fields.msku ?? r.fields.fnsku ?? ''),
+      ...entries.map((e) => e.sku ?? e.fnsku ?? ''),
       ...(params.shipped ?? [])
         .filter((s) => s.shipmentId === shipmentId)
         .map((s) => s.sku),
@@ -113,16 +156,9 @@ export function reconcileShipments(params: {
 
     const lines: ReconciledLine[] = [];
     for (const sku of [...skus].filter(Boolean)) {
-      const skuRows = rows.filter(
-        (r) => (r.fields.msku ?? r.fields.fnsku) === sku
-      );
-      const quantities = skuRows.map((r) => Number(r.fields.quantity ?? 0));
-      const receivedGross = quantities
-        .filter((q) => q > 0)
-        .reduce((t, q) => t + q, 0);
-      const reversed = Math.abs(
-        quantities.filter((q) => q < 0).reduce((t, q) => t + q, 0)
-      );
+      const entry = entries.find((e) => (e.sku ?? e.fnsku) === sku);
+      const receivedGross = entry?.receivedGross ?? 0;
+      const reversed = entry?.reversed ?? 0;
       const receivedNet = receivedGross - reversed;
 
       const shippedLine = (params.shipped ?? []).find(
@@ -142,16 +178,9 @@ export function reconcileShipments(params: {
             : 'short';
       }
 
-      const days = skuRows.map(day).filter(Boolean).sort();
-      const reversalDays = skuRows
-        .filter((r) => Number(r.fields.quantity ?? 0) < 0)
-        .map(day)
-        .filter(Boolean)
-        .sort();
-
       lines.push({
         sku,
-        fnsku: skuRows[0]?.fields.fnsku,
+        fnsku: entry?.fnsku,
         shipped: shippedLine?.quantity,
         shippedIsFloor: shippedLine ? !shippedLine.complete : false,
         receivedGross,
@@ -159,17 +188,17 @@ export function reconcileShipments(params: {
         receivedNet,
         discrepancy,
         status,
-        fulfillmentCenters: [
-          ...new Set(skuRows.map((r) => r.fields.fulfillmentCenter ?? '')),
-        ].filter(Boolean),
+        fulfillmentCenters: entry?.fulfillmentCenters ?? [],
         reversalWindowDays:
-          days.length && reversalDays.length
-            ? daysBetween(days[0], reversalDays[reversalDays.length - 1])
+          entry?.firstReceipt && entry?.lastReversal
+            ? daysBetween(
+                entry.firstReceipt.slice(0, 10),
+                entry.lastReversal.slice(0, 10)
+              )
             : undefined,
-        reversalEvents: reversalDays.length,
+        reversalEvents: entry?.reversalEvents ?? 0,
       });
     }
-
     const warnings: string[] = [];
 
     // The finding that matters most, and the one a human will not spot: one SKU
@@ -216,11 +245,18 @@ export function reconcileShipments(params: {
       }
     }
 
-    const allDays = rows.map(day).filter(Boolean).sort();
+    const firsts = entries
+      .map((e) => e.firstReceipt ?? '')
+      .filter(Boolean)
+      .sort();
+    const lasts = entries
+      .map((e) => e.lastReceipt ?? '')
+      .filter(Boolean)
+      .sort();
     result.push({
       shipmentId,
-      firstReceiptDate: allDays[0],
-      lastReceiptDate: allDays[allDays.length - 1],
+      firstReceiptDate: firsts[0]?.slice(0, 10),
+      lastReceiptDate: lasts[lasts.length - 1]?.slice(0, 10),
       lines: lines.sort((a, b) => (a.sku ?? '').localeCompare(b.sku ?? '')),
       warnings,
     });

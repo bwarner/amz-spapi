@@ -92,10 +92,21 @@ function canonicalJson(row: Record<string, string>): string {
   );
 }
 
+/**
+ * Columns that DESCRIBE a row rather than identify it.
+ *
+ * A seller can rename a listing at any time. Two real exports of the same
+ * events, taken either side of a rename, shared zero row ids and every figure
+ * doubled — so the title must not be part of identity.
+ */
+const DESCRIPTIVE_FIELDS = new Set<ReportFieldName>(['title']);
+
 function rowIdFor(
   definition: ReportDefinition,
   sellerId: string,
   raw: Record<string, string>,
+  /** How many earlier rows in this file already had this same identity. */
+  occurrence: number,
   snapshotDate?: string,
   options?: Record<string, string>
 ): string {
@@ -107,6 +118,11 @@ function rowIdFor(
     // it, so including options here would store one receipt twice.
     definition.identityIncludesOptions && options ? canonicalJson(options) : '',
     canonicalJson(raw),
+    // A ledger event carries no id from Amazon, and the ledger legitimately
+    // contains repeated identical lines: three separate customer shipments of
+    // one unit from the same FC on the same day are three events, not one.
+    // Without this they collapsed, losing 65 of 361 rows on a real export.
+    String(occurrence),
   ].join('\u0000');
   return crypto
     .createHash('sha256')
@@ -163,6 +179,8 @@ export function parseReport(params: {
   const hasUnmapped = headers.some((_, index) => !fieldByIndex.has(index));
   const rows: ReportRow[] = [];
   const seen = new Set<string>();
+  /** Distinguishes genuinely repeated identical events within one export. */
+  const occurrences = new Map<string, number>();
   for (let i = 1; i < lines.length; i++) {
     const cells = splitLine(lines[i], delimiter);
     // Tolerate ragged rows: pad short ones, ignore overflow.
@@ -178,15 +196,27 @@ export function parseReport(params: {
       if (value) fields[field] = value;
     });
 
+    // Identity is built from the identifying columns only, so a renamed
+    // listing does not re-import the whole history as new rows.
+    const identifying: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      const field = fieldByIndex.get(index);
+      if (field && DESCRIPTIVE_FIELDS.has(field)) return;
+      identifying[header] = cells[index] ?? '';
+    });
+
+    const signature = canonicalJson(identifying);
+    const occurrence = occurrences.get(signature) ?? 0;
+    occurrences.set(signature, occurrence + 1);
+
     const rowId = rowIdFor(
       definition,
       params.sellerId,
-      raw,
+      identifying,
+      occurrence,
       params.snapshotDate,
       params.options
     );
-    // Collapse duplicates inside a single file too — Amazon reports do contain
-    // repeated lines when a window overlaps a previous export.
     if (seen.has(rowId)) continue;
     seen.add(rowId);
 

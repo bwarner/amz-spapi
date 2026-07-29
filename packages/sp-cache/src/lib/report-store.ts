@@ -404,3 +404,74 @@ export async function deleteReportImports(params: {
   );
   return rows.length;
 }
+
+/**
+ * One shipment/SKU's receipt totals, already reduced.
+ *
+ * Reconciliation needs sums and date bounds, not documents. Computing them in
+ * the query service returns one row per shipment and SKU instead of every
+ * receipt event, and lets the index do the filtering.
+ */
+export type ReceiptAggregate = {
+  shipmentId: string;
+  sku?: string;
+  fnsku?: string;
+  receivedGross: number;
+  reversed: number;
+  firstReceipt?: string;
+  lastReceipt?: string;
+  lastReversal?: string;
+  reversalEvents: number;
+  fulfillmentCenters: string[];
+};
+
+/**
+ * Aggregate receipts by shipment and SKU in N1QL.
+ *
+ * Only Receipts rows carry a reference id, so the WHERE clause does the same
+ * work the caller would otherwise do after transferring everything: on a real
+ * seller this is 46 rows of 857, and the ratio only worsens as the ledger grows.
+ *
+ * Quantities are stored as the strings the export contained, so they are cast
+ * here rather than trusting Couchbase to compare them numerically.
+ */
+export async function queryReceiptAggregates(params: {
+  sellerId: string;
+  shipmentId?: string;
+}): Promise<ReceiptAggregate[]> {
+  const conditions = [
+    'd.sellerId = $sellerId',
+    "d.reportKind = 'ledger-detail'",
+    "d.fields.eventType = 'Receipts'",
+    'd.fields.referenceId IS NOT MISSING',
+    "d.fields.referenceId != ''",
+  ];
+  const parameters: Record<string, unknown> = { sellerId: params.sellerId };
+  if (params.shipmentId) {
+    conditions.push('d.fields.referenceId = $shipmentId');
+    parameters['shipmentId'] = params.shipmentId;
+  }
+
+  const qty = 'TONUMBER(d.fields.quantity)';
+  const { rows } = await reportStorage.executeQuery<ReceiptAggregate>(
+    SCOPE,
+    `SELECT d.fields.referenceId AS shipmentId,
+            d.fields.msku AS sku,
+            MIN(d.fields.fnsku) AS fnsku,
+            SUM(CASE WHEN ${qty} > 0 THEN ${qty} ELSE 0 END) AS receivedGross,
+            ABS(SUM(CASE WHEN ${qty} < 0 THEN ${qty} ELSE 0 END)) AS reversed,
+            MIN(d.fields.eventTimestamp) AS firstReceipt,
+            MAX(d.fields.eventTimestamp) AS lastReceipt,
+            MAX(CASE WHEN ${qty} < 0 THEN d.fields.eventTimestamp ELSE NULL END)
+              AS lastReversal,
+            SUM(CASE WHEN ${qty} < 0 THEN 1 ELSE 0 END) AS reversalEvents,
+            ARRAY_DISTINCT(ARRAY_AGG(d.fields.fulfillmentCenter))
+              AS fulfillmentCenters
+       FROM ${ROWS} AS d
+       WHERE ${conditions.join(' AND ')}
+       GROUP BY d.fields.referenceId, d.fields.msku
+       ORDER BY MIN(d.fields.eventTimestamp) DESC`,
+    { parameters, readonly: true }
+  );
+  return rows;
+}
