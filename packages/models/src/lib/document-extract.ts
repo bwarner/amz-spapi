@@ -329,11 +329,15 @@ export type PurchaseReconciliation = {
   /** Sum of payment-record documents. */
   paidTotal: number;
   currency?: string;
-  issues: ExtractionIssue2[];
+  issues: ReconciliationIssue[];
 };
 
 /** Purchase-level findings, kept separate from single-document issues. */
-export type ExtractionIssue2 = {
+/**
+ * A disagreement between the documents attached to ONE purchase. Distinct from
+ * ExtractionIssue, which is about whether a single document was read correctly.
+ */
+export type ReconciliationIssue = {
   code:
     | 'no-cost-basis'
     | 'multiple-cost-basis'
@@ -355,7 +359,7 @@ export type ExtractionIssue2 = {
 export function reconcilePurchase(
   documents: PurchaseDocument[]
 ): PurchaseReconciliation {
-  const issues: ExtractionIssue2[] = [];
+  const issues: ReconciliationIssue[] = [];
 
   const invoices = documents.filter(
     (document) => document.role === 'commercial-invoice'

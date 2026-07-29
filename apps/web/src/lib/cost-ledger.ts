@@ -46,7 +46,12 @@ export const ledgerStorage = {
 
 export type CostSource = 'measured' | 'estimated';
 
-export type MeteredVendor = 'apify' | 'image-generation';
+export type MeteredVendor =
+  | 'apify'
+  | 'image-generation'
+  /** Language-model calls that are not part of a chat turn — document
+   *  extraction runs on upload and bills per document. */
+  | 'llm';
 
 export type LedgerEntry = {
   schemaVersion: number;
@@ -77,6 +82,10 @@ export type LedgerEntry = {
 const UNIT_PRICES_USD: Record<string, number> = {
   // Per product result.
   'zen-studio~alibaba-scraper': 0.00499,
+  // Per document. A rough order-of-magnitude figure for one invoice's worth of
+  // tokens, not a measured one — the vendor invoice remains the authority, and
+  // COST_UNIT_PRICE_DOCUMENT_EXTRACT overrides it without a code change.
+  'document-extract': 0.02,
 };
 
 /** Assumed cost for a call whose price we do not know. Deliberately not zero:

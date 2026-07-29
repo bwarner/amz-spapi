@@ -11,6 +11,10 @@ import {
   persistGeneratedFileAsset,
 } from '../../../../lib/media-assets';
 import { extractPdfText } from '../../../../lib/pdf-text';
+import {
+  extractDocument,
+  type ExtractionResult,
+} from '../../../../lib/document-extraction';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -152,6 +156,38 @@ export async function POST(request: Request) {
       }
     }
 
+    // Cost extraction runs only for documents that carry cost, and only when
+    // there is text to read. It is a paid model call, so it must never fire on
+    // a box label, a design file or a scan with nothing in it.
+    const COST_BEARING = new Set(['commercial-invoice', 'receipt']);
+    let extraction: ExtractionResult | undefined;
+    let extractionError: string | undefined;
+    if (
+      COST_BEARING.has(recognition.kind) &&
+      text.trim() &&
+      !noExtractableText
+    ) {
+      try {
+        extraction = await extractDocument({
+          userId: session.user.sub,
+          text,
+          recognisedAs: recognition.kind,
+          fileName: file.name,
+          assetId: asset.assetId,
+        });
+      } catch (error) {
+        // The file is stored and classified either way. A failed or refused
+        // extraction — including a budget refusal — must not lose the upload.
+        extractionError =
+          error instanceof Error ? error.message : 'Extraction failed.';
+        console.error(
+          '[documents] extraction failed',
+          file.name,
+          extractionError
+        );
+      }
+    }
+
     return Response.json({
       assetId: asset.assetId,
       url: `/api/a-plus/assets/${asset.assetId}`,
@@ -166,6 +202,26 @@ export async function POST(request: Request) {
       // What this sheet says was shipped, deduplicated and with completeness
       // stated — the same rollup reconciliation reads.
       boxLabelSummary: summariseBoxLabels(boxLabels),
+      extraction: extraction
+        ? {
+            vendorName: extraction.document.vendorName,
+            documentDate: extraction.document.documentDate,
+            documentDateRaw: extraction.document.documentDateRaw,
+            currency: extraction.document.currency,
+            total: extraction.document.total,
+            lines: extraction.document.lines.map((line) => ({
+              description: line.description,
+              kind: line.kind,
+              quantity: line.quantity,
+              amount: line.amount,
+              supplierRef: line.supplierRef,
+            })),
+            issues: extraction.issues,
+            needsReview: extraction.needsReview,
+            modelId: extraction.modelId,
+          }
+        : undefined,
+      extractionError,
       recognition: {
         kind: recognition.kind,
         confidence: recognition.confidence,
