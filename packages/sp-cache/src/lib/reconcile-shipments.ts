@@ -168,21 +168,28 @@ export function reconcileShipments(params: {
         ? shippedLine.quantity - receivedNet
         : undefined;
 
+      // A floor can only ever prove a SHORTAGE. If the labels held cover 1 of 4
+      // boxes, 40 units is a lower bound: receiving 62 against it says nothing,
+      // because the true figure is probably 160. Declaring that over-received
+      // would invent a discrepancy out of missing paperwork.
+      const shippedIsFloor = shippedLine ? !shippedLine.complete : false;
       let status: ReconciledLine['status'] = 'shipped-unknown';
       if (discrepancy != null) {
-        status =
-          Math.abs(discrepancy) < MATERIAL_UNITS
-            ? 'balanced'
-            : discrepancy < 0
-            ? 'over-received'
-            : 'short';
+        if (Math.abs(discrepancy) < MATERIAL_UNITS) {
+          status = shippedIsFloor ? 'shipped-unknown' : 'balanced';
+        } else if (discrepancy > 0) {
+          // Even the lower bound exceeds what arrived, so short is safe.
+          status = 'short';
+        } else {
+          status = shippedIsFloor ? 'shipped-unknown' : 'over-received';
+        }
       }
 
       lines.push({
         sku,
         fnsku: entry?.fnsku,
         shipped: shippedLine?.quantity,
-        shippedIsFloor: shippedLine ? !shippedLine.complete : false,
+        shippedIsFloor,
         receivedGross,
         reversed,
         receivedNet,
@@ -234,7 +241,9 @@ export function reconcileShipments(params: {
       if (line.shippedIsFloor) {
         warnings.push(
           `${line.sku}: shipped quantity is a floor — not every box label was ` +
-            `held, so any shortage shown may be understated.`
+            `held. A shortage would still be real, but no excess can be ` +
+            `concluded, so this line is left unchecked. Import the remaining ` +
+            `box labels to close it.`
         );
       }
       if (line.status === 'shipped-unknown' && line.receivedNet !== 0) {

@@ -133,6 +133,32 @@ describe('reconcileShipments', () => {
     expect(partial.warnings.some((w) => w.includes('floor'))).toBe(true);
   });
 
+  it('never concludes over-received from a floor', () => {
+    // Real case: 1 of 4 box labels held for FBA19CBC1Q88 gave shipped 40 for a
+    // SKU that received 62, and the line read "over-received". The true shipped
+    // figure was 80 — that line is short, not over. A lower bound can only
+    // prove a shortage.
+    const [partial] = reconcileShipments({
+      receipts: aggregateReceipts(rows),
+      shipped: [
+        { shipmentId: SHIPMENT, sku: WASHED, quantity: 40, complete: false },
+      ],
+    });
+    const washed = partial.lines.find((l) => l.sku === WASHED);
+    expect(washed?.receivedNet).toBe(42);
+    expect(washed?.status).toBe('shipped-unknown');
+  });
+
+  it('still calls a shortage from a floor, because that direction is safe', () => {
+    const [partial] = reconcileShipments({
+      receipts: aggregateReceipts(rows),
+      shipped: [
+        { shipmentId: SHIPMENT, sku: WASHED, quantity: 200, complete: false },
+      ],
+    });
+    expect(partial.lines.find((l) => l.sku === WASHED)?.status).toBe('short');
+  });
+
   it('says so when no box label is held rather than implying a match', () => {
     const [unchecked] = reconcileShipments({
       receipts: aggregateReceipts(rows),
