@@ -47,15 +47,17 @@ type DocumentResult = {
     signals: string[];
     alternatives: string[];
   };
-  boxLabel?: {
-    shipmentId?: string;
-    boxNumber?: number;
-    boxCount?: number;
+  boxLabelsStored?: number;
+  boxLabelSummary?: Array<{
+    shipmentId: string;
     destinationFc?: string;
-    sku?: string;
-    quantity?: number;
+    boxesSeen: number;
+    boxesDeclared?: number;
+    complete: boolean;
+    units: Array<{ sku: string; quantity: number; boxes: number }>;
+    totalUnits: number;
     warnings: string[];
-  };
+  }>;
 };
 
 /** What each recognised kind is called in the UI. */
@@ -320,44 +322,39 @@ export default function ReportsPage() {
               </p>
             ) : null}
 
-            {/* The shipped side: what this box says the seller sent. */}
-            {row.document?.boxLabel ? (
-              <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Stat
-                  label="Shipment"
-                  value={row.document.boxLabel.shipmentId ?? '—'}
-                />
-                <Stat
-                  label="Box"
-                  value={
-                    row.document.boxLabel.boxNumber != null
-                      ? `${row.document.boxLabel.boxNumber} of ${
-                          row.document.boxLabel.boxCount ?? '?'
-                        }`
-                      : '—'
-                  }
-                />
-                <Stat
-                  label={row.document.boxLabel.sku ?? 'SKU'}
-                  value={
-                    row.document.boxLabel.quantity != null
-                      ? `${row.document.boxLabel.quantity} units`
-                      : '—'
-                  }
-                />
-                <Stat
-                  label="Destination"
-                  value={row.document.boxLabel.destinationFc ?? '—'}
-                  muted
-                />
-              </dl>
-            ) : null}
-
-            {row.document?.boxLabel?.warnings.length ? (
-              <p className="mt-2 text-xs text-amber-700">
-                {row.document.boxLabel.warnings.join('; ')}
-              </p>
-            ) : null}
+            {/* The shipped side: what this sheet says the seller sent. A
+                label PDF holds one label per box, so a shipment is summarised
+                rather than a single box reported. */}
+            {row.document?.boxLabelSummary?.map((shipment) => (
+              <div key={shipment.shipmentId} className="mt-3">
+                <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <Stat label="Shipment" value={shipment.shipmentId} />
+                  <Stat
+                    label="Boxes"
+                    value={`${shipment.boxesSeen} of ${
+                      shipment.boxesDeclared ?? '?'
+                    }`}
+                  />
+                  <Stat label="Units" value={`${shipment.totalUnits}`} />
+                  <Stat
+                    label="Destination"
+                    value={shipment.destinationFc ?? '—'}
+                    muted
+                  />
+                </dl>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {shipment.units
+                    .map((unit) => `${unit.sku} ${unit.quantity}`)
+                    .join(' · ')}
+                  {shipment.complete ? ' — complete' : ''}
+                </p>
+                {shipment.warnings.length ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    {shipment.warnings.join('; ')}
+                  </p>
+                ) : null}
+              </div>
+            ))}
 
             {/* Show the reasons, not just the verdict: a classification the
                 seller can argue with is one they can correct. */}

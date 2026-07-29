@@ -134,6 +134,23 @@ export function parseFbaBoxLabel(text: string): FbaBoxLabel {
   return label;
 }
 
+/**
+ * Parse a label sheet, one label per page.
+ *
+ * Amazon prints every box of a shipment into a single PDF. Parsing the joined
+ * text finds only the first label, because each pattern matches once: a real
+ * four-box sheet came back as "box 1 of 4, 40 units" and the other three boxes
+ * were silently discarded, halving the shipped quantity.
+ *
+ * Pages with no shipment id are dropped rather than reported — a cover sheet or
+ * a blank page is not a missing box.
+ */
+export function parseFbaBoxLabels(pages: string[]): FbaBoxLabel[] {
+  return pages
+    .map((page) => parseFbaBoxLabel(page))
+    .filter((label) => label.shipmentId);
+}
+
 export type ShipmentFromLabels = {
   shipmentId: string;
   destinationFc?: string;

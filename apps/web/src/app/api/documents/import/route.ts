@@ -1,4 +1,8 @@
-import { parseFbaBoxLabel, recognizeDocument } from '@farvisionllc/models';
+import {
+  parseFbaBoxLabels,
+  recognizeDocument,
+  summariseBoxLabels,
+} from '@farvisionllc/models';
 import { storeBoxLabel } from '@amz-spapi/sp-cache';
 import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
 import { auth0 } from '../../../../lib/auth0';
@@ -72,10 +76,12 @@ export async function POST(request: Request) {
   // Recognition runs BEFORE storage only in the sense that it must never block
   // it: a file we cannot classify is still a file the seller needs kept.
   let text = '';
+  let pages: string[] = [];
   let noExtractableText = false;
   if (mimeType === 'application/pdf') {
     const extracted = await extractPdfText(bytes);
     text = extracted.text;
+    pages = extracted.pages;
     noExtractableText = extracted.looksScannedOrArtwork;
   } else if (mimeType.startsWith('text/') || extension === 'csv') {
     text = bytes.toString('utf8');
@@ -90,8 +96,14 @@ export async function POST(request: Request) {
 
   // An FBA box label is the only document that carries what the SELLER shipped,
   // so read it now rather than leaving it as an undifferentiated file.
-  const boxLabel =
-    recognition.kind === 'fba-box-label' ? parseFbaBoxLabel(text) : undefined;
+  //
+  // Per PAGE, not per file: Amazon prints every box of a shipment into one PDF,
+  // and reading the joined text finds only the first label — a four-box sheet
+  // came back as one box of 40 and silently halved the shipped quantity.
+  const boxLabels =
+    recognition.kind === 'fba-box-label'
+      ? parseFbaBoxLabels(pages.length ? pages : [text])
+      : [];
 
   try {
     const asset = await persistGeneratedFileAsset({
@@ -108,7 +120,8 @@ export async function POST(request: Request) {
     // read. Failing to store it must not fail the upload — the file is kept
     // either way, and the seller is told which happened.
     let shipmentLabelStored: string | undefined;
-    if (boxLabel?.shipmentId) {
+    let boxLabelsStored = 0;
+    if (boxLabels.length) {
       try {
         const resolved = await resolveAmazonConnection({
           apiType: 'SP_API',
@@ -118,14 +131,17 @@ export async function POST(request: Request) {
           ? resolved.connection.profile.seller_id
           : undefined;
         if (sellerId) {
-          const stored = await storeBoxLabel({
-            sellerId,
-            label: boxLabel,
-            assetId: asset.assetId,
-            fileName: file.name,
-            text,
-          });
-          shipmentLabelStored = stored.shipmentId;
+          for (const [index, label] of boxLabels.entries()) {
+            const stored = await storeBoxLabel({
+              sellerId,
+              label,
+              assetId: asset.assetId,
+              fileName: file.name,
+              text: pages[index] ?? text,
+            });
+            shipmentLabelStored = stored.shipmentId;
+            boxLabelsStored += 1;
+          }
         }
       } catch (error) {
         console.error(
@@ -146,6 +162,10 @@ export async function POST(request: Request) {
       // file returns the original rather than storing it twice.
       duplicate: asset.status === 'duplicate' || asset.sizeBytes !== file.size,
       shipmentLabelStored,
+      boxLabelsStored,
+      // What this sheet says was shipped, deduplicated and with completeness
+      // stated — the same rollup reconciliation reads.
+      boxLabelSummary: summariseBoxLabels(boxLabels),
       recognition: {
         kind: recognition.kind,
         confidence: recognition.confidence,
@@ -155,7 +175,6 @@ export async function POST(request: Request) {
         signals: recognition.signals.map((signal) => signal.reason),
         alternatives: recognition.alternatives.map((entry) => entry.kind),
       },
-      boxLabel,
     });
   } catch (error) {
     console.error(

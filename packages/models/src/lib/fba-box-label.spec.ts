@@ -7,7 +7,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseFbaBoxLabel, summariseBoxLabels } from './fba-box-label.js';
+import {
+  parseFbaBoxLabel,
+  parseFbaBoxLabels,
+  summariseBoxLabels,
+} from './fba-box-label.js';
 
 const label = (
   overrides: { box?: string; seq?: string; sku?: string; qty?: string } = {}
@@ -56,6 +60,37 @@ describe('parseFbaBoxLabel', () => {
     expect(parsed.singleSku).toBe(false);
     expect(parsed.quantity).toBeUndefined();
     expect(parsed.warnings.join(' ')).toContain('mixed-SKU');
+  });
+});
+
+describe('parseFbaBoxLabels', () => {
+  it('reads every label on a multi-page sheet', () => {
+    // Amazon prints all of a shipment's boxes into one PDF. Parsing the joined
+    // text found only the first, so a real four-box sheet came back as one box
+    // of 40 and halved the shipped quantity.
+    const sheet = [
+      label({ box: '1 of 4', seq: '000001', sku: 'SKU-W', qty: '40' }),
+      label({ box: '2 of 4', seq: '000002', sku: 'SKU-W', qty: '40' }),
+      label({ box: '3 of 4', seq: '000003', sku: 'SKU-H', qty: '40' }),
+      label({ box: '4 of 4', seq: '000004', sku: 'SKU-H', qty: '40' }),
+    ];
+    expect(parseFbaBoxLabels(sheet)).toHaveLength(4);
+
+    const [summary] = summariseBoxLabels(parseFbaBoxLabels(sheet));
+    expect(summary.complete).toBe(true);
+    expect(summary.totalUnits).toBe(160);
+    expect(summary.units).toEqual(
+      expect.arrayContaining([
+        { sku: 'SKU-W', quantity: 80, boxes: 2 },
+        { sku: 'SKU-H', quantity: 80, boxes: 2 },
+      ])
+    );
+  });
+
+  it('drops pages that are not labels rather than counting them as boxes', () => {
+    expect(
+      parseFbaBoxLabels([label(), 'Packing slip — no shipment id here', ''])
+    ).toHaveLength(1);
   });
 });
 
