@@ -25,6 +25,32 @@ import {
  * snapshot date.
  */
 
+/** Fields holding a calendar date, normalised to ISO so they can be ordered. */
+const DATE_FIELDS = new Set<ReportFieldName>([
+  'date',
+  'shipmentDate',
+  'requestDate',
+]);
+
+/**
+ * Normalise a report date to YYYY-MM-DD.
+ *
+ * Amazon writes MM/DD/YYYY. Sorting that lexically works by accident inside one
+ * calendar year and inverts across a boundary — 12/15/2025 sorts after
+ * 01/05/2026 — so every coverage window spanning New Year would come back
+ * backwards. Values already ISO are returned unchanged; anything unrecognised
+ * is left alone rather than guessed at.
+ */
+export function toIsoDate(value: string): string {
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const us = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (us) {
+    return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
+  }
+  return value;
+}
+
 export type ReportRow = {
   rowId: string;
   /** Owning seller — part of identity, so two sellers cannot collide. */
@@ -39,6 +65,11 @@ export type ReportRow = {
   options?: Record<string, string>;
   /** Snapshot date for snapshot reports; the sync/import window end otherwise. */
   snapshotDate?: string;
+  /**
+   * The import that first stored this row. Coverage is derived by grouping on
+   * it, so a window can only be reported as covered while its rows still exist.
+   */
+  importId?: string;
   ingestedAt: number;
 };
 
@@ -193,7 +224,11 @@ export function parseReport(params: {
     const fields: Partial<Record<ReportFieldName, string>> = {};
     fieldByIndex.forEach((field, index) => {
       const value = cells[index];
-      if (value) fields[field] = value;
+      // Normalise dates for storage, but NOT for identity: identity is built
+      // from the raw columns above, so a formatting change here cannot
+      // re-import history as new rows.
+      if (value)
+        fields[field] = DATE_FIELDS.has(field) ? toIsoDate(value) : value;
     });
 
     // Identity is built from the identifying columns only, so a renamed

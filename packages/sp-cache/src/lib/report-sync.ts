@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { SpApiClient } from '@farvisionllc/sp-client';
 import {
   decodeReportBuffer,
@@ -98,8 +99,12 @@ export async function ingestReportBuffer(params: {
     };
   }
 
-  const { stored, duplicate } = await storeReportRows(parsed.rows);
+  // Minted here so the rows and the audit record share it: coverage groups on
+  // the rows' copy, so it must exist before they are written.
+  const importId = crypto.randomUUID();
+  const { stored, duplicate } = await storeReportRows(parsed.rows, importId);
   const record: ReportImport = await recordImport({
+    importId,
     sellerId: params.sellerId,
     kind,
     reportType: definition.reportType,

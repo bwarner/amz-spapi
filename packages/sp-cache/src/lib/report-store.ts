@@ -92,12 +92,16 @@ async function existingRowIds(ids: string[]): Promise<Set<string>> {
  * implying every import added data.
  */
 export async function storeReportRows(
-  rows: ReportRow[]
+  rows: ReportRow[],
+  /** Stamped on each row so coverage can be derived from the rows themselves. */
+  importId?: string
 ): Promise<{ stored: number; duplicate: number }> {
   if (!rows.length) return { stored: 0, duplicate: 0 };
 
   const existing = await existingRowIds(rows.map((row) => row.rowId));
-  const fresh = rows.filter((row) => !existing.has(row.rowId));
+  const fresh = rows
+    .filter((row) => !existing.has(row.rowId))
+    .map((row) => (importId ? { ...row, importId } : row));
   const ttl = rowTtlSeconds();
 
   for (const batch of chunk(fresh, WRITE_BATCH)) {
@@ -147,6 +151,8 @@ function observedRange(rows: ReportRow[]): {
 
 /** Record an import. Never throws — losing the audit row must not fail a load. */
 export async function recordImport(params: {
+  /** Supplied by the caller so the rows carry the same id. */
+  importId?: string;
   sellerId: string;
   kind: ReportKind;
   reportType: string;
@@ -163,7 +169,7 @@ export async function recordImport(params: {
 }): Promise<ReportImport> {
   const observed = observedRange(params.rows);
   const record: ReportImport = {
-    importId: crypto.randomUUID(),
+    importId: params.importId ?? crypto.randomUUID(),
     sellerId: params.sellerId,
     kind: params.kind,
     reportType: params.reportType,
@@ -239,12 +245,31 @@ export async function getCoverage(params: {
   from?: string;
   to?: string;
 }): Promise<Coverage> {
-  const { rows } = await reportStorage.executeQuery<ReportImport>(
+  // Derived from the ROWS, not from the import records.
+  //
+  // Import records never expire; rows do, at REPORT_ROW_TTL_DAYS. Reading
+  // coverage from the records meant that on day 731 a window was still reported
+  // as covered with nothing behind it — a reconciliation resting on no data,
+  // reported as complete, which is the exact failure coverage exists to catch.
+  // Grouping the rows by the import that wrote them gives the same windows and
+  // cannot outlive them.
+  const { rows } = await reportStorage.executeQuery<{
+    importId: string | null;
+    from: string | null;
+    to: string | null;
+    options: Record<string, string> | null;
+    rows: number;
+  }>(
     SCOPE,
-    `SELECT RAW d FROM ${IMPORTS} AS d
-       WHERE d.kind = $kind AND d.sellerId = $sellerId
-         AND d.observedFrom IS NOT MISSING
-       ORDER BY d.observedFrom`,
+    `SELECT d.importId AS importId,
+            MIN(d.fields.\`date\`) AS \`from\`,
+            MAX(d.fields.\`date\`) AS \`to\`,
+            MIN(d.\`options\`) AS \`options\`,
+            COUNT(*) AS \`rows\`
+       FROM ${ROWS} AS d
+       WHERE d.sellerId = $sellerId AND d.reportKind = $kind
+       GROUP BY d.importId
+       ORDER BY MIN(d.fields.\`date\`)`,
     {
       parameters: { kind: params.kind, sellerId: params.sellerId },
       readonly: true,
@@ -252,8 +277,8 @@ export async function getCoverage(params: {
   );
 
   const ranges = rows
-    .filter((row) => row.observedFrom && row.observedTo)
-    .map((row) => ({ from: row.observedFrom!, to: row.observedTo! }));
+    .filter((row) => row.from && row.to)
+    .map((row) => ({ from: row.from as string, to: row.to as string }));
   const covered = mergeRanges(ranges);
 
   const gaps: Array<{ from: string; to: string }> = [];
@@ -284,6 +309,8 @@ export async function getCoverage(params: {
     covered,
     gaps,
     filtersUsed,
+    // Groups of rows still held, which is what coverage is about. The imports
+    // collection remains the audit trail of what was loaded and when.
     imports: rows.length,
   };
 }
