@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import {
   executeQuery,
   getDocument,
+  incrementCounter,
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
 import { withVendorSpan } from './telemetry';
@@ -36,7 +37,12 @@ const MICRO = 1_000_000;
  * cluster, and these three calls are the only I/O in this module — tests swap
  * them, production leaves them alone.
  */
-export const ledgerStorage = { getDocument, upsertDocument, executeQuery };
+export const ledgerStorage = {
+  getDocument,
+  upsertDocument,
+  executeQuery,
+  incrementCounter,
+};
 
 export type CostSource = 'measured' | 'estimated';
 
@@ -117,17 +123,21 @@ export function userRef(userId: string): string {
   return crypto.createHash('sha256').update(userId).digest('hex').slice(0, 16);
 }
 
-type CounterDoc = { microUsd: number; day: string; updatedAt: number };
-
-/** Spend so far today, USD. Returns 0 when the counter is missing or unreadable. */
+/**
+ * Spend so far today, USD. Returns 0 when the counter is missing or unreadable.
+ *
+ * The counter is a KV counter document, so its body is a bare integer of
+ * micro-USD rather than JSON.
+ */
 export async function spendTodayUsd(userId: string): Promise<number> {
   try {
-    const doc = await ledgerStorage.getDocument<CounterDoc>(
+    const value = await ledgerStorage.getDocument<number>(
       SCOPE,
       COUNTERS,
       counterKey(userId, utcDay())
     );
-    return doc?.microUsd ? doc.microUsd / MICRO : 0;
+    const micro = Number(value);
+    return Number.isFinite(micro) ? micro / MICRO : 0;
   } catch {
     return 0;
   }
@@ -141,27 +151,17 @@ export async function spendTodayUsd(userId: string): Promise<number> {
  * next day and reconcilable at any time.
  */
 async function addToCounter(userId: string, costUsd: number): Promise<void> {
-  const day = utcDay();
-  const key = counterKey(userId, day);
   const delta = Math.round(costUsd * MICRO);
   if (delta <= 0) return;
 
-  const { rows } = await ledgerStorage.executeQuery<number>(
-    SCOPE,
-    `UPDATE ${COUNTERS} USE KEYS $key
-       SET microUsd = microUsd + $delta, updatedAt = $now
-       RETURNING RAW microUsd`,
-    // Without preserve_expiry a mutation clears the TTL set at creation, and
-    // daily counters would accumulate forever.
-    { parameters: { key, delta, now: Date.now() }, preserve_expiry: true }
-  );
-  if (rows.length) return;
-
-  await ledgerStorage.upsertDocument<CounterDoc>(
+  // One atomic KV operation that also creates the document. The previous
+  // UPDATE-then-UPSERT pair raced on the first paid call of a UTC day: both
+  // callers found no row, both wrote, and one call's spend vanished.
+  await ledgerStorage.incrementCounter(
     SCOPE,
     COUNTERS,
-    key,
-    { microUsd: delta, day, updatedAt: Date.now() },
+    counterKey(userId, utcDay()),
+    delta,
     COUNTER_TTL_SECONDS
   );
 }

@@ -129,34 +129,67 @@ export async function getContext() {
   return connectToDatabase();
 }
 
+/**
+ * Document operations go to the Data API's KV endpoints, not the query service.
+ *
+ * These are single-key reads and writes. Expressing them as N1QL made every one
+ * of them parse and plan a statement to reach a document it already had the key
+ * for, and gave up what the KV endpoints provide for free: CAS through ETag,
+ * create-only semantics, and atomic counters.
+ */
+function documentUrl(
+  config: DataApiConfig,
+  scopeName: string,
+  collectionName: string,
+  key: string
+): string {
+  return (
+    `${config.baseUrl}/v1/buckets/${encodeURIComponent(config.bucket)}` +
+    `/scopes/${encodeURIComponent(scopeName)}` +
+    `/collections/${encodeURIComponent(collectionName)}` +
+    `/documents/${encodeURIComponent(key)}`
+  );
+}
+
+/**
+ * Expiry is a Go duration string on the Expires header.
+ *
+ * This replaces the KV protocol's trap where a value over 30 days is read as an
+ * absolute Unix timestamp — passing 180 days as-is expired documents instantly,
+ * in 1970. Seconds-with-a-suffix has no such threshold.
+ */
+function expiresHeader(expirySeconds?: number): Record<string, string> {
+  return expirySeconds && expirySeconds > 0
+    ? { Expires: `${Math.floor(expirySeconds)}s` }
+    : {};
+}
+
+async function failureMessage(response: Response): Promise<string> {
+  const body = await response.text().catch(() => '');
+  return body
+    ? `Couchbase Data API ${response.status}: ${body.slice(0, 300)}`
+    : `Couchbase Data API request failed with status ${response.status}`;
+}
+
 export async function getDocument<T>(
   scopeName: string,
   collectionName: string,
   key: string
 ): Promise<T | null> {
-  const { rows } = await executeDataApiQuery<T>({
-    scopeName,
-    statement: `SELECT RAW doc
-      FROM ${escapeIdentifier(collectionName)} AS doc
-      USE KEYS $key`,
-    options: {
-      parameters: { key },
-      readonly: true,
-    },
-  });
+  const config = getDataApiConfig();
+  const response = await fetch(
+    documentUrl(config, scopeName, collectionName, key),
+    {
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        Accept: 'application/json',
+      },
+    }
+  );
 
-  return rows[0] ?? null;
-}
-
-// Couchbase expiration semantics: values up to 30 days are RELATIVE seconds;
-// anything larger is an ABSOLUTE Unix timestamp. A long TTL passed as-is
-// (e.g. 180 days = epoch 1970-06-29) expires the document immediately.
-const RELATIVE_EXPIRY_MAX_SECONDS = 30 * 24 * 60 * 60;
-
-function normalizeExpiry(expirySeconds: number): number {
-  return expirySeconds > RELATIVE_EXPIRY_MAX_SECONDS
-    ? Math.floor(Date.now() / 1000) + expirySeconds
-    : expirySeconds;
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(await failureMessage(response));
+  return (await response.json()) as T;
 }
 
 export async function upsertDocument<T>(
@@ -166,25 +199,51 @@ export async function upsertDocument<T>(
   document: T,
   expirySeconds?: number
 ): Promise<void> {
-  const statement = expirySeconds
-    ? `UPSERT INTO ${escapeIdentifier(collectionName)} (KEY, VALUE, OPTIONS)
-       VALUES ($key, $document, {"expiration": $expiry})
-       RETURNING RAW META().id`
-    : `UPSERT INTO ${escapeIdentifier(collectionName)} (KEY, VALUE)
-       VALUES ($key, $document)
-       RETURNING RAW META().id`;
-
-  await executeDataApiQuery<string>({
-    scopeName,
-    statement,
-    options: {
-      parameters: {
-        key,
-        document,
-        ...(expirySeconds ? { expiry: normalizeExpiry(expirySeconds) } : {}),
+  const config = getDataApiConfig();
+  const response = await fetch(
+    documentUrl(config, scopeName, collectionName, key),
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
       },
-    },
-  });
+      body: JSON.stringify(document),
+    }
+  );
+  if (!response.ok) throw new Error(await failureMessage(response));
+}
+
+/**
+ * Write only if the key is absent. Returns false when it already exists.
+ *
+ * The race this closes: two callers both find no document, both write, and one
+ * write is lost. POST answers 409 for the loser instead.
+ */
+export async function insertDocument<T>(
+  scopeName: string,
+  collectionName: string,
+  key: string,
+  document: T,
+  expirySeconds?: number
+): Promise<boolean> {
+  const config = getDataApiConfig();
+  const response = await fetch(
+    documentUrl(config, scopeName, collectionName, key),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
+      },
+      body: JSON.stringify(document),
+    }
+  );
+  if (response.status === 409) return false;
+  if (!response.ok) throw new Error(await failureMessage(response));
+  return true;
 }
 
 export async function deleteDocument(
@@ -192,17 +251,55 @@ export async function deleteDocument(
   collectionName: string,
   key: string
 ): Promise<boolean> {
-  const { rows } = await executeDataApiQuery<string>({
-    scopeName,
-    statement: `DELETE FROM ${escapeIdentifier(collectionName)}
-      USE KEYS $key
-      RETURNING RAW META().id`,
-    options: {
-      parameters: { key },
-    },
-  });
+  const config = getDataApiConfig();
+  const response = await fetch(
+    documentUrl(config, scopeName, collectionName, key),
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+      },
+    }
+  );
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error(await failureMessage(response));
+  return true;
+}
 
-  return rows.length > 0;
+/**
+ * Atomically add to a counter document, creating it if absent.
+ *
+ * CAREFUL: on creation the endpoint stores `initial` and IGNORES `delta`.
+ * Passing initial: 0 therefore drops the first increment silently — for a spend
+ * counter that makes the first paid call of each day free. `initial` is set to
+ * the delta here for that reason, so creation and increment agree.
+ */
+export async function incrementCounter(
+  scopeName: string,
+  collectionName: string,
+  key: string,
+  delta: number,
+  expirySeconds?: number
+): Promise<number> {
+  if (!Number.isFinite(delta) || delta <= 0) {
+    throw new Error('incrementCounter requires a positive delta.');
+  }
+  const amount = Math.round(delta);
+  const config = getDataApiConfig();
+  const response = await fetch(
+    `${documentUrl(config, scopeName, collectionName, key)}/increment`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
+      },
+      body: JSON.stringify({ initial: amount, delta: amount }),
+    }
+  );
+  if (!response.ok) throw new Error(await failureMessage(response));
+  return Number(await response.text());
 }
 
 export async function executeQuery<T>(
