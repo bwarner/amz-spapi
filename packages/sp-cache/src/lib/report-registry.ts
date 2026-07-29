@@ -192,8 +192,10 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       ],
       store: ['store'],
       startingBalance: ['startingwarehousebalance'],
+      // NOT also mapped to `quantity`: two fields claiming one column is
+      // ambiguous, and the loser is silently empty. This view has no per-event
+      // quantity — a balance is not a movement.
       endingBalance: ['endingwarehousebalance'],
-      quantity: ['endingwarehousebalance'],
       inTransit: ['intransitbetweenwarehouses'],
       receipts: ['receipts'],
       customerShipments: ['customershipments'],

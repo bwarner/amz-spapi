@@ -231,6 +231,17 @@ const PAPERWORK_VOCABULARY = [
 /** Total phrase weight a matcher needs before it may claim a document. */
 const RECOGNITION_THRESHOLD = 8;
 
+/**
+ * Longest text the artwork fallback will apply to.
+ *
+ * Distinct from the ceiling once used to RECOGNISE a box label, which was wrong
+ * because a real label carries 400+ characters of copy — that job belongs to
+ * the matcher's `requires`. This bound exists because prose without money words
+ * is a document we cannot place, not a picture: a 23-page agency report should
+ * come back unknown and be asked about, never filed as packaging artwork.
+ */
+const ARTWORK_FALLBACK_MAX_LENGTH = 1200;
+
 function extensionOf(fileName: string): string {
   return fileName.split('.').pop()?.toLowerCase() ?? '';
 }
@@ -340,7 +351,11 @@ export function recognizeDocument(params: {
   const paperworkHits = PAPERWORK_VOCABULARY.filter((term) =>
     text.includes(term)
   );
-  if (best.score < RECOGNITION_THRESHOLD && paperworkHits.length === 0) {
+  if (
+    best.score < RECOGNITION_THRESHOLD &&
+    paperworkHits.length === 0 &&
+    text.length <= ARTWORK_FALLBACK_MAX_LENGTH
+  ) {
     return {
       kind: 'design-artwork',
       confidence: 0.6,
