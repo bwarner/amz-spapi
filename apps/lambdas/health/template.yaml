@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Local development template for the health Lambda - Infrastructure managed by CDK.
+  See docs/adr/0001-cdk-deploys-sam-is-local-invoke.md. This file MUST NOT be
+  deployed: it exists so `sam local invoke` can run the artefact that `nx build`
+  produced.
+
+Resources:
+  Health:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: health-local
+      # Built by: nx build lambda-health
+      CodeUri: ../../../dist/apps/lambdas/health/
+      Handler: main.handler
+      Runtime: nodejs24.x
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          SERVICE_NAME: health
+          STAGE: local

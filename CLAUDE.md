@@ -228,9 +228,9 @@ sampled and expire; the ledger is the system of record.
 - `lint`, `test`: eslint/jest
 - `e2e`: Playwright/Cypress (later)
 
-**apps/lambdas/&lt;name&gt; (planned)**
+**apps/lambdas/&lt;name&gt;**
 
-One Nx app per Lambda. **CDK deploys; SAM is only ever `sam local invoke`** — see
+One Nx app per Lambda — see `apps/lambdas/README.md` for the contract. **CDK deploys; SAM is only ever `sam local invoke`** — see
 `docs/adr/0001-cdk-deploys-sam-is-local-invoke.md`. Packaging is a container image
 when the function has native dependencies (ONNX, `sharp`) and an esbuild-bundled
 zip when it does not.
@@ -238,6 +238,9 @@ zip when it does not.
 - `build`: Nx build to `dist/apps/lambdas/<name>`
 - `container` / `push`: image path only, to ECR
 - `local`: `sam local invoke` against the built artefact
+
+`LambdasStack` discovers apps from their `metadata.lambda` declaration, so
+adding a Lambda is adding an app — nothing is registered by hand.
 
 **apps/cli**
 
