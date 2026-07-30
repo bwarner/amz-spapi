@@ -1,4 +1,4 @@
-import { AmazonSPAPI } from './api-services';
+import { AmazonSPAPI } from './api-services.js';
 
 describe('AmazonSPAPI', () => {
   it('should create an instance with access token', () => {
