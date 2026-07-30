@@ -7,13 +7,6 @@ export type StageConfig = {
   appName: string;
   mediaBucketBaseName: string;
   allowedOrigins: string[];
-  bedrock: {
-    modelIds: string[];
-    embeddingModelId: string;
-    vercelOidcProviderArn?: string;
-    vercelOidcSubject?: string;
-    vercelOidcAudience?: string;
-  };
   retainAssets: boolean;
   noncurrentObjectExpirationDays: number;
 };
@@ -34,32 +27,6 @@ const envRegion = (name: StageName) =>
   process.env.CDK_DEFAULT_REGION ||
   DEFAULT_REGION;
 
-const envOptional = (name: StageName, key: string) =>
-  process.env[`SELLAVANT_${name.toUpperCase()}_${key}`] ||
-  process.env[`SELLAVANT_${key}`];
-
-const DEFAULT_BEDROCK_MODELS = [
-  'us.anthropic.claude-sonnet-4-6',
-  'us.anthropic.claude-haiku-4-5-20251001-v1:0',
-];
-
-const DEFAULT_BEDROCK_EMBEDDING_MODEL = 'amazon.titan-embed-text-v2:0';
-
-const bedrockConfig = (name: StageName): StageConfig['bedrock'] => ({
-  modelIds: (
-    envOptional(name, 'BEDROCK_MODEL_IDS') || DEFAULT_BEDROCK_MODELS.join(',')
-  )
-    .split(',')
-    .map((modelId) => modelId.trim())
-    .filter(Boolean),
-  embeddingModelId:
-    envOptional(name, 'BEDROCK_EMBEDDING_MODEL_ID') ||
-    DEFAULT_BEDROCK_EMBEDDING_MODEL,
-  vercelOidcProviderArn: envOptional(name, 'VERCEL_OIDC_PROVIDER_ARN'),
-  vercelOidcSubject: envOptional(name, 'VERCEL_OIDC_SUBJECT'),
-  vercelOidcAudience: envOptional(name, 'VERCEL_OIDC_AUDIENCE') || 'aws',
-});
-
 export const STAGES: Record<StageName, StageConfig> = {
   dev: {
     stageName: 'dev',
@@ -72,7 +39,6 @@ export const STAGES: Record<StageName, StageConfig> = {
       'https://localhost:9443',
       'http://localhost:3000',
     ],
-    bedrock: bedrockConfig('dev'),
     retainAssets: false,
     noncurrentObjectExpirationDays: 30,
   },
@@ -83,7 +49,6 @@ export const STAGES: Record<StageName, StageConfig> = {
     appName: 'sellavant',
     mediaBucketBaseName: 'sellavant-media-assets',
     allowedOrigins: ['https://staging.sellavant.com'],
-    bedrock: bedrockConfig('staging'),
     retainAssets: true,
     noncurrentObjectExpirationDays: 60,
   },
@@ -94,7 +59,6 @@ export const STAGES: Record<StageName, StageConfig> = {
     appName: 'sellavant',
     mediaBucketBaseName: 'sellavant-media-assets',
     allowedOrigins: ['https://sellavant.com', 'https://www.sellavant.com'],
-    bedrock: bedrockConfig('prod'),
     retainAssets: true,
     noncurrentObjectExpirationDays: 90,
   },
