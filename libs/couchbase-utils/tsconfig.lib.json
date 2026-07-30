@@ -1,8 +1,9 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc",
+    "outDir": "../../dist/out-tsc/libs/couchbase-utils",
     "declaration": true,
+    "composite": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],

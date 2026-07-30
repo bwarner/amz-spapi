@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc/packages/models/spec",
+    "outDir": "../../dist/out-tsc/libs/couchbase-utils/spec",
     "baseUrl": "./",
     "composite": true,
     "declaration": true,

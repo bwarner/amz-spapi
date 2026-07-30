@@ -1,8 +1,9 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc",
+    "outDir": "../../dist/out-tsc/packages/sp-client",
     "declaration": true,
+    "composite": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts"]

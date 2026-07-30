@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc",
+    "outDir": "../../dist/out-tsc/apps/spcli",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "baseUrl": "./",
@@ -11,7 +11,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
-      "path": "../../packages/sp-client"
+      "path": "../../packages/sp-client/tsconfig.lib.json"
     },
     {
       "path": "../../packages/credential-store/tsconfig.lib.json"

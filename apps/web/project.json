@@ -63,16 +63,10 @@
       }
     },
     "test": {
-      "executor": "@nx/vite:test",
-      "outputs": ["{options.reportsDirectory}"],
+      "executor": "nx:run-commands",
       "options": {
-        "passWithNoTests": true,
-        "reportsDirectory": "../../coverage/apps/web"
-      },
-      "configurations": {
-        "ci": {
-          "ci": true
-        }
+        "command": "vitest run --config vitest.config.ts",
+        "cwd": "apps/web"
       }
     },
     "analyze": {
@@ -93,5 +87,4 @@
       }
     }
   }
-
 }

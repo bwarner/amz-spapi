@@ -1,9 +1,10 @@
+import type { APlusGeneratedModule } from './aplus.js';
 import {
   liftGeneratedPackageToExperience,
   liftModuleToSection,
-} from './experience-lift';
+} from './experience-lift.js';
 
-import { REPRESENTATIVE_PACKAGE } from './experience-fixtures';
+import { REPRESENTATIVE_PACKAGE } from './experience-fixtures.js';
 
 describe('liftGeneratedPackageToExperience', () => {
   const experience = liftGeneratedPackageToExperience(REPRESENTATIVE_PACKAGE);
@@ -103,22 +104,30 @@ describe('liftGeneratedPackageToExperience', () => {
     const withFooter = liftGeneratedPackageToExperience(
       {
         ...REPRESENTATIVE_PACKAGE,
-        modules: [
-          REPRESENTATIVE_PACKAGE.modules[1], // image-text-overlay, order 2
-          {
-            order: 2,
-            amazonModuleType: 'STANDARD_COMPANY_LOGO',
-            title: 'Brand footer',
-            type: 'company-logo',
-            logo: {
-              role: 'logo',
-              brief: 'Brand logo.',
-              size: '1024x1024',
-              alt: 'Brand logo',
+        // Annotated, so the literals below keep their literal types. Without it
+        // `type` widens to string, the array stops matching the module union,
+        // and this case silently checks nothing.
+        modules: (
+          [
+            REPRESENTATIVE_PACKAGE.modules[1], // image-text-overlay, order 2
+            {
+              order: 2,
+              amazonModuleType: 'STANDARD_COMPANY_LOGO',
+              title: 'Brand footer',
+              type: 'company-logo',
+              logo: {
+                role: 'logo',
+                brief: 'Brand logo.',
+                size: '1024x1024',
+                alt: 'Brand logo',
+              },
+              placement: 'footer',
             },
-            placement: 'footer',
-          },
-        ].map((module, index) => ({ ...module, order: index + 1 })),
+          ] satisfies APlusGeneratedModule[]
+        ).map((module, index) => ({
+          ...module,
+          order: index + 1,
+        })),
       },
       {
         beats: [

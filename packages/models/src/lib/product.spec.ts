@@ -2,7 +2,7 @@ import {
   ProductSchema,
   ProductVariantSchema,
   ProductListingSchema,
-} from './product';
+} from './product.js';
 
 describe('product domain schemas', () => {
   const now = 1_700_000_000_000;

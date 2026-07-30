@@ -2,16 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": ".",
-    "rootDir": "src",
-    "outDir": "dist",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "tsBuildInfoFile": "dist/tsconfig.lib.tsbuildinfo",
+    "outDir": "../../dist/out-tsc/packages/amazon-ads-schema",
+    "tsBuildInfoFile": "../../dist/out-tsc/packages/amazon-ads-schema/tsconfig.lib.tsbuildinfo",
     "declaration": true,
     "types": ["node"],
-    "noUncheckedIndexedAccess": true,
     "composite": true
-    },
-  "include": ["src/**/*.ts"],
+  },
+  "files": [],
+  "include": [],
   "references": []
 }

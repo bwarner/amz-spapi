@@ -7,15 +7,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update ad groups
+        /**
+         * @description Update ad groups
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsAdGroups"];
-        /** @description Create ad groups
+        /**
+         * @description Create ad groups
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsAdGroups"];
         delete?: never;
         options?: never;
@@ -32,10 +36,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete ad groups
+        /**
+         * @description Delete ad groups
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsAdGroups"];
         delete?: never;
         options?: never;
@@ -52,10 +58,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List ad groups
+        /**
+         * @description List ad groups
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsAdGroups"];
         delete?: never;
         options?: never;
@@ -74,17 +82,13 @@ export type paths = {
         get: operations["GetSPBudgetRulesForAdvertiser"];
         /**
          * Updates one or more budget rules.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         put: operations["UpdateBudgetRulesForSPCampaigns"];
         /**
          * Creates one or more budget rules.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         post: operations["CreateBudgetRulesForSPCampaigns"];
@@ -103,9 +107,7 @@ export type paths = {
         };
         /**
          * Gets a budget rule specified by identifier.
-         * @description
-         *
-         *     **Authorized resource type**:
+         * @description **Authorized resource type**:
          *     Global Ad Account ID, Profile ID
          *
          *     **Parameter name**:
@@ -150,10 +152,12 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** @description Gets the top consolidated recommendations across bid, budget, targeting for SP campaigns given an advertiser profile id. The recommendations are refreshed everyday.
+        /**
+         * @description Gets the top consolidated recommendations across bid, budget, targeting for SP campaigns given an advertiser profile id. The recommendations are refreshed everyday.
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_view","advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_view","advertiser_campaign_edit"]
+         */
         get: operations["getCampaignRecommendations"];
         put?: never;
         post?: never;
@@ -171,15 +175,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update campaign negative keywords
+        /**
+         * @description Update campaign negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsCampaignNegativeKeywords"];
-        /** @description Create campaign negative keywords
+        /**
+         * @description Create campaign negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsCampaignNegativeKeywords"];
         delete?: never;
         options?: never;
@@ -196,10 +204,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete campaign negative keywords
+        /**
+         * @description Delete campaign negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsCampaignNegativeKeywords"];
         delete?: never;
         options?: never;
@@ -216,10 +226,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List campaign negative keywords
+        /**
+         * @description List campaign negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsCampaignNegativeKeywords"];
         delete?: never;
         options?: never;
@@ -235,15 +247,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update campaign negative targeting clauses
+        /**
+         * @description Update campaign negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsCampaignNegativeTargetingClauses"];
-        /** @description Create campaign negative targeting clauses
+        /**
+         * @description Create campaign negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsCampaignNegativeTargetingClauses"];
         delete?: never;
         options?: never;
@@ -260,10 +276,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete campaign negative targeting clauses
+        /**
+         * @description Delete campaign negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsCampaignNegativeTargetingClauses"];
         delete?: never;
         options?: never;
@@ -280,10 +298,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List campaign negative targeting clauses
+        /**
+         * @description List campaign negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsCampaignNegativeTargetingClauses"];
         delete?: never;
         options?: never;
@@ -299,15 +319,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update campaigns
+        /**
+         * @description Update campaigns
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsCampaigns"];
-        /** @description Create campaigns
+        /**
+         * @description Create campaigns
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsCampaigns"];
         delete?: never;
         options?: never;
@@ -324,9 +348,7 @@ export type paths = {
         };
         /**
          * Gets a list of budget rules associated to a campaign specified by identifier.
-         * @description
-         *
-         *     **Authorized resource type**:
+         * @description **Authorized resource type**:
          *     Global Ad Account ID, Profile ID
          *
          *     **Parameter name**:
@@ -366,9 +388,7 @@ export type paths = {
         post?: never;
         /**
          * Disassociates a budget rule specified by identifier from a campaign specified by identifier.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         delete: operations["DisassociateAssociatedBudgetRuleForSPCampaigns"];
@@ -388,10 +408,7 @@ export type paths = {
         put?: never;
         /**
          * Associates one or multiple optimization rules with a campaign.
-         *
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         post: operations["AssociateOptimizationRulesToCampaign"];
@@ -412,9 +429,7 @@ export type paths = {
         put?: never;
         /**
          * Budget usage API for SP campaigns
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit","advertiser_campaign_view"]
          */
         post: operations["spCampaignsBudgetUsage"];
@@ -479,10 +494,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete campaigns
+        /**
+         * @description Delete campaigns
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsCampaigns"];
         delete?: never;
         options?: never;
@@ -516,10 +533,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List campaigns
+        /**
+         * @description List campaigns
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsCampaigns"];
         delete?: never;
         options?: never;
@@ -599,15 +618,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update keywords
+        /**
+         * @description Update keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsKeywords"];
-        /** @description Create keywords
+        /**
+         * @description Create keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsKeywords"];
         delete?: never;
         options?: never;
@@ -624,10 +647,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete keywords
+        /**
+         * @description Delete keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsKeywords"];
         delete?: never;
         options?: never;
@@ -644,10 +669,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List keywords
+        /**
+         * @description List keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["ListSponsoredProductsKeywords"];
         delete?: never;
         options?: never;
@@ -663,15 +690,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update negative keywords
+        /**
+         * @description Update negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsNegativeKeywords"];
-        /** @description Create negative keywords
+        /**
+         * @description Create negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsNegativeKeywords"];
         delete?: never;
         options?: never;
@@ -688,10 +719,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete negative keywords
+        /**
+         * @description Delete negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsNegativeKeywords"];
         delete?: never;
         options?: never;
@@ -708,10 +741,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List negative keywords
+        /**
+         * @description List negative keywords
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsNegativeKeywords"];
         delete?: never;
         options?: never;
@@ -727,15 +762,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update negative targeting clauses
+        /**
+         * @description Update negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsNegativeTargetingClauses"];
-        /** @description Create negative targeting clauses
+        /**
+         * @description Create negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsNegativeTargetingClauses"];
         delete?: never;
         options?: never;
@@ -798,10 +837,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete negative targeting clauses
+        /**
+         * @description Delete negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsNegativeTargetingClauses"];
         delete?: never;
         options?: never;
@@ -818,10 +859,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List negative targeting clauses
+        /**
+         * @description List negative targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsNegativeTargetingClauses"];
         delete?: never;
         options?: never;
@@ -837,15 +880,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update product ads
+        /**
+         * @description Update product ads
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsProductAds"];
-        /** @description Create product ads
+        /**
+         * @description Create product ads
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsProductAds"];
         delete?: never;
         options?: never;
@@ -862,10 +909,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete product ads
+        /**
+         * @description Delete product ads
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsProductAds"];
         delete?: never;
         options?: never;
@@ -882,10 +931,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List product ads
+        /**
+         * @description List product ads
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["ListSponsoredProductsProductAds"];
         delete?: never;
         options?: never;
@@ -903,17 +954,13 @@ export type paths = {
         get?: never;
         /**
          * Updates a campaign optimization rule.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         put: operations["UpdateOptimizationRule"];
         /**
          * Creates a campaign optimization rule.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         post: operations["CreateOptimizationRule"];
@@ -932,9 +979,7 @@ export type paths = {
         };
         /**
          * Gets a campaign optimization rule specified by identifier.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit","advertiser_campaign_view"]
          */
         get: operations["GetCampaignOptimizationRule"];
@@ -942,9 +987,7 @@ export type paths = {
         post?: never;
         /**
          * Deletes a campaign optimization rule specified by identifier.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         delete: operations["DeleteCampaignOptimizationRule"];
@@ -964,9 +1007,7 @@ export type paths = {
         put?: never;
         /**
          * Gets a campaign optimization rule eligibility for SP campaigns.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit","advertiser_campaign_view"]
          */
         post: operations["GetOptimizationRuleEligibility"];
@@ -987,9 +1028,7 @@ export type paths = {
         put?: never;
         /**
          * Gets campaign optimization rule state. Recommended refresh frequency is once a day.
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit","advertiser_campaign_view"]
          */
         post: operations["GetRuleNotification"];
@@ -1009,19 +1048,13 @@ export type paths = {
         get?: never;
         /**
          * Updates one or more optimization rules.
-         *
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         put: operations["UpdateOptimizationRules"];
         /**
          * Creates one or more optimization rules.
-         *
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit"]
          */
         post: operations["CreateOptimizationRules"];
@@ -1042,10 +1075,7 @@ export type paths = {
         put?: never;
         /**
          * Searches optimization rules based on optional filters.
-         *
-         * @description
-         *
-         *     **Requires one of these permissions**:
+         * @description **Requires one of these permissions**:
          *     ["advertiser_campaign_edit","advertiser_campaign_view"]
          */
         post: operations["SearchOptimizationRules"];
@@ -1064,10 +1094,11 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description This API (currently beta) recommends Keyword Group targets for a given list of Ad ASINs. Keyword Groups is a new control for Amazon Ads Sponsored Products keyword-based campaigns that enables advertisers to reach relevant audiences through a collection of keywords.
+        /**
+         * @description This API (currently beta) recommends Keyword Group targets for a given list of Ad ASINs. Keyword Groups is a new control for Amazon Ads Sponsored Products keyword-based campaigns that enables advertisers to reach relevant audiences through a collection of keywords.
          *
          *     Once a Keyword Group specification is created, the performance of Keyword Groups will be available in the search terms report. Keyword Groups improves campaign performance by dynamically updating the keywords within a group through the campaign lifecycle and eliminates the need for advertisers to constantly curate new keywords. Additionally, Keyword Groups can be used alongside keywords within the same ad group.
-         *      */
+         */
         post: operations["getKeywordGroupRecommendations"];
         delete?: never;
         options?: never;
@@ -1084,11 +1115,13 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Creates a target promotion group, by grouping the auto-targeting adGroupId
+        /**
+         * @description Creates a target promotion group, by grouping the auto-targeting adGroupId
          *     and manual-targeting adGroups, divided by keyword targeting adGroups, and product targeting adGroups.
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["CreateTargetPromotionGroups"];
         delete?: never;
         options?: never;
@@ -1105,11 +1138,13 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Returns the target promotion groups for an advertiser and / or adGroupId, and / or target
+        /**
+         * @description Returns the target promotion groups for an advertiser and / or adGroupId, and / or target
          *     promotion group id.
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_view"] */
+         *     ["advertiser_campaign_view"]
+         */
         post: operations["ListTargetPromotionGroups"];
         delete?: never;
         options?: never;
@@ -1126,10 +1161,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Retrieves keyword and product targets of an auto-targeting campaign as recommendations for promoting to a manual-targeting campaign. The recommendations are based on performance heuristics of the targets.
+        /**
+         * @description Retrieves keyword and product targets of an auto-targeting campaign as recommendations for promoting to a manual-targeting campaign. The recommendations are based on performance heuristics of the targets.
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["GetTargetPromotionGroupsRecommendations"];
         delete?: never;
         options?: never;
@@ -1146,10 +1183,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Creates keyword and/or product targets in the manual adGroup that are part of the target promotion group
+        /**
+         * @description Creates keyword and/or product targets in the manual adGroup that are part of the target promotion group
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit","advertiser_campaign_view"] */
+         *     ["advertiser_campaign_edit","advertiser_campaign_view"]
+         */
         post: operations["CreateTargetPromotionGroupTargets"];
         delete?: never;
         options?: never;
@@ -1166,10 +1205,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Returns the targets created through target promotion groups for an advertiser and / or given target promotion group.
+        /**
+         * @description Returns the targets created through target promotion groups for an advertiser and / or given target promotion group.
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_view"] */
+         *     ["advertiser_campaign_view"]
+         */
         post: operations["ListTargetPromotionGroupTargets"];
         delete?: never;
         options?: never;
@@ -1185,15 +1226,19 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** @description Update targeting clauses
+        /**
+         * @description Update targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         put: operations["UpdateSponsoredProductsTargetingClauses"];
-        /** @description Create targeting clauses
+        /**
+         * @description Create targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["CreateSponsoredProductsTargetingClauses"];
         delete?: never;
         options?: never;
@@ -1302,10 +1347,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description Delete targeting clauses
+        /**
+         * @description Delete targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["DeleteSponsoredProductsTargetingClauses"];
         delete?: never;
         options?: never;
@@ -1345,10 +1392,12 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** @description List targeting clauses
+        /**
+         * @description List targeting clauses
          *
          *     **Requires one of these permissions**:
-         *     ["advertiser_campaign_edit"] */
+         *     ["advertiser_campaign_edit"]
+         */
         post: operations["ListSponsoredProductsTargetingClauses"];
         delete?: never;
         options?: never;
@@ -1396,7 +1445,6 @@ export type paths = {
          *     </br><b>- Complements</b> – Items that are frequently purchased together as complements. For example, if you are promoting a tennis racquet, you may see tennis balls recommended under this theme.
          *     </br><b>- Similar items with low ratings and reviews</b> – Subset of the ‘similar items’ theme containing items that are rated lower than 3 stars and/or with fewer than 5 reviews.
          *     </br><b>- Other books read by your readers</b> – Items that shoppers frequently view and click along with your advertised item during a shopping session. </br></br><i><b>Note:</b> Availability of themes differs by input ASIN - some ASINs may not have all above themes available</i>
-         *
          */
         post: operations["getProductRecommendations"];
         delete?: never;
@@ -1481,7 +1529,8 @@ export type components = {
              */
             recommendationType: "KEYWORDS_FOR_ADGROUP";
         });
-        /** @example {
+        /**
+         * @example {
          *       "targetingExpressions": [
          *         {
          *           "type": "CLOSE_MATCH"
@@ -1499,7 +1548,8 @@ export type components = {
          *       "campaignId": "ABCD1234",
          *       "recommendationType": "BIDS_FOR_EXISTING_AD_GROUP",
          *       "adGroupId": "EFGH5678"
-         *     } */
+         *     }
+         */
         AdGroupThemeBasedBidRecommendationRequest: {
             /** @description The ad group identifier. */
             adGroupId: string;
@@ -1512,7 +1562,8 @@ export type components = {
             recommendationType: "BIDS_FOR_EXISTING_AD_GROUP";
             targetingExpressions: components["schemas"]["TargetingExpressionList"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "targetingExpressions": [
          *         {
          *           "type": "CLOSE_MATCH"
@@ -1530,7 +1581,8 @@ export type components = {
          *       "campaignId": "ABCD1234",
          *       "recommendationType": "BIDS_FOR_EXISTING_AD_GROUP",
          *       "adGroupId": "EFGH5678"
-         *     } */
+         *     }
+         */
         AdGroupThemeBasedBidRecommendationRequestV4: {
             /** @description The ad group identifier. */
             adGroupId: string;
@@ -1543,7 +1595,8 @@ export type components = {
             recommendationType: "BIDS_FOR_EXISTING_AD_GROUP";
             targetingExpressions: components["schemas"]["TargetingExpressionListV4"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "targetingExpressions": [
          *         {
          *           "type": "CLOSE_MATCH"
@@ -1562,7 +1615,8 @@ export type components = {
          *       "recommendationType": "BIDS_FOR_EXISTING_AD_GROUP",
          *       "includeAnalysis": "true",
          *       "adGroupId": "EFGH5678"
-         *     } */
+         *     }
+         */
         AdGroupThemeBasedBidRecommendationRequestV5: {
             /** @description The ad group identifier. */
             adGroupId: string;
@@ -1635,7 +1689,8 @@ export type components = {
              */
             recommendationType: "KEYWORDS_FOR_ASINS";
         });
-        /** @example {
+        /**
+         * @example {
          *       "asins": [
          *         "asin1",
          *         "asin2"
@@ -1672,7 +1727,8 @@ export type components = {
          *         "strategy": "AUTO_FOR_SALES"
          *       },
          *       "recommendationType": "BIDS_FOR_NEW_AD_GROUP"
-         *     } */
+         *     }
+         */
         AsinsThemeBasedBidRecommendationRequest: {
             /** @description The list of ad ASINs in the ad group. */
             asins: string[];
@@ -1699,7 +1755,8 @@ export type components = {
             recommendationType: "BIDS_FOR_NEW_AD_GROUP";
             targetingExpressions: components["schemas"]["TargetingExpressionList"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "asins": [
          *         "asin1",
          *         "asin2"
@@ -1750,7 +1807,8 @@ export type components = {
          *         "strategy": "AUTO_FOR_SALES"
          *       },
          *       "recommendationType": "BIDS_FOR_NEW_AD_GROUP"
-         *     } */
+         *     }
+         */
         AsinsThemeBasedBidRecommendationRequestV4: {
             /** @description The list of ad ASINs in the ad group. */
             asins: string[];
@@ -1779,7 +1837,8 @@ export type components = {
             recommendationType: "BIDS_FOR_NEW_AD_GROUP";
             targetingExpressions: components["schemas"]["TargetingExpressionListV4"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "asins": [
          *         "asin1",
          *         "asin2"
@@ -1831,7 +1890,8 @@ export type components = {
          *       },
          *       "recommendationType": "BIDS_FOR_NEW_AD_GROUP",
          *       "includeAnalysis": "true"
-         *     } */
+         *     }
+         */
         AsinsThemeBasedBidRecommendationRequestV5: {
             /** @description The list of ad ASINs in the ad group. */
             asins: string[];
@@ -1984,7 +2044,8 @@ export type components = {
             /** @description A human-readable description of the response. */
             details: string;
         };
-        /** @example {
+        /**
+         * @example {
          *       "bidValues": [
          *         {
          *           "suggestedBid": "1"
@@ -1999,7 +2060,8 @@ export type components = {
          *       "targetingExpression": {
          *         "type": "CLOSE_MATCH"
          *       }
-         *     } */
+         *     }
+         */
         BidRecommendationPerTargetingExpression: {
             bidValues: [
             ] | [
@@ -2014,7 +2076,8 @@ export type components = {
             ];
             targetingExpression: components["schemas"]["TargetingExpression"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "bidValues": [
          *         {
          *           "suggestedBid": "1"
@@ -2029,7 +2092,8 @@ export type components = {
          *       "targetingExpression": {
          *         "type": "CLOSE_MATCH"
          *       }
-         *     } */
+         *     }
+         */
         BidRecommendationPerTargetingExpressionV4: {
             bidValues: [
             ] | [
@@ -2044,7 +2108,8 @@ export type components = {
             ];
             targetingExpression: components["schemas"]["TargetingExpressionV4"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "suggestedBidImpactMetrics": {
          *         "estimatedImpressionUpper": "1200",
          *         "estimatedImpressionLower": "600"
@@ -2063,7 +2128,8 @@ export type components = {
          *       "targetingExpression": {
          *         "type": "CLOSE_MATCH"
          *       }
-         *     } */
+         *     }
+         */
         BidRecommendationPerTargetingExpressionV5: {
             bidValues: [
             ] | [
@@ -2200,7 +2266,8 @@ export type components = {
             /** @description List of campaigns. */
             campaignIds: string[];
         };
-        /** @example {
+        /**
+         * @example {
          *       "budgetRecommendationsSuccessResults": [
          *         {
          *           "campaignId": "A3REPY26ZX1BSY",
@@ -2250,7 +2317,8 @@ export type components = {
          *           }
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         BudgetRecommendationResponse: {
             /** @description List of errors that occured when generating bduget recommendation. */
             budgetRecommendationsErrorResults: components["schemas"]["BudgetRecommendationError"][];
@@ -2518,7 +2586,8 @@ export type components = {
         CountryBudgetsMap: {
             [key: string]: number;
         };
-        /** @description A list of country codes. Supported country codes:
+        /**
+         * @description A list of country codes. Supported country codes:
          *     | Country Code |  Country            |
          *     |-------------|----------------------|
          *     | US          | United States        |
@@ -2541,7 +2610,8 @@ export type components = {
          *     | EG          | Egypt                |
          *     | JP          | Japan                |
          *     | AU          | Australia            |
-         *     | SG          | Singapore            | */
+         *     | SG          | Singapore            |
+         */
         CountryCodes: string[];
         /** @description The targeting expression value for each country. */
         CountryExpressionValuesMap: {
@@ -2595,7 +2665,8 @@ export type components = {
             /** @description A list of budget rule details. */
             budgetRulesDetails?: components["schemas"]["SPBudgetRuleDetails"][];
         };
-        /** @example {
+        /**
+         * @example {
          *       "recurrence": "DAILY",
          *       "ruleAction": "ADOPT",
          *       "ruleCondition": [
@@ -2611,7 +2682,8 @@ export type components = {
          *         "123784",
          *         "1223785"
          *       ]
-         *     } */
+         *     }
+         */
         CreateSPCampaignOptimizationRulesRequest: {
             /** @description A list of campaign ids */
             campaignIds: components["schemas"]["RuleCampaignId"][];
@@ -2838,7 +2910,8 @@ export type components = {
             /** @description List of campaign Ids */
             campaignIds: string[];
         };
-        /** @example {
+        /**
+         * @example {
          *       "budgetRecommendationsResults": [
          *         {
          *           "resultStatus": "SUCCESS",
@@ -2908,7 +2981,8 @@ export type components = {
          *           ]
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         GlobalBudgetRecommendationResponse: {
             /** @description List of global budget recommendation results for campaigns. */
             budgetRecommendationsResults: components["schemas"]["GlobalBudgetRecommendationResult"][];
@@ -3125,7 +3199,8 @@ export type components = {
                 components["schemas"]["SpecialEvent"]
             ];
         };
-        /** @example {
+        /**
+         * @example {
          *       "countryDailyBudgets": {
          *         "UK": "20",
          *         "US": "18"
@@ -3170,7 +3245,8 @@ export type components = {
          *         }
          *       ],
          *       "targetingType": "MANUAL"
-         *     } */
+         *     }
+         */
         InitialGlobalBudgetRecommendationRequest: {
             /** @description The ad group information for this new campaign. */
             adGroups: [
@@ -3195,7 +3271,8 @@ export type components = {
              */
             targetingType: "MANUAL" | "AUTO";
         };
-        /** @example {
+        /**
+         * @example {
          *       "countryBudgetRecommendations": {
          *         "UK": {
          *           "specialEvents": [
@@ -3267,7 +3344,8 @@ export type components = {
          *           "message": "Request is not authorised for JP"
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         InitialGlobalBudgetRecommendationResponse: {
             countryBudgetRecommendations: components["schemas"]["CountryBudgetRecommendationMap"];
             errors?: components["schemas"]["GlobalBudgetRecommendationNewCampaignsError"][];
@@ -3404,7 +3482,8 @@ export type components = {
                 [key: string]: string;
             };
         };
-        /** @example {
+        /**
+         * @example {
          *       "targetingExpressions": [
          *         {
          *           "countryValues": {
@@ -3422,7 +3501,8 @@ export type components = {
          *       "recommendationType": "BIDS_FOR_EXISTING_AD_GROUP",
          *       "includeAnalysis": "true",
          *       "adGroupId": "EFGH5678"
-         *     } */
+         *     }
+         */
         MultiCountryAdGroupThemeBasedBidRecommendationRequest: {
             /** @description The ad group identifier. */
             adGroupId: string;
@@ -3445,7 +3525,8 @@ export type components = {
         MultiCountryAsin: {
             [key: string]: string;
         };
-        /** @example {
+        /**
+         * @example {
          *       "targetingExpressions": [
          *         {
          *           "countryValues": {
@@ -3493,7 +3574,8 @@ export type components = {
          *           }
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         MultiCountryAsinsThemeBasedBidRecommendationRequest: {
             /** @description Bidding control configuration for the campaign. */
             bidding: {
@@ -3522,7 +3604,8 @@ export type components = {
             recommendationType: "BIDS_FOR_NEW_AD_GROUP";
             targetingExpressions: components["schemas"]["MultiCountryTargetingExpressionList"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "expression": {
          *         "countryValues": {
          *           "UK": "Sample2",
@@ -3596,7 +3679,8 @@ export type components = {
          *           ]
          *         }
          *       }
-         *     } */
+         *     }
+         */
         MultiCountryBidAnalysesPerTargetingExpression: {
             countryBidAnalyses?: {
                 [key: string]: components["schemas"]["BidAnalysesPerPlacement"];
@@ -3611,7 +3695,8 @@ export type components = {
             /** @description Human readable 1 liner error message */
             message?: string;
         };
-        /** @example {
+        /**
+         * @example {
          *       "countrySuggestedBids": {
          *         "UK": [
          *           {
@@ -3643,7 +3728,8 @@ export type components = {
          *         },
          *         "type": "KEYWORD_BROAD_MATCH"
          *       }
-         *     } */
+         *     }
+         */
         MultiCountryBidRecommendationPerTargetingExpression: {
             countrySuggestedBids: {
                 [key: string]: components["schemas"]["SuggestedBidValues"];
@@ -3686,7 +3772,8 @@ export type components = {
         MultiCountryTargetingExpressionList: components["schemas"]["MultiCountryTargetingExpression"][];
         /** @enum {string} */
         MultiCountryTargetingExpressionType: "CLOSE_MATCH" | "LOOSE_MATCH" | "SUBSTITUTES" | "COMPLEMENTS" | "KEYWORD_BROAD_MATCH" | "KEYWORD_EXACT_MATCH" | "KEYWORD_PHRASE_MATCH" | "PAT_ASIN" | "PAT_CATEGORY" | "PAT_CATEGORY_REFINEMENT" | "KEYWORD_GROUP";
-        /** @example {
+        /**
+         * @example {
          *       "theme": "CONVERSION_OPPORTUNITIES",
          *       "bidRecommendationsForTargetingExpressions": [
          *         {
@@ -3723,7 +3810,8 @@ export type components = {
          *           }
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         MultiCountryThemeBasedBidRecommendation: {
             /** @description The bid analyses for targeting expressions listed in the request. */
             bidAnalysesForTargetingExpressions?: components["schemas"]["MultiCountryBidAnalysesPerTargetingExpression"][];
@@ -3731,7 +3819,8 @@ export type components = {
             bidRecommendationsForTargetingExpressions: components["schemas"]["MultiCountryBidRecommendationPerTargetingExpression"][];
             theme: components["schemas"]["Theme"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "errors": [
          *         {
          *           "countryCodes": [
@@ -3741,7 +3830,8 @@ export type components = {
          *           "message": "Some error occurred."
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         MultiCountryThemeBasedBidRecommendationCompleteFailureResponse: {
             /** @description List of errors occurred while processing multi country request. */
             errors: components["schemas"]["MultiCountryBidRecommendationError"][];
@@ -4121,8 +4211,10 @@ export type components = {
              * @default 300
              */
             maxResults: number;
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the request.
-             *     If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the request.
+             *     If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             recommendationIdListFilter?: string[];
             ruleCategoryFilter: components["schemas"]["OptimizationRulesAPISwaggerRuleCategory"];
@@ -4135,8 +4227,10 @@ export type components = {
              * @default 300
              */
             maxPageSize: number;
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the request.
-             *     If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the request.
+             *     If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             ruleRecommendations: components["schemas"]["OptimizationRulesAPISwaggerRecommendationEntities"] | components["schemas"]["OptimizationRulesAPISwaggerBiddingRuleRecommendations"] | components["schemas"]["OptimizationRulesAPISwaggerTargetingRuleRecommendations"];
         };
@@ -4206,7 +4300,8 @@ export type components = {
             /** @description The rule identifier. */
             optimizationRuleId?: string;
         };
-        /** @example {
+        /**
+         * @example {
          *       "recurrence": {
          *         "duration": {
          *           "startTime": "2022-11-01T00:00:00Z",
@@ -4236,7 +4331,8 @@ export type components = {
          *         }
          *       },
          *       "optimizationRuleId": "7bf484ff-381c-4703-82ec-66b9eb732705"
-         *     } */
+         *     }
+         */
         OptimizationRulesAPISwaggerOptimizationRuleWithoutRuleId: {
             action: components["schemas"]["OptimizationRulesAPISwaggerRuleAction"];
             conditions?: [
@@ -4250,7 +4346,8 @@ export type components = {
             ruleSubCategory: components["schemas"]["OptimizationRulesAPISwaggerRuleSubCategory"];
             status?: components["schemas"]["OptimizationRulesAPISwaggerRuleStatus"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "recurrence": {
          *         "duration": {
          *           "startTime": "2022-11-01T00:00:00Z",
@@ -4280,7 +4377,8 @@ export type components = {
          *         }
          *       },
          *       "optimizationRuleId": "7bf484ff-381c-4703-82ec-66b9eb732705"
-         *     } */
+         *     }
+         */
         OptimizationRulesAPISwaggerOptimizationRuleWithoutRuleIdV2: {
             action?: components["schemas"]["OptimizationRulesAPISwaggerRuleAction"];
             conditions?: components["schemas"]["OptimizationRulesAPISwaggerRuleConditionV2"][];
@@ -4541,8 +4639,10 @@ export type components = {
              * @default 50
              */
             maxResults: number;
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the request.
-             *     If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the request.
+             *     If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             optimizationRuleFilter?: components["schemas"]["OptimizationRulesAPISwaggerEntityFieldFilter"];
         };
@@ -6238,12 +6338,14 @@ export type components = {
             offAmazonSettings?: components["schemas"]["SponsoredProductsCreateOrUpdateOffAmazonSettings"];
             /** @description The identifier of an existing portfolio to which the campaign is associated. */
             portfolioId?: string;
-            /** @description Restrict the ad to a particular site. siteRestrictions is an optional field.
+            /**
+             * @description Restrict the ad to a particular site. siteRestrictions is an optional field.
              *     If this field is not set, ads from the campaign will appear on Amazon - including both Amazon retail and Amazon Business - as well as select sites and apps off Amazon.
              *     Please note that: 1) AMAZON_BUSINESS option is only available for Amazon Business operated marketplaces (US, CA, MX, UK, DE, FR, IT, ES, IN, JP), and AMAZON_HAUL option is only available in US;
              *     2) siteRestrictions cannot be changed post campaign creation;
              *     3) siteRestrictions don’t support shopperCohortBidding setting, SITE_AMAZON_BUSINESS placementBidding setting and offAmazonSettings;
-             *     4) Only AMAZON_BUSINESS option is ready for use at the moment. */
+             *     4) Only AMAZON_BUSINESS option is ready for use at the moment.
+             */
             siteRestrictions?: [
                 components["schemas"]["SponsoredProductsSiteRestriction"]
             ];
@@ -6294,12 +6396,14 @@ export type components = {
             name: string;
             /** @description The identifier of an existing portfolio to which the draft is associated. */
             portfolioId?: string;
-            /** @description Restrict the ad to a particular site. siteRestrictions is an optional field.
+            /**
+             * @description Restrict the ad to a particular site. siteRestrictions is an optional field.
              *     If this field is not set, ads from the campaign will appear on Amazon - including both Amazon retail and Amazon Business - as well as select sites and apps off Amazon.
              *     Please note that: 1) AMAZON_BUSINESS option is only available for Amazon Business operated marketplaces (US, CA, MX, UK, DE, FR, IT, ES, IN, JP), and AMAZON_HAUL option is only available in US;
              *     2) siteRestrictions cannot be changed post campaign creation;
              *     3) siteRestrictions don’t support shopperCohortBidding setting, SITE_AMAZON_BUSINESS placementBidding setting and offAmazonSettings;
-             *     4) Only AMAZON_BUSINESS option is ready for use at the moment. */
+             *     4) Only AMAZON_BUSINESS option is ready for use at the moment.
+             */
             siteRestrictions?: [
                 components["schemas"]["SponsoredProductsSiteRestriction"]
             ] | null;
@@ -6567,12 +6671,16 @@ export type components = {
             shopperCohortBidding?: components["schemas"]["SponsoredProductsDraftCampaignShopperCohortBidding"][];
             strategy: components["schemas"]["SponsoredProductsCreateOrUpdateBiddingStrategy"];
         };
-        /** @description Specifies bidding controls. DynamicBidding is optional for both Create and Update requests.
-         *     For Create Campaign requests, if you don't specify dynamicBidding, default strategy of `LEGACY_FOR_SALES` will be applied. */
+        /**
+         * @description Specifies bidding controls. DynamicBidding is optional for both Create and Update requests.
+         *     For Create Campaign requests, if you don't specify dynamicBidding, default strategy of `LEGACY_FOR_SALES` will be applied.
+         */
         SponsoredProductsCreateOrUpdateDynamicBidding: {
             placementBidding?: components["schemas"]["SponsoredProductsPlacementBidding"][];
-            /** @description Specifies Shopper Cohorts based bid adjustment controls. `shopperCohortBidding` is optional for both Create and Update requests.
-             *     You can enable this control to adjust your bid based on the shopper cohorts. The percentage value set is the percentage of the original bid including any other bid adjustments such as `placementBidding`. For example, a `placementBidding` with 50% adjustment on a $1.00 bid would increase the bid to $1.50, and a `shopperCohortBidding` with 100% adjustment would further increase the bid to $3.00. */
+            /**
+             * @description Specifies Shopper Cohorts based bid adjustment controls. `shopperCohortBidding` is optional for both Create and Update requests.
+             *     You can enable this control to adjust your bid based on the shopper cohorts. The percentage value set is the percentage of the original bid including any other bid adjustments such as `placementBidding`. For example, a `placementBidding` with 50% adjustment on a $1.00 bid would increase the bid to $1.50, and a `shopperCohortBidding` with 100% adjustment would further increase the bid to $3.00.
+             */
             shopperCohortBidding?: [
             ] | [
                 components["schemas"]["SponsoredProductsShopperCohortBidding"]
@@ -6619,8 +6727,10 @@ export type components = {
          * @enum {string}
          */
         SponsoredProductsCreateOrUpdateOffAmazonBudgetControlStrategy: "MAXIMIZE_REACH" | "MINIMIZE_SPEND";
-        /** @description Settings that apply to ads served off Amazon. `OffAmazonSettings` is optional for both Create and Update requests.
-         *     This field is upcoming and is not ready for use. */
+        /**
+         * @description Settings that apply to ads served off Amazon. `OffAmazonSettings` is optional for both Create and Update requests.
+         *     This field is upcoming and is not ready for use.
+         */
         SponsoredProductsCreateOrUpdateOffAmazonSettings: {
             offAmazonBudgetControlStrategy?: components["schemas"]["SponsoredProductsCreateOrUpdateOffAmazonBudgetControlStrategy"];
         };
@@ -6924,8 +7034,10 @@ export type components = {
         SponsoredProductsCreateTargetPromotionGroupsRequestContent: {
             /** @description The adGroupId of the Ad Group of an Auto-Targeting campaign that will be part of the Target Promotion Group. */
             adGroupId: string;
-            /** @description The list of adIds (optional) of the Ad Group of the Auto-Targeting campaign, that will be part of the Target Promotion Group. If this
-             *         list is empty, all the Product Ads under the Ad Group will be part of the Target Promotion Group. */
+            /**
+             * @description The list of adIds (optional) of the Ad Group of the Auto-Targeting campaign, that will be part of the Target Promotion Group. If this
+             *         list is empty, all the Product Ads under the Ad Group will be part of the Target Promotion Group.
+             */
             adIds?: string[];
             existingCampaignDetails?: components["schemas"]["SponsoredProductsExistingCampaignDetails"];
             newCampaignDetails?: components["schemas"]["SponsoredProductsNewCampaignDetails"];
@@ -6938,17 +7050,23 @@ export type components = {
         SponsoredProductsCreateTargetPromotionGroupsV2RequestContent: {
             /** @description The adGroupId of the source Ad Group that will be part of the Target Promotion Group. */
             adGroupId: string;
-            /** @description The list of adIds (optional) of the source Ad Group, that will be part of the Target Promotion Group. If this
-             *         list is not provided, all the Product Ads under the source Ad Group will be part of the Target Promotion Group. */
+            /**
+             * @description The list of adIds (optional) of the source Ad Group, that will be part of the Target Promotion Group. If this
+             *         list is not provided, all the Product Ads under the source Ad Group will be part of the Target Promotion Group.
+             */
             adIds?: string[];
-            /** @description List of existing manual campaign ad groups to be added in the Target Promotion Group. It must contain one keyword ad group, or one
-             *         product ad group, or both. The request will fail if this field is provided alongside newCampaignDetails. */
+            /**
+             * @description List of existing manual campaign ad groups to be added in the Target Promotion Group. It must contain one keyword ad group, or one
+             *         product ad group, or both. The request will fail if this field is provided alongside newCampaignDetails.
+             */
             existingCampaignDetails?: [
             ] | [
                 components["schemas"]["SponsoredProductsExistingAdGroup"]
             ];
-            /** @description List of new destination manual campaigns to be created as part of the Target Promotion Group. It must contain setting for the creation of
-             *          one keyword ad group, or one product ad group, or both. The request will fail if this field is provided alongside existingCampaignDetails. */
+            /**
+             * @description List of new destination manual campaigns to be created as part of the Target Promotion Group. It must contain setting for the creation of
+             *          one keyword ad group, or one product ad group, or both. The request will fail if this field is provided alongside existingCampaignDetails.
+             */
             newCampaignDetails?: [
             ] | [
                 components["schemas"]["SponsoredProductsNewCampaign"]
@@ -7036,8 +7154,10 @@ export type components = {
              * @description Bid associated with the target. For more information about bid constraints by marketplace, see [bid limits](https://advertising.amazon.com/API/docs/en-us/concepts/limits#bid-constraints-by-marketplace).
              */
             bid?: number;
-            /** @description The match type (for KEYWORDs) or the expression type (for PRODUCT). One of QUERY_BROAD_MATCHES,
-             *         QUERY_EXACT_MATCHES, QUERY_PHRASE_MATCHES, ASIN_SAME_AS, ASIN_EXPANDED_FROM */
+            /**
+             * @description The match type (for KEYWORDs) or the expression type (for PRODUCT). One of QUERY_BROAD_MATCHES,
+             *         QUERY_EXACT_MATCHES, QUERY_PHRASE_MATCHES, ASIN_SAME_AS, ASIN_EXPANDED_FROM
+             */
             expressionType: string;
             /** @description The keyword or the product ASIN to be targeted. */
             target: string;
@@ -8049,8 +8169,10 @@ export type components = {
         SponsoredProductsDuplicateValueErrorReason: "DUPLICATE_VALUE" | "NAME_NOT_UNIQUE" | "MARKETPLACE_ATTRIBUTES_REPEATED";
         SponsoredProductsDynamicBidding: {
             placementBidding?: components["schemas"]["SponsoredProductsPlacementBidding"][];
-            /** @description Specifies Shopper Cohorts based bid adjustment controls. `shopperCohortBidding` is optional for both Create and Update requests.
-             *     You can enable this control to adjust your bid based on the shopper cohorts. The percentage value set is the percentage of the original bid including any other bid adjustments such as `placementBidding`. For example, a `placementBidding` with 50% adjustment on a $1.00 bid would increase the bid to $1.50, and a `shopperCohortBidding` with 100% adjustment would further increase the bid to $3.00. */
+            /**
+             * @description Specifies Shopper Cohorts based bid adjustment controls. `shopperCohortBidding` is optional for both Create and Update requests.
+             *     You can enable this control to adjust your bid based on the shopper cohorts. The percentage value set is the percentage of the original bid including any other bid adjustments such as `placementBidding`. For example, a `placementBidding` with 50% adjustment on a $1.00 bid would increase the bid to $1.50, and a `shopperCohortBidding` with 100% adjustment would further increase the bid to $3.00.
+             */
             shopperCohortBidding?: [
             ] | [
                 components["schemas"]["SponsoredProductsShopperCohortBidding"]
@@ -8125,16 +8247,22 @@ export type components = {
             /** @description The id of the Ad Group. */
             adGroupId: string;
         };
-        /** @description The request object for creating a new target promotion group with existing campaigns. Please note that the adGroupIds provided need to
-         *     contain the same Ad ASINs/SKUs combination as the Auto-Targeting adGroup for the target promotion group. */
+        /**
+         * @description The request object for creating a new target promotion group with existing campaigns. Please note that the adGroupIds provided need to
+         *     contain the same Ad ASINs/SKUs combination as the Auto-Targeting adGroup for the target promotion group.
+         */
         SponsoredProductsExistingCampaignDetails: {
-            /** @description AdGroupIds of existing manual campaigns to be used as part of the Target Promotion Group for
-             *         promoting keyword targets. */
+            /**
+             * @description AdGroupIds of existing manual campaigns to be used as part of the Target Promotion Group for
+             *         promoting keyword targets.
+             */
             keywordCampaignAdGroupIds?: [
                 string
             ];
-            /** @description AdGroupIds of existing manual campaigns to be used as part of the Target Promotion Group for
-             *         promoting product targets. */
+            /**
+             * @description AdGroupIds of existing manual campaigns to be used as part of the Target Promotion Group for
+             *         promoting product targets.
+             */
             productCampaignAdGroupIds?: [
                 string
             ];
@@ -8789,8 +8917,10 @@ export type components = {
         /** @description Response object for querying adGroups with ASIN/SKU matches. */
         SponsoredProductsListMatchedAdGroupsResponseContent: {
             matchedAdGroups?: components["schemas"]["SponsoredProductsMatchedAdGroup"][];
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             /**
              * Format: int64
@@ -9570,8 +9700,10 @@ export type components = {
         };
         /** @description Response object for querying target promotion groups. */
         SponsoredProductsListTargetPromotionGroupsInternalResponseContent: {
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             targetPromotionGroups?: components["schemas"]["SponsoredProductsTargetPromotionGroup"][];
             /**
@@ -9595,8 +9727,10 @@ export type components = {
         };
         /** @description Response object for querying target promotion groups. */
         SponsoredProductsListTargetPromotionGroupsResponseContent: {
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             targetPromotionGroups?: components["schemas"]["SponsoredProductsTargetPromotionGroup"][];
             /**
@@ -9621,8 +9755,10 @@ export type components = {
         };
         /** @description Response object for querying target promotion groups. */
         SponsoredProductsListTargetPromotionGroupsV2ResponseContent: {
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             targetPromotionGroups?: components["schemas"]["SponsoredProductsTargetPromotionGroupV2"][];
             /**
@@ -9646,8 +9782,10 @@ export type components = {
         };
         /** @description Response object for querying target promotion group targets. */
         SponsoredProductsListTargetPromotionGroupTargetsInternalResponseContent: {
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             targets?: components["schemas"]["SponsoredProductsTarget"][];
             /**
@@ -9671,8 +9809,10 @@ export type components = {
         };
         /** @description Response object for querying target promotion group targets. */
         SponsoredProductsListTargetPromotionGroupTargetsResponseContent: {
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             targets?: components["schemas"]["SponsoredProductsTarget"][];
             /**
@@ -9696,8 +9836,10 @@ export type components = {
         };
         /** @description Response object for querying target promotion group targets. */
         SponsoredProductsListTargetPromotionGroupTargetsV2ResponseContent: {
-            /** @description To retrieve the next page of results, call the same operation and specify this token in the
-             *         request. If the nextToken field is empty, there are no further results. */
+            /**
+             * @description To retrieve the next page of results, call the same operation and specify this token in the
+             *         request. If the nextToken field is empty, there are no further results.
+             */
             nextToken?: string;
             targets?: components["schemas"]["SponsoredProductsTargetPromotionGroupTargetDetails"][];
             /**
@@ -9716,8 +9858,10 @@ export type components = {
         };
         /** @enum {string} */
         SponsoredProductsLocaleErrorReason: "INVALID_LOCALE";
-        /** @description Errors being used to represent malformed values
-         *     e.g. containing not allowed characters, not following patters etc */
+        /**
+         * @description Errors being used to represent malformed values
+         *     e.g. containing not allowed characters, not following patters etc
+         */
         SponsoredProductsMalformedValueError: {
             cause?: components["schemas"]["SponsoredProductsErrorCause"];
             /** @description fragment of the value which is wrong */
@@ -10097,8 +10241,10 @@ export type components = {
              * @description The end date of the new target promotion group entities. The format of the date is YYYY-MM-DD.
              */
             endDate?: string;
-            /** @description The name prefix to be used for the entities under the target promotion group. e.g. if the namePrefix
-             *         is ABC, we will create a keyword campaign with the name 'ABC-ManualKeywordTargeting-Campaign-AutoGenerated' */
+            /**
+             * @description The name prefix to be used for the entities under the target promotion group. e.g. if the namePrefix
+             *         is ABC, we will create a keyword campaign with the name 'ABC-ManualKeywordTargeting-Campaign-AutoGenerated'
+             */
             namePrefix: string;
             /**
              * Format: date
@@ -10428,8 +10574,10 @@ export type components = {
         };
         /** @description Target promotion group's target. */
         SponsoredProductsTarget: {
-            /** @description The match type (for KEYWORDs) or the expression type (for PRODUCT). One of QUERY_BROAD_MATCHES,
-             *         QUERY_EXACT_MATCHES, QUERY_PHRASE_MATCHES, ASIN_SAME_AS, ASIN_EXPANDED_FROM */
+            /**
+             * @description The match type (for KEYWORDs) or the expression type (for PRODUCT). One of QUERY_BROAD_MATCHES,
+             *         QUERY_EXACT_MATCHES, QUERY_PHRASE_MATCHES, ASIN_SAME_AS, ASIN_EXPANDED_FROM
+             */
             expressionType?: string;
             /** @description The adGroupId of the manual-targeting campaign where the target belongs. */
             manualTargetingAdGroupId?: string;
@@ -10650,8 +10798,10 @@ export type components = {
             /** @description Human readable error message */
             message: string;
         };
-        /** @description A Target Promotion Group that groups an Auto-Targeting Campaign/AdGroup with a Manual-Targeting Keyword Campaign/AdGroup, and a
-         *     Manual-Targeting Product Campaign/AdGroup */
+        /**
+         * @description A Target Promotion Group that groups an Auto-Targeting Campaign/AdGroup with a Manual-Targeting Keyword Campaign/AdGroup, and a
+         *     Manual-Targeting Product Campaign/AdGroup
+         */
         SponsoredProductsTargetPromotionGroup: {
             /** @description The Id of the auto-targeting AdGroup associated with the target promotion group */
             autoTargetingCampaignAdGroupId?: string;
@@ -10739,8 +10889,10 @@ export type components = {
             /** @description Human readable error message */
             message: string;
         };
-        /** @description Errors being used to represent an unsupported operation
-         *     e.g. Seller are not supported to create custom text product ads. */
+        /**
+         * @description Errors being used to represent an unsupported operation
+         *     e.g. Seller are not supported to create custom text product ads.
+         */
         SponsoredProductsUnsupportedOperationError: {
             cause?: components["schemas"]["SponsoredProductsErrorCause"];
             /** @description Human readable error message */
@@ -10776,12 +10928,14 @@ export type components = {
             offAmazonSettings?: components["schemas"]["SponsoredProductsCreateOrUpdateOffAmazonSettings"];
             /** @description The identifier of an existing portfolio to which the campaign is associated. */
             portfolioId?: string | null;
-            /** @description Restrict the ad to a particular site. siteRestrictions is an optional field.
+            /**
+             * @description Restrict the ad to a particular site. siteRestrictions is an optional field.
              *     If this field is not set, ads from the campaign will appear on Amazon - including both Amazon retail and Amazon Business - as well as select sites and apps off Amazon.
              *     Please note that: 1) AMAZON_BUSINESS option is only available for Amazon Business operated marketplaces (US, CA, MX, UK, DE, FR, IT, ES, IN, JP), and AMAZON_HAUL option is only available in US;
              *     2) siteRestrictions cannot be changed post campaign creation;
              *     3) siteRestrictions don’t support shopperCohortBidding setting, SITE_AMAZON_BUSINESS placementBidding setting and offAmazonSettings;
-             *     4) Only AMAZON_BUSINESS option is ready for use at the moment. */
+             *     4) Only AMAZON_BUSINESS option is ready for use at the moment.
+             */
             siteRestrictions?: [
                 components["schemas"]["SponsoredProductsSiteRestriction"]
             ];
@@ -10820,12 +10974,14 @@ export type components = {
             name?: string;
             /** @description The identifier of an existing portfolio to which the draft is associated. */
             portfolioId?: string | null;
-            /** @description Restrict the ad to a particular site. siteRestrictions is an optional field.
+            /**
+             * @description Restrict the ad to a particular site. siteRestrictions is an optional field.
              *     If this field is not set, ads from the campaign will appear on Amazon - including both Amazon retail and Amazon Business - as well as select sites and apps off Amazon.
              *     Please note that: 1) AMAZON_BUSINESS option is only available for Amazon Business operated marketplaces (US, CA, MX, UK, DE, FR, IT, ES, IN, JP), and AMAZON_HAUL option is only available in US;
              *     2) siteRestrictions cannot be changed post campaign creation;
              *     3) siteRestrictions don’t support shopperCohortBidding setting, SITE_AMAZON_BUSINESS placementBidding setting and offAmazonSettings;
-             *     4) Only AMAZON_BUSINESS option is ready for use at the moment. */
+             *     4) Only AMAZON_BUSINESS option is ready for use at the moment.
+             */
             siteRestrictions?: [
                 components["schemas"]["SponsoredProductsSiteRestriction"]
             ] | null;
@@ -11120,10 +11276,12 @@ export type components = {
             /** @description A human-readable description of the response. */
             details?: string;
         };
-        /** @example {
+        /**
+         * @example {
          *       "code": "200",
          *       "details": "success"
-         *     } */
+         *     }
+         */
         SPTORBudgetRecommendationError: {
             /** @description The HTTP status code of the response. */
             code?: string;
@@ -11257,7 +11415,8 @@ export type components = {
          * @enum {string}
          */
         Theme: "CONVERSION_OPPORTUNITIES" | "PRIME_DAY" | "FALL_PRIME_DEAL_EVENT" | "BFCM_HOLIDAY";
-        /** @example {
+        /**
+         * @example {
          *       "theme": "CONVERSION_OPPORTUNITIES",
          *       "bidRecommendationsForTargetingExpressions": [
          *         {
@@ -11327,7 +11486,8 @@ export type components = {
          *           ]
          *         }
          *       }
-         *     } */
+         *     }
+         */
         ThemeBasedBidRecommendation: {
             /** @description The bid recommendations for targeting expressions listed in the request. */
             bidRecommendationsForTargetingExpressions: components["schemas"]["BidRecommendationPerTargetingExpression"][];
@@ -12833,7 +12993,8 @@ export type components = {
                 components["schemas"]["ThemeBasedBidRecommendationV5"]
             ];
         };
-        /** @example {
+        /**
+         * @example {
          *       "theme": "CONVERSION_OPPORTUNITIES",
          *       "bidRecommendationsForTargetingExpressions": [
          *         {
@@ -12869,13 +13030,15 @@ export type components = {
          *           }
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         ThemeBasedBidRecommendationV4: {
             /** @description The bid recommendations for targeting expressions listed in the request. */
             bidRecommendationsForTargetingExpressions: components["schemas"]["BidRecommendationPerTargetingExpressionV4"][];
             theme: components["schemas"]["Theme"];
         };
-        /** @example {
+        /**
+         * @example {
          *       "theme": "CONVERSION_OPPORTUNITIES",
          *       "bidAnalysesForTargetingExpressions": [
          *         {
@@ -13527,7 +13690,8 @@ export type components = {
          *           }
          *         }
          *       ]
-         *     } */
+         *     }
+         */
         ThemeBasedBidRecommendationV5: {
             /** @description The bid analyses for targeting expressions listed in the request. */
             bidAnalysesForTargetingExpressions?: components["schemas"]["BidAnalysesPerTargetingExpression"][];
@@ -13575,9 +13739,9 @@ export type components = {
             details?: string;
         };
         timeOfDay: {
-            /** @description The end time of intra-day budget rule window in the format 'hh:mm:ss'. Required to be greater than start-time.  */
+            /** @description The end time of intra-day budget rule window in the format 'hh:mm:ss'. Required to be greater than start-time. */
             endTime?: string;
-            /** @description The start time of intra-day budget rule window in the format 'hh:mm:ss'  */
+            /** @description The start time of intra-day budget rule window in the format 'hh:mm:ss' */
             startTime?: string;
         };
         /** @description Returns information about an UnauthorizedException. */
@@ -13682,15 +13846,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -13777,15 +13945,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -13872,8 +14044,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -13958,8 +14132,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -14549,15 +14725,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -14644,15 +14824,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -14739,8 +14923,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -14825,8 +15011,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -14911,15 +15099,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -15006,15 +15198,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -15101,8 +15297,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -15187,8 +15385,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -15273,15 +15473,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -15368,15 +15572,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -15713,14 +15921,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description The identifier of a client associated with a "Login with Amazon" account.
+                /**
+                 * @description The identifier of a client associated with a "Login with Amazon" account.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account.
+                /**
+                 * @description The identifier of a profile associated with the advertiser account.
                  *     Use `GET` method on Profiles resource to list profiles associated with the access token passed in the HTTP Authorization header.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-Scope"?: string;
             };
             path: {
@@ -15735,9 +15945,10 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Multi-status.
+            /**
+             * @description Multi-status.
              *     An object containing a list of optimization rule response objects reflecting the same order as the input.
-             *      */
+             */
             207: {
                 headers: {
                     [name: string]: unknown;
@@ -15752,38 +15963,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "400",
                      *       "message": "Invalid advertiser id."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Unauthenticated. Request failed because user is not authenticated.
-             *      */
+            /** @description Unauthenticated. Request failed because user is not authenticated. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "401",
                      *       "message": "Unauthenticated."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Forbidden. Request failed because user does not have access to a specified resource.
-             *      */
+            /** @description Forbidden. Request failed because user does not have access to a specified resource. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "403",
                      *       "message": "You do not have permission to access the resource."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -15793,10 +16008,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "500",
                      *       "message": "Internal server error."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -16039,8 +16256,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -16208,8 +16427,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -16431,8 +16652,10 @@ export interface operations {
                     "application/json": components["schemas"]["SPTargetingCountryErrors"];
                 };
             };
-            /** @description Unauthorized - Request failed because user is not authenticated in any of requested marketplaces or
-             *     is not allowed to invoke the operation. */
+            /**
+             * @description Unauthorized - Request failed because user is not authenticated in any of requested marketplaces or
+             *     is not allowed to invoke the operation.
+             */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -16468,8 +16691,10 @@ export interface operations {
                     "application/json": components["schemas"]["SPTargetingCountryErrors"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -16478,8 +16703,10 @@ export interface operations {
                     "application/json": components["schemas"]["SPTargetingCountryErrors"];
                 };
             };
-            /** @description Service Unavailable due to transient error or dependent service failure - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Service Unavailable due to transient error or dependent service failure - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -16496,15 +16723,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -16591,15 +16822,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -16686,8 +16921,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -16772,8 +17009,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -16858,15 +17097,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -16953,15 +17196,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -17048,8 +17295,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -17134,8 +17383,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -17220,15 +17471,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -17315,15 +17570,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -17465,8 +17724,10 @@ export interface operations {
                     "application/json": components["schemas"]["ThrottlingException"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -17533,8 +17794,10 @@ export interface operations {
                     "application/json": components["schemas"]["ThrottlingException"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -17551,8 +17814,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -17637,8 +17902,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -17723,15 +17990,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -17818,15 +18089,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -17913,8 +18188,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -17999,8 +18276,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -18151,7 +18430,7 @@ export interface operations {
                     "application/json": components["schemas"]["CampaignOptimizationRuleError"];
                 };
             };
-            /** @description Internal Server Error.  */
+            /** @description Internal Server Error. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -18597,14 +18876,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description The identifier of a client associated with a "Login with Amazon" account.
+                /**
+                 * @description The identifier of a client associated with a "Login with Amazon" account.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account.
+                /**
+                 * @description The identifier of a profile associated with the advertiser account.
                  *     Use `GET` method on Profiles resource to list profiles associated with the access token passed in the HTTP Authorization header.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-Scope"?: string;
             };
             path?: never;
@@ -18633,38 +18914,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "400",
                      *       "message": "Invalid advertiser id."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Unauthenticated. Request failed because user is not authenticated.
-             *      */
+            /** @description Unauthenticated. Request failed because user is not authenticated. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "401",
                      *       "message": "Unauthenticated."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Forbidden. Request failed because user does not have access to a specified resource.
-             *      */
+            /** @description Forbidden. Request failed because user does not have access to a specified resource. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "403",
                      *       "message": "You do not have permission to access the resource."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -18674,10 +18959,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "500",
                      *       "message": "Internal server error."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -18687,14 +18974,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description The identifier of a client associated with a "Login with Amazon" account.
+                /**
+                 * @description The identifier of a client associated with a "Login with Amazon" account.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account.
+                /**
+                 * @description The identifier of a profile associated with the advertiser account.
                  *     Use `GET` method on Profiles resource to list profiles associated with the access token passed in the HTTP Authorization header.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-Scope"?: string;
             };
             path?: never;
@@ -18707,9 +18996,10 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Multi-status.
+            /**
+             * @description Multi-status.
              *     An object containing a list of optimization rule response objects reflecting the same order as the input.
-             *      */
+             */
             207: {
                 headers: {
                     [name: string]: unknown;
@@ -18725,38 +19015,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "400",
                      *       "message": "Invalid advertiser id."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Unauthenticated. Request failed because user is not authenticated.
-             *      */
+            /** @description Unauthenticated. Request failed because user is not authenticated. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "401",
                      *       "message": "Unauthenticated."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Forbidden. Request failed because user does not have access to a specified resource.
-             *      */
+            /** @description Forbidden. Request failed because user does not have access to a specified resource. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "403",
                      *       "message": "You do not have permission to access the resource."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -18766,10 +19060,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "500",
                      *       "message": "Internal server error."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -18779,14 +19075,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description The identifier of a client associated with a "Login with Amazon" account.
+                /**
+                 * @description The identifier of a client associated with a "Login with Amazon" account.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account.
+                /**
+                 * @description The identifier of a profile associated with the advertiser account.
                  *     Use `GET` method on Profiles resource to list profiles associated with the access token passed in the HTTP Authorization header.
                  *     This is a required header for advertisers and integrators using the Advertising API.
-                 *      */
+                 */
                 "Amazon-Advertising-API-Scope"?: string;
             };
             path?: never;
@@ -18815,38 +19113,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "400",
                      *       "message": "Invalid advertiser id."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Unauthenticated. Request failed because user is not authenticated.
-             *      */
+            /** @description Unauthenticated. Request failed because user is not authenticated. */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "401",
                      *       "message": "Unauthenticated."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
-            /** @description Forbidden. Request failed because user does not have access to a specified resource.
-             *      */
+            /** @description Forbidden. Request failed because user does not have access to a specified resource. */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "403",
                      *       "message": "You do not have permission to access the resource."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -18856,10 +19158,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /** @example {
+                    /**
+                     * @example {
                      *       "code": "500",
                      *       "message": "Internal server error."
-                     *     } */
+                     *     }
+                     */
                     "application/json": components["schemas"]["OptimizationRulesAPISwaggerOptimizationRulesError"];
                 };
             };
@@ -18981,12 +19285,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description  The identifier of a client associated with a 'Login with Amazon' account. This is a required
-                 *         header for advertisers and integrators using the Advertising API. */
+                /**
+                 * @description The identifier of a client associated with a 'Login with Amazon' account. This is a required
+                 *         header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
                  *         resource to list profiles associated with the access token passed in the HTTP Authorization header. This is a
-                 *         required header for advertisers and integrators using the Advertising API. */
+                 *         required header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -19087,12 +19395,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description  The identifier of a client associated with a 'Login with Amazon' account. This is a required
-                 *         header for advertisers and integrators using the Advertising API. */
+                /**
+                 * @description The identifier of a client associated with a 'Login with Amazon' account. This is a required
+                 *         header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
                  *         resource to list profiles associated with the access token passed in the HTTP Authorization header. This is a
-                 *         required header for advertisers and integrators using the Advertising API. */
+                 *         required header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -19278,12 +19590,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description  The identifier of a client associated with a 'Login with Amazon' account. This is a required
-                 *         header for advertisers and integrators using the Advertising API. */
+                /**
+                 * @description The identifier of a client associated with a 'Login with Amazon' account. This is a required
+                 *         header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
                  *         resource to list profiles associated with the access token passed in the HTTP Authorization header. This is a
-                 *         required header for advertisers and integrators using the Advertising API. */
+                 *         required header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -19384,12 +19700,16 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description The identifier of a client associated with a 'Login with Amazon' account. This is a required
-                 *         header for advertisers and integrators using the Advertising API. */
+                /**
+                 * @description The identifier of a client associated with a 'Login with Amazon' account. This is a required
+                 *         header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles
                  *         resource to list profiles associated with the access token passed in the HTTP Authorization header. This is a
-                 *         required header for advertisers and integrators using the Advertising API. */
+                 *         required header for advertisers and integrators using the Advertising API.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -19492,15 +19812,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -19587,15 +19911,19 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
-                /** @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
+                /**
+                 * @description The "Prefer" header, as defined in [RFC7240], allows clients to request certain behavior from the service.
                  *     The service ignores preference values that are either not supported or not known by the service.
                  *     Either multiple Prefer headers are passed or single one with comma separated values, both forms are equivalent
                  *     Supported preferences:
                  *     return=representation - return the full object when doing create/update/delete operations instead of ids.
-                 *     Please note that the extendedData field will be part of the full object for /list endpoints only. */
+                 *     Please note that the extendedData field will be part of the full object for /list endpoints only.
+                 */
                 Prefer?: string;
             };
             path?: never;
@@ -19854,8 +20182,10 @@ export interface operations {
                     "application/json": components["schemas"]["ThrottlingException"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -19936,8 +20266,10 @@ export interface operations {
                     "application/json": components["schemas"]["ThrottlingException"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -20016,8 +20348,10 @@ export interface operations {
                     "application/json": components["schemas"]["ThrottlingException"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -20034,8 +20368,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -20122,8 +20458,10 @@ export interface operations {
                 "Amazon-Advertising-API-AdvertiserId"?: string;
                 /** @description The identifier of a client associated with a "Login with Amazon" account. This is a required header for advertisers and integrators using the Advertising API. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The advertiser's Marketplace ID associated with the advertiser.
-                 *     account. */
+                /**
+                 * @description The advertiser's Marketplace ID associated with the advertiser.
+                 *     account.
+                 */
                 "Amazon-Advertising-API-MarketplaceId"?: string;
                 /** @description The identifier of a profile associated with the advertiser account. Use `GET` method on Profiles resource to list profiles associated with the access token passed in the HTTP Authorization header. This is a required header for advertisers and integrators using the Advertising API. */
                 "Amazon-Advertising-API-Scope": string;
@@ -20161,8 +20499,10 @@ export interface operations {
                     "application/vnd.spkeywordsrecommendation.v5+json": components["schemas"]["SPTargetingError"];
                 };
             };
-            /** @description Unauthorized - Request failed because user is not authenticated or
-             *     is not allowed to invoke the operation. */
+            /**
+             * @description Unauthorized - Request failed because user is not authenticated or
+             *     is not allowed to invoke the operation.
+             */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -20206,8 +20546,10 @@ export interface operations {
                     "application/vnd.spkeywordsrecommendation.v5+json": components["schemas"]["SPTargetingError"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -20218,8 +20560,10 @@ export interface operations {
                     "application/vnd.spkeywordsrecommendation.v5+json": components["schemas"]["SPTargetingError"];
                 };
             };
-            /** @description Service Unavailable due to transient error or dependent service failure - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Service Unavailable due to transient error or dependent service failure - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -20238,8 +20582,10 @@ export interface operations {
             header: {
                 /** @description The identifier of a client associated with a "Login with Amazon" account. */
                 "Amazon-Advertising-API-ClientId": string;
-                /** @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
-                 *     profiles associated with the access token passed in the HTTP Authorization header. */
+                /**
+                 * @description The identifier of a profile associated with the advertiser account. Use GET method on Profiles resource to list
+                 *     profiles associated with the access token passed in the HTTP Authorization header.
+                 */
                 "Amazon-Advertising-API-Scope": string;
             };
             path?: never;
@@ -20383,8 +20729,10 @@ export interface operations {
                     "application/json": components["schemas"]["ThrottlingException"];
                 };
             };
-            /** @description Internal Server Error - Something went wrong on the server. Retry
-             *     later and report an error if unresolved. */
+            /**
+             * @description Internal Server Error - Something went wrong on the server. Retry
+             *     later and report an error if unresolved.
+             */
             500: {
                 headers: {
                     [name: string]: unknown;

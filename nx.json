@@ -29,7 +29,7 @@
         }
       },
       "exclude": [
-        "amazon-ads-schema/*",
+        "packages/amazon-ads-schema/*",
         "packages/amazon-ads-generated/*",
         "packages/amazon-sp-schema/*",
         "packages/amazon-sp-generated/*"
@@ -58,7 +58,6 @@
     {
       "plugin": "@nx/js/typescript",
       "include": [
-        "amazon-ads-schema/*",
         "packages/amazon-ads-generated/*",
         "packages/amazon-sp-schema/*",
         "packages/amazon-sp-generated/*"

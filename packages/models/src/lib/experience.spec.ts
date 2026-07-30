@@ -8,7 +8,7 @@ import {
   LayoutIntentSchema,
   SectionSchema,
   type LayoutIntent,
-} from './experience';
+} from './experience.js';
 
 describe('vocabulary v1', () => {
   it('every archetype has capabilities and a label', () => {

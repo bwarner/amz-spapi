@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "outDir": "../../dist/packages/ad-client",
+    "tsBuildInfoFile": "../../dist/packages/ad-client/tsconfig.build.tsbuildinfo",
+    "composite": false,
+    "declarationMap": false
+  }
+}
