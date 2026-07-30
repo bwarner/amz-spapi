@@ -23,7 +23,6 @@ const nextConfig = {
   ],
   // Optional provider dependencies must not be bundled by webpack
   serverExternalPackages: [
-    '@vercel/oidc-aws-credentials-provider',
     '@aws-sdk/credential-provider-node',
     // Background removal: native ONNX runtime + model files resolved relative
     // to the package dir — bundling breaks both. Must load from node_modules.

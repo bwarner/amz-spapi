@@ -6,15 +6,12 @@ The CDK app creates stage-specific stacks for:
 
 - shared media asset storage used by A+ content now and future image workflows
   like ads and listing optimization
-- Bedrock runtime permissions for production AI calls
 
 - private S3 bucket for uploaded image bytes
 - CORS for the configured web origins
 - versioning and lifecycle cleanup
 - managed IAM policy for the app runtime to create presigned uploads and read assets for publishing
 - CloudFormation outputs for `MEDIA_ASSETS_BUCKET` and `AWS_REGION`
-- managed IAM policy for the app runtime to invoke the configured Bedrock
-  language and embedding models
 
 Asset metadata remains in Couchbase. Image bytes live in S3.
 
@@ -95,23 +92,9 @@ SELLAVANT_AWS_REGION=us-east-1
 Stage-specific regions are also supported with `SELLAVANT_DEV_REGION`,
 `SELLAVANT_STAGING_REGION`, and `SELLAVANT_PROD_REGION`.
 
-Bedrock model IDs can be overridden per stage or globally:
-
-```sh
-SELLAVANT_BEDROCK_MODEL_IDS=us.anthropic.claude-sonnet-4-6,us.anthropic.claude-haiku-4-5-20251001-v1:0
-SELLAVANT_BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
-```
-
-If the web app runs on Vercel, configure an OIDC provider in AWS and pass the
-provider ARN plus the expected Vercel subject. When those values are present,
-CDK also creates a role and outputs `AwsBedrockRoleArn` for
-`AWS_BEDROCK_ROLE_ARN`.
-
-```sh
-SELLAVANT_PROD_VERCEL_OIDC_PROVIDER_ARN=arn:aws:iam::123456789012:oidc-provider/oidc.vercel.com/...
-SELLAVANT_PROD_VERCEL_OIDC_SUBJECT=owner:team:project:project-name:environment:production
 SELLAVANT_PROD_VERCEL_OIDC_AUDIENCE=aws
-```
+
+````
 
 ## Bootstrap
 
@@ -122,7 +105,7 @@ AWS_PROFILE=deployer npx cdk bootstrap \
   aws://853583158600/us-east-1 \
   --app "node --loader ts-node/esm infra/aws/bin/app.ts" \
   -c stage=dev
-```
+````
 
 ## Synthesize
 
@@ -158,13 +141,5 @@ MEDIA_ASSETS_BUCKET=<MediaAssetsBucketName output>
 Also attach `MediaAssetsRuntimePolicyArn` to whichever IAM principal runs the
 web app server-side code that creates presigned URLs.
 
-For Bedrock, set:
-
-```env
-AI_PROVIDER=bedrock
-AWS_BEDROCK_ROLE_ARN=<AwsBedrockRoleArn output, when using Vercel OIDC>
-AWS_BEDROCK_REGION=us-east-1
-```
-
-If no Bedrock role is created, attach `BedrockRuntimePolicyArn` to the runtime
-principal that serves the web app.
+Models are served through the Vercel AI Gateway, so no AWS AI permissions are
+required here. See `A-PLUS.md`.
