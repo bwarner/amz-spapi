@@ -131,10 +131,17 @@ production-access request is granted, and that request is reviewed by AWS rather
 than granted on demand. Start it early.
 
 Inbound is the harder constraint. Email ingest (CLAUDE.md §2.4) routes through
-SES Inbound, and the domain's MX record points at SES in exactly one account and
-region. Inbound for `sellavant.com` cannot be split across accounts, so whichever
-account owns it owns it for every environment — use subdomains
-(`staging.sellavant.com`) if per-environment inbound is wanted later.
+SES Inbound, and a given name's MX record points at exactly one destination.
+Inbound for a name cannot be split across accounts.
+
+That is why **the apex is not spent on SES**. `sellavant.com` has no MX today, so
+it stays available for ordinary business mail — `support@`, `hello@` — through a
+real mail provider. Ingest goes on `in.sellavant.com`, which nobody types: the
+address is a forwarding target, handed to a seller's mail rules rather than
+printed anywhere. The full name allocation is [ADR-0003](0003-dns-and-mail-routing.md).
+
+Per-environment inbound, if it is ever wanted, is another subdomain
+(`in.dev.sellavant.com`) rather than another account.
 
 ## Consequences
 
