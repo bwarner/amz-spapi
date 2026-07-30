@@ -52,7 +52,7 @@ Non‑goals (v1): full multi‑tenant billing portal, advanced ML (we’ll promp
 **Runtime & infra**
 
 - **Frontend**: Next.js on **Vercel** (edge where possible; server actions hitting our AWS APIs).
-- **Backend**: AWS **SAM** stacks for Lambdas, API Gateway (HTTP), SQS, EventBridge, SES inbound, S3, Secrets Manager, CloudFront for asset gen callbacks.
+- **Backend**: AWS **CDK** stacks (`infra/aws`) for Lambdas, API Gateway (HTTP), SQS, EventBridge, SES inbound, S3, Secrets Manager, CloudFront for asset gen callbacks. SAM is only ever `sam local invoke` — see `docs/adr/0001-cdk-deploys-sam-is-local-invoke.md`.
 - **Data**: **Couchbase** Capella/CE — buckets for operational OLTP and vector search later (or external vec DB if needed).
 - **Auth**: **Auth0** for app users; **LWA OAuth** for SP‑API and Ads OAuth for Ads API (separate).
 - **Queues**: SQS for async jobs (email triage, image gen, SP‑API pulls, Ads syncs).
@@ -228,11 +228,16 @@ sampled and expire; the ledger is the system of record.
 - `lint`, `test`: eslint/jest
 - `e2e`: Playwright/Cypress (later)
 
-**apps/api-services (SAM)**
+**apps/lambdas/&lt;name&gt; (planned)**
 
-- `build`: `sam build`
-- `deploy`: `sam deploy --config-env <env>`
-- `local`: `sam local start-api`
+One Nx app per Lambda. **CDK deploys; SAM is only ever `sam local invoke`** — see
+`docs/adr/0001-cdk-deploys-sam-is-local-invoke.md`. Packaging is a container image
+when the function has native dependencies (ONNX, `sharp`) and an esbuild-bundled
+zip when it does not.
+
+- `build`: Nx build to `dist/apps/lambdas/<name>`
+- `container` / `push`: image path only, to ECR
+- `local`: `sam local invoke` against the built artefact
 
 **apps/cli**
 
@@ -246,7 +251,7 @@ sampled and expire; the ledger is the system of record.
 - `ai`: prompt templates, tool runners
 - `ui`: shared UI primitives
 
-Use `nx run-many -t test -p web api-services` in CI.
+CI runs `nx affected -t lint typecheck test build`; the pre-push hook mirrors it.
 
 ---
 
@@ -293,7 +298,7 @@ When adding endpoints for web app:
 
 1. Create domain types in `packages/core`
 2. Implement repo in `packages/db` with **idempotent** writes
-3. Code used in Lambdas in `apps/api-services` using Powertools middlewares (tracing/logging/metrics)
+3. Code used in Lambdas in `apps/lambdas/<name>` using Powertools middlewares (tracing/logging/metrics)
 4. Wire Next.js API route / server action in `apps/web`
 5. For long-running tasks: enqueue SQS job; return job id; stream status to UI
 
@@ -331,8 +336,8 @@ Implement: <feature>. Provide updated files and Nx target updates.
 ## 10) Deployment
 
 - **Web**: Vercel → env‑per‑branch previews; custom domain on prod.
-- **API**: SAM per env; pipeline stages dev→staging→prod. Use CodeDeploy for canary on critical Lambdas if needed.
-- **Secrets**: injected from AWS Secrets Manager (SAM parameters) and Vercel project secrets.
+- **API**: CDK per stage (dev→staging→prod, `infra/aws/config/stages.ts`). Use CodeDeploy for canary on critical Lambdas if needed.
+- **Secrets**: injected from AWS Secrets Manager (CDK stack parameters) and Vercel project secrets.
 - **CLIs**: Distributed as compiled binaries or via npm packages (future)
 
 ---
@@ -401,7 +406,6 @@ Implement: <feature>. Provide updated files and Nx target updates.
 npm install
 npx nx graph
 npx nx run web:dev
-npx nx run api-services:local
 # Set COUCHBASE_*, AUTH0_*, LWA_*, ADS_* envs in .env.local
 ```
 
