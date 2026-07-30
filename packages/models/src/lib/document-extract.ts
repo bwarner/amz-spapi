@@ -322,6 +322,203 @@ export type PurchaseDocument = {
   extracted: ExtractedDocument;
 };
 
+/**
+ * Which role answers which question about a purchase.
+ *
+ * The same shape as `LEDGER_AUTHORITY` in sp-cache, for the same reason: when
+ * two documents describe the same goods, the defence against counting both is
+ * naming which one is authoritative for each question, once, in a place callers
+ * can read. An Alibaba order receipt and the invoice the supplier sends
+ * afterwards both state a total; only one of them is the cost.
+ */
+export const PURCHASE_AUTHORITY = {
+  /** What was bought, and what it cost. */
+  cost: 'commercial-invoice',
+  /** What money actually moved — never what the goods cost. */
+  payment: 'payment-record',
+  /** What the consignment weighed, which is what makes freight allocable. */
+  weight: 'transport-document',
+  /** Whether the goods arrived, and how many pieces. */
+  delivery: 'proof-of-delivery',
+  /** What was declared to customs, which duty is charged on. */
+  declaredValue: 'customs-declaration',
+} as const;
+
+/** How two documents came to be treated as one purchase. */
+export type PurchaseJoin = {
+  /** The shared identifier that made the join. */
+  on: 'invoice-number' | 'receipt-number' | 'tracking-number' | 'piece-id';
+  value: string;
+  documentIds: string[];
+};
+
+/**
+ * Documents that look related but were NOT joined, because the only thing they
+ * share is a vendor and a nearby date. Offered for a human to confirm.
+ */
+export type PurchaseSuggestion = {
+  documentIds: string[];
+  vendorName: string;
+  daysApart: number;
+  reason: string;
+};
+
+export type PurchaseGroup = {
+  /** Stable across runs: the lowest document id in the group. */
+  purchaseId: string;
+  documentIds: string[];
+  joins: PurchaseJoin[];
+};
+
+export type PurchaseGrouping = {
+  purchases: PurchaseGroup[];
+  suggestions: PurchaseSuggestion[];
+};
+
+/** Identifiers that are strong enough to merge two documents on. */
+function joinKeys(
+  document: PurchaseDocument
+): Array<[PurchaseJoin['on'], string]> {
+  const keys: Array<[PurchaseJoin['on'], string]> = [];
+  const normalise = (value: string) => value.trim().toUpperCase();
+
+  const { invoiceNumber, receiptNumber, trackingNumber, pieceIds } =
+    document.extracted;
+
+  if (invoiceNumber?.trim())
+    keys.push(['invoice-number', normalise(invoiceNumber)]);
+  if (receiptNumber?.trim())
+    keys.push(['receipt-number', normalise(receiptNumber)]);
+  if (trackingNumber?.trim())
+    keys.push(['tracking-number', normalise(trackingNumber)]);
+  for (const pieceId of pieceIds ?? []) {
+    if (pieceId.trim()) keys.push(['piece-id', normalise(pieceId)]);
+  }
+
+  return keys;
+}
+
+function daysBetween(a?: string, b?: string): number | undefined {
+  if (!a || !b) return undefined;
+  const from = Date.parse(a);
+  const to = Date.parse(b);
+  if (Number.isNaN(from) || Number.isNaN(to)) return undefined;
+  return Math.abs(to - from) / 86_400_000;
+}
+
+/**
+ * Group documents into purchases on shared identifiers only.
+ *
+ * Deliberately conservative. Merging on a weak signal — same supplier, dates a
+ * few days apart — would put two purchases in one group, and then one invoice
+ * becomes the cost basis for goods it never covered while the other invoice is
+ * demoted to a duplicate. That is the same double-count this module exists to
+ * prevent, arrived at from the other direction, and it is silent. Weak matches
+ * come back as `suggestions` for a human instead.
+ *
+ * A proof of delivery joins its waybill on the tracking number, which is what
+ * keeps the pair together without their weights ever being added: the POD is
+ * evidence, and `PURCHASE_AUTHORITY.weight` names the waybill as the source.
+ */
+export function groupPurchaseDocuments(
+  documents: PurchaseDocument[]
+): PurchaseGrouping {
+  const parent = new Map<string, string>();
+  for (const document of documents)
+    parent.set(document.documentId, document.documentId);
+
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    // Path compression keeps repeated lookups cheap on long chains.
+    let walk = id;
+    while (parent.get(walk) !== root) {
+      const next = parent.get(walk) as string;
+      parent.set(walk, root);
+      walk = next;
+    }
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB)
+      parent.set(rootA < rootB ? rootB : rootA, rootA < rootB ? rootA : rootB);
+  };
+
+  // One pass per identifier: every document sharing it lands in one group.
+  const byKey = new Map<string, { on: PurchaseJoin['on']; ids: string[] }>();
+  for (const document of documents) {
+    for (const [on, value] of joinKeys(document)) {
+      const key = `${on}:${value}`;
+      const bucket = byKey.get(key) ?? { on, ids: [] };
+      if (!bucket.ids.includes(document.documentId))
+        bucket.ids.push(document.documentId);
+      byKey.set(key, bucket);
+    }
+  }
+
+  const joins: PurchaseJoin[] = [];
+  for (const [key, bucket] of byKey) {
+    if (bucket.ids.length < 2) continue;
+    joins.push({
+      on: bucket.on,
+      value: key.slice(key.indexOf(':') + 1),
+      documentIds: [...bucket.ids].sort(),
+    });
+    for (const id of bucket.ids.slice(1)) union(bucket.ids[0], id);
+  }
+
+  const grouped = new Map<string, string[]>();
+  for (const document of documents) {
+    const root = find(document.documentId);
+    grouped.set(root, [...(grouped.get(root) ?? []), document.documentId]);
+  }
+
+  const purchases: PurchaseGroup[] = [...grouped.entries()]
+    .map(([root, ids]) => ({
+      purchaseId: root,
+      documentIds: [...ids].sort(),
+      joins: joins.filter((join) =>
+        join.documentIds.some((id) => find(id) === root)
+      ),
+    }))
+    .sort((a, b) => a.purchaseId.localeCompare(b.purchaseId));
+
+  // Weak matches across DIFFERENT groups, surfaced rather than applied.
+  const suggestions: PurchaseSuggestion[] = [];
+  const SUGGEST_WITHIN_DAYS = 14;
+  for (let i = 0; i < documents.length; i += 1) {
+    for (let j = i + 1; j < documents.length; j += 1) {
+      const a = documents[i];
+      const b = documents[j];
+      if (find(a.documentId) === find(b.documentId)) continue;
+      if (
+        a.extracted.vendorName.trim().toUpperCase() !==
+        b.extracted.vendorName.trim().toUpperCase()
+      )
+        continue;
+      const apart = daysBetween(
+        a.extracted.documentDate,
+        b.extracted.documentDate
+      );
+      if (apart === undefined || apart > SUGGEST_WITHIN_DAYS) continue;
+      suggestions.push({
+        documentIds: [a.documentId, b.documentId].sort(),
+        vendorName: a.extracted.vendorName,
+        daysApart: Math.round(apart),
+        reason:
+          `Same supplier, ${Math.round(apart)} day(s) apart, but no shared ` +
+          'invoice, receipt or tracking number. Confirm before treating these ' +
+          'as one purchase — grouping them makes one invoice the cost basis ' +
+          'for both.',
+      });
+    }
+  }
+
+  return { purchases, suggestions };
+}
+
 export type PurchaseReconciliation = {
   /** Document whose lines become cost of goods. */
   costBasisDocumentId?: string;
@@ -560,5 +757,268 @@ export function freightAllocationBasis(
       0
     ),
     usable: transport.length > 0 && shipments.length === transport.length,
+  };
+}
+
+/**
+ * What freight is divided by. There is no default: smearing freight evenly over
+ * unit counts when the goods differ in weight moved landed cost by more than 2x
+ * on a real invoice, so the basis is a decision the caller states and the output
+ * carries.
+ */
+export type FreightBasisKind = 'weight' | 'units' | 'value';
+
+export type FreightShare = {
+  documentId: string;
+  /** Index into that document's `lines`. */
+  lineIndex: number;
+  description: string;
+  supplierRef?: string;
+  /** Fraction of the freight this line carries, 0..1. */
+  share: number;
+  /** Currency amount, rounded so the parts sum to the whole exactly. */
+  amount: number;
+};
+
+export type FreightRefusal = {
+  code:
+    | 'no-freight'
+    | 'no-cost-basis'
+    | 'no-goods'
+    | 'missing-weights'
+    | 'missing-quantities'
+    | 'zero-denominator'
+    | 'freight-billed-twice';
+  message: string;
+};
+
+export type FreightAllocation = {
+  /** Always stated, so a reader never has to infer how this was split. */
+  basis: FreightBasisKind;
+  freightTotal: number;
+  currency?: string;
+  shares: FreightShare[];
+  /** Freight that was NOT put on any unit, with the reason in `refusals`. */
+  unallocated: number;
+  refusals: FreightRefusal[];
+};
+
+/** Distribute to the cent so the shares sum to the total exactly. */
+function distribute(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((running, weight) => running + weight, 0);
+  if (sum <= 0) return weights.map(() => 0);
+
+  const cents = Math.round(total * 100);
+  const exact = weights.map((weight) => (weight / sum) * cents);
+  const floored = exact.map((value) => Math.floor(value));
+  let remainder =
+    cents - floored.reduce((running, value) => running + value, 0);
+
+  // Largest fractional part first: the conventional tie-break, and it keeps the
+  // rounding error off the smallest line.
+  const order = exact
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction);
+
+  const result = [...floored];
+  for (const { index } of order) {
+    if (remainder <= 0) break;
+    result[index] += 1;
+    remainder -= 1;
+  }
+  return result.map((value) => value / 100);
+}
+
+/**
+ * Split a purchase's freight across the goods it carried.
+ *
+ * Freight comes from the cost-basis document's own freight and fee lines —
+ * `PURCHASE_AUTHORITY.cost` names that document, and a carrier's separate
+ * invoice for the same shipment is reported rather than added, because the
+ * supplier having already charged freight is exactly when it gets billed twice.
+ *
+ * Partial allocation is refused on purpose. If some product lines state a
+ * weight and others do not, splitting by weight quietly loads all the freight
+ * onto the lines that happened to carry the field, which reads as a real number
+ * and is not one. Refusing leaves `unallocated` equal to the freight and says
+ * why.
+ */
+export function allocateFreight(
+  documents: PurchaseDocument[],
+  basis: FreightBasisKind
+): FreightAllocation {
+  const refusals: FreightRefusal[] = [];
+
+  const invoices = documents.filter(
+    (document) => document.role === PURCHASE_AUTHORITY.cost
+  );
+  const basisPool = invoices.length
+    ? invoices
+    : documents.filter((document) => document.role === 'proforma');
+  const costBasis = basisPool[0];
+
+  if (!costBasis) {
+    return {
+      basis,
+      freightTotal: 0,
+      shares: [],
+      unallocated: 0,
+      refusals: [
+        {
+          code: 'no-cost-basis',
+          message:
+            'No invoice or proforma on this purchase, so there are no goods ' +
+            'lines to carry freight and no authority for what freight was ' +
+            'charged.',
+        },
+      ],
+    };
+  }
+
+  const currency = costBasis.extracted.currency;
+  const lines = costBasis.extracted.lines;
+
+  const freightTotal = lines
+    .filter((line) => line.kind === 'freight' || line.kind === 'fee')
+    .reduce((total, line) => total + line.amount, 0);
+
+  const carrierInvoices = documents.filter(
+    (document) => document.role === 'freight-invoice'
+  );
+  if (carrierInvoices.length && freightTotal > 0) {
+    refusals.push({
+      code: 'freight-billed-twice',
+      message:
+        `The supplier charged ${freightTotal.toFixed(
+          2
+        )} of freight and fees on ` +
+        `the invoice, and ${carrierInvoices.length} separate carrier invoice(s) ` +
+        'are also attached. Only the invoice is allocated — adding both would ' +
+        'charge the same shipment twice. Reclassify one if they are genuinely ' +
+        'different charges.',
+    });
+  }
+
+  // Only goods carry freight. Overhead is business cost and never per-SKU;
+  // discounts, freight and fees are not goods.
+  const goods = lines
+    .map((line, lineIndex) => ({ line, lineIndex }))
+    .filter((entry) => entry.line.kind === 'product');
+
+  if (freightTotal <= 0) {
+    refusals.push({
+      code: 'no-freight',
+      message:
+        'No freight or fee lines on the cost basis, so there is nothing to ' +
+        'allocate. Freight charged on a carrier document that nobody billed ' +
+        'you for is not a cost.',
+    });
+    return {
+      basis,
+      freightTotal: 0,
+      currency,
+      shares: [],
+      unallocated: 0,
+      refusals,
+    };
+  }
+
+  if (!goods.length) {
+    refusals.push({
+      code: 'no-goods',
+      message:
+        'The cost basis has freight but no product lines, so there are no ' +
+        'units to carry it.',
+    });
+    return {
+      basis,
+      freightTotal,
+      currency,
+      shares: [],
+      unallocated: freightTotal,
+      refusals,
+    };
+  }
+
+  const weightsFor = (): number[] | undefined => {
+    if (basis === 'weight') {
+      const missing = goods.filter((entry) => !entry.line.weightKg);
+      if (missing.length) {
+        refusals.push({
+          code: 'missing-weights',
+          message:
+            `${missing.length} of ${goods.length} product lines state no ` +
+            'weight, so a weight split would load all the freight onto the ' +
+            'lines that do. State the weights, or allocate by units or value.',
+        });
+        return undefined;
+      }
+      return goods.map((entry) => entry.line.weightKg as number);
+    }
+    if (basis === 'units') {
+      const missing = goods.filter(
+        (entry) => entry.line.quantity === undefined
+      );
+      if (missing.length) {
+        refusals.push({
+          code: 'missing-quantities',
+          message:
+            `${missing.length} of ${goods.length} product lines state no ` +
+            'quantity, so a per-unit split cannot be computed.',
+        });
+        return undefined;
+      }
+      return goods.map((entry) => entry.line.quantity as number);
+    }
+    return goods.map((entry) => entry.line.amount);
+  };
+
+  const weights = weightsFor();
+  if (!weights) {
+    return {
+      basis,
+      freightTotal,
+      currency,
+      shares: [],
+      unallocated: freightTotal,
+      refusals,
+    };
+  }
+
+  const denominator = weights.reduce((total, weight) => total + weight, 0);
+  if (denominator <= 0) {
+    refusals.push({
+      code: 'zero-denominator',
+      message:
+        `Every product line reports 0 for the ${basis} basis, so there is ` +
+        'nothing to divide by.',
+    });
+    return {
+      basis,
+      freightTotal,
+      currency,
+      shares: [],
+      unallocated: freightTotal,
+      refusals,
+    };
+  }
+
+  const amounts = distribute(freightTotal, weights);
+  const shares: FreightShare[] = goods.map((entry, index) => ({
+    documentId: costBasis.documentId,
+    lineIndex: entry.lineIndex,
+    description: entry.line.description,
+    supplierRef: entry.line.supplierRef,
+    share: weights[index] / denominator,
+    amount: amounts[index],
+  }));
+
+  return {
+    basis,
+    freightTotal,
+    currency,
+    shares,
+    unallocated: 0,
+    refusals,
   };
 }
