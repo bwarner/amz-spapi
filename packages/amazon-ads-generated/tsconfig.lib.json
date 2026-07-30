@@ -13,5 +13,9 @@
     "composite": true
   },
   "include": ["src/**/*.ts"],
-  "references": []
+  "references": [
+    {
+      "path": "../amazon-ads-schema/tsconfig.lib.json"
+    }
+  ]
 }
