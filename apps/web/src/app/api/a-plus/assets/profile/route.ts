@@ -1,7 +1,7 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
 import { generateText, Output } from 'ai';
-import { z } from 'zod';
+import { VisionAssetProfileSchema } from '@farvisionllc/models';
 import { createAIProvider } from '@amz-spapi/ai-provider';
 import { auth0 } from '../../../../../lib/auth0';
 import { createAssetS3Client, getAsset } from '../../../../../lib/media-assets';
@@ -9,53 +9,6 @@ import { createAssetS3Client, getAsset } from '../../../../../lib/media-assets';
 // sharp + the AI SDK need the Node runtime.
 export const runtime = 'nodejs';
 export const maxDuration = 30;
-
-/**
- * Structured visual profile of an asset (see redesign §3a). Drives the Asset
- * Matcher (how to use the asset in a scene) AND serves as a product-intelligence
- * source when no catalog/listing exists. Orientation/dimensions are computed from
- * the real image, not inferred by the model.
- */
-const VisionProfileSchema = z.object({
-  role: z.enum([
-    'product-iso',
-    'product-in-scene',
-    'background',
-    'detail-macro',
-    'diagram',
-    'logo',
-    'person',
-    'other',
-  ]),
-  subjectPresent: z.boolean(),
-  subjectProminence: z.enum(['hero', 'soft', 'absent']),
-  subjectPosition: z.enum(['left', 'right', 'center']),
-  negativeSpace: z.object({
-    side: z.enum(['left', 'right', 'top', 'bottom', 'none']),
-    amount: z.enum(['low', 'medium', 'high']),
-  }),
-  background: z.enum([
-    'white',
-    'transparent',
-    'plain',
-    'busy',
-    'real-environment',
-  ]),
-  affordances: z.array(
-    z.enum([
-      'hero-bg',
-      'carousel-tile',
-      'feature-callout',
-      'comparison-thumb',
-      'backdrop-layer',
-      'reference-only',
-    ])
-  ),
-  hasBakedText: z.boolean(),
-  isRender: z.boolean(),
-  dominantColors: z.array(z.string()).max(5),
-  description: z.string(),
-});
 
 const PROFILE_PROMPT = [
   'You are profiling an uploaded product asset for an Amazon A+ content builder.',
@@ -140,7 +93,7 @@ export async function POST(request: Request) {
       maxOutputTokens: 600,
       abortSignal: AbortSignal.timeout(25_000),
       output: Output.object({
-        schema: VisionProfileSchema,
+        schema: VisionAssetProfileSchema,
         name: 'asset_profile',
       }),
       messages: [

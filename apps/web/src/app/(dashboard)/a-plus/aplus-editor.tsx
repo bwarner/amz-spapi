@@ -41,9 +41,14 @@ import {
   moduleImageSlots,
   moduleTextFields,
   normalizeAmazonModuleType,
+  matchAssetToIntent,
   sellerCentralModuleName,
   setSectionResolvedImage,
   setSectionTextField,
+  AssetProfileSchema,
+  type AssetCandidate,
+  type AssetProfile,
+  type ImageIntent,
   type APlusCreativity,
   type APlusGeneratedModule as GeneratedModule,
   type APlusGuidance,
@@ -90,7 +95,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
-import { matchAssetToSlot, type MatcherCandidate } from '@/lib/asset-matcher';
 
 type SourceKind = 'Product listing' | 'Competitor' | 'Supplier' | 'Reference';
 type ContentTier = AplusTier;
@@ -154,19 +158,6 @@ type UploadedAsset = {
 };
 
 /** Structured visual profile from /api/a-plus/assets/profile (see redesign §3a). */
-type AssetProfileData = {
-  role: string;
-  subjectProminence: string;
-  orientation: string;
-  background: string;
-  negativeSpace: { side: string; amount: string };
-  affordances: string[];
-  hasBakedText: boolean;
-  isRender: boolean;
-  dominantColors: string[];
-  description: string;
-};
-
 type AssetLibraryItem = {
   id: string;
   fileName: string;
@@ -178,7 +169,7 @@ type AssetLibraryItem = {
   uploadAction?: string;
   uploadErrorCode?: string;
   /** Vision profile + whether it's currently being computed. */
-  profile?: AssetProfileData;
+  profile?: AssetProfile;
   profiling?: boolean;
 };
 
@@ -261,6 +252,13 @@ type PackageImageJob = {
   size: string;
   /** Slot role — used by the asset matcher to decide place vs generate. */
   role: string;
+  /**
+   * What the scene needs this image to be. Recovered from the Experience the
+   * deployment was compiled from: the compiler keeps the slot's role but drops
+   * its intent, and the matcher needs the intent to do anything better than
+   * guess from the role string.
+   */
+  intent?: ImageIntent;
   /** True when this slot already has a generated/uploaded image (e.g. a draft
    * reloaded from storage) — so "Generate all" never re-pays for it. */
   hasImage: boolean;
@@ -1481,10 +1479,16 @@ export function APlusEditor({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assetId }),
       });
-      const body = (await response.json()) as {
-        profile?: AssetProfileData;
+      const raw = (await response.json()) as {
+        profile?: unknown;
         error?: string;
       };
+      // Parse at the boundary: a malformed profile would otherwise reach the
+      // matcher and quietly change which of the seller's photos get used.
+      const parsed = raw.profile
+        ? AssetProfileSchema.safeParse(raw.profile)
+        : undefined;
+      const body = { profile: parsed?.success ? parsed.data : undefined };
       setAssetLibrary((current) =>
         current.map((item) => {
           if (item.id !== itemId) return item;
@@ -2335,7 +2339,9 @@ export function APlusEditor({
   async function generateImageForJob(
     jobId: string,
     prompt: string,
-    size: string
+    size: string,
+    /** Per-slot references chosen by the matcher; defaults to the product shots. */
+    referenceAssetIds: string[] = productReferenceAssetIds
   ) {
     setImageJobResults((current) => ({
       ...current,
@@ -2357,7 +2363,7 @@ export function APlusEditor({
           quality: draftImages ? 'low' : undefined,
           // Reference-generate: the seller's real product photos steer the
           // image model so the depicted product matches reality.
-          referenceAssetIds: productReferenceAssetIds,
+          referenceAssetIds,
         }),
       });
       const body = (await response.json()) as {
@@ -2417,16 +2423,25 @@ export function APlusEditor({
   const allPackageImageJobs = useMemo<PackageImageJob[]>(() => {
     if (!deployment) return [];
 
+    // The compiler carries the slot's role into the module but drops its
+    // intent, so recover the intent from the Experience the deployment was
+    // compiled from. Module order matches section order by construction.
+    const intentFor = (moduleOrder: number, role: string) =>
+      experience?.sections
+        .find((section) => section.order === moduleOrder)
+        ?.visual.images.find((image) => image.role === role)?.intent;
+
     return deployment.modules.flatMap((module) =>
       moduleImageSlots(module).map((slot) => ({
         jobId: slotJobId(module.order, slot.role),
         prompt: slot.brief,
         size: slot.size,
         role: slot.role,
+        intent: intentFor(module.order, slot.role),
         hasImage: Boolean(slot.image?.url),
       }))
     );
-  }, [deployment]);
+  }, [deployment, experience]);
 
   const hasRunnablePackageImageJobs = allPackageImageJobs.some((job) => {
     if (job.hasImage) return false;
@@ -2456,7 +2471,7 @@ export function APlusEditor({
 
   function generateAllPackageImages() {
     // Profiled, uploaded assets are candidates for direct placement (redesign #26).
-    const baseCandidates: MatcherCandidate[] = assetLibrary
+    const baseCandidates: AssetCandidate[] = assetLibrary
       .filter(
         (item) =>
           item.profile &&
@@ -2478,33 +2493,55 @@ export function APlusEditor({
       const status = imageJobResults[job.jobId]?.status;
       if (status === 'done' || status === 'generating') continue;
 
-      const decision = matchAssetToSlot(
-        { role: job.role, orientation: orientationFromSize(job.size) },
+      // Without a compiled-through intent, fall back to what the deployment
+      // slot still carries. The matcher then scores on affordance, prominence
+      // and orientation only — the negative-space, must-show and palette
+      // dimensions need the Experience slot.
+      const intent: ImageIntent = job.intent ?? {
+        subject: 'product',
+        mustShow: [],
+        orientation: orientationFromSize(job.size),
+        productProminence: 'hero',
+      };
+
+      const decision = matchAssetToIntent(
+        intent,
         baseCandidates.filter((c) => !usedAssetIds.has(c.assetId))
       );
 
-      if (decision.strategy === 'place') {
+      if (decision.strategy === 'place' && decision.assetId) {
         // Use the seller's real photo directly — no generation, no cost.
-        const url = `/api/a-plus/assets/${decision.assetId}`;
-        usedAssetIds.add(decision.assetId);
-        writeSlotImageIntoPackage(
-          job.jobId,
-          url,
-          assetAltText(decision.assetId)
-        );
+        const placedAssetId = decision.assetId;
+        const url = `/api/a-plus/assets/${placedAssetId}`;
+        usedAssetIds.add(placedAssetId);
+        writeSlotImageIntoPackage(job.jobId, url, assetAltText(placedAssetId));
         setImageJobResults((current) => ({
           ...current,
           [job.jobId]: {
             status: 'done',
             url,
-            assetId: decision.assetId,
+            assetId: placedAssetId,
             fromAsset: true,
           },
         }));
         continue;
       }
 
-      void generateImageForJob(job.jobId, job.prompt, job.size);
+      // `composite` and `reference-generate` both generate from the seller's
+      // own photos; the matcher chose which ones, per slot, rather than the
+      // same two product shots being attached to everything. A bare `generate`
+      // falls back to those defaults.
+      const references =
+        decision.referenceAssetIds?.length ?? 0
+          ? [
+              ...(decision.strategy === 'composite' && decision.assetId
+                ? [decision.assetId]
+                : []),
+              ...(decision.referenceAssetIds ?? []),
+            ]
+          : productReferenceAssetIds;
+
+      void generateImageForJob(job.jobId, job.prompt, job.size, references);
     }
   }
 
