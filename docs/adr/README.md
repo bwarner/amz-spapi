@@ -14,9 +14,9 @@ in the repository?
 
 ## Index
 
-| #                                               | Title                                                                           | Status   |
-| ----------------------------------------------- | ------------------------------------------------------------------------------- | -------- |
-| [0001](0001-cdk-deploys-sam-is-local-invoke.md) | CDK deploys AWS infrastructure; SAM is used only for local invoke               | Accepted |
-| [0002](0002-aws-account-topology.md)            | One AWS account per environment for SellAvant, and where the SES identity lives | Proposed |
+| #                                               | Title                                                                          | Status   |
+| ----------------------------------------------- | ------------------------------------------------------------------------------ | -------- |
+| [0001](0001-cdk-deploys-sam-is-local-invoke.md) | CDK deploys AWS infrastructure; SAM is used only for local invoke              | Accepted |
+| [0002](0002-aws-account-topology.md)            | A dedicated production account for SellAvant, and where the SES identity lives | Proposed |
 
 Related epic: [#51 — AWS integration](https://github.com/bwarner/amz-spapi/issues/51)

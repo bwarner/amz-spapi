@@ -1,4 +1,4 @@
-# ADR-0002: One AWS account per environment for SellAvant, and where the SES identity lives
+# ADR-0002: A dedicated production account for SellAvant, and where the SES identity lives
 
 - **Status:** Proposed
 - **Date:** 2026-07-30
@@ -27,9 +27,8 @@ Organisation `o-ighpjm8sqt`, FeatureSet `ALL`. Identity Center is at
 `https://d-9067e06487.awsapps.com/start` with `OrgAdmin` and `WorkloadAdmin`
 permission sets in use.
 
-**ScanSafeGuard already has the shape this ADR proposes** — per-environment OUs
-and a dedicated production account. SellAvant has one account, sitting directly
-in its OU, and `infra/aws/config/stages.ts` fills the gap by pointing the other
+**ScanSafeGuard already separates production into its own account**, under
+per-environment OUs. SellAvant has one account, sitting directly in its OU, and `infra/aws/config/stages.ts` fills the gap by pointing the other
 two environments at accounts that belong to something else:
 
 | stage    | account          | what it actually is                                  |
@@ -50,18 +49,24 @@ there are no custom SCPs.
 
 ## Decision
 
-**Give SellAvant its own account per environment, under per-environment OUs,
-mirroring ScanSafeGuard.** Nothing SellAvant runs belongs in the management
-account or in the shared-services account.
+**Production gets its own account. Development and staging share the account
+that already exists.** Nothing SellAvant runs belongs in the management account
+or in the shared-services account.
 
 ```
 SellAvant (ou-8xck-p9uto1vg)
-├── Development  853583158600   (exists)
-├── Staging      sellavant-staging   (to create)
-└── Production   sellavant-prod      (to create)
+├── NonProd     853583158600     dev + staging (exists)
+└── Production  sellavant-prod   (to create)
 ```
 
-Member accounts are created with `organizations create-account`; the management
+`stages.ts` keeps three stages; `dev` and `staging` resolve to the same account.
+That is safe by construction rather than by care — every resource name already
+carries the stage. The media bucket is `[base, stageName, account, region]`, the
+runtime policy is `${appName}-${stageName}-media-assets-runtime`, and Lambda
+function names and ECR repository paths are stage-scoped the same way, so two
+stages cannot collide in one account.
+
+The member account is created with `organizations create-account`; the management
 account stays empty of workloads.
 
 **The SES identity for `sellavant.com` follows the account, not the other
@@ -70,14 +75,28 @@ account ScanSafeGuard sends from.
 
 ## Options considered
 
-### A. Per-environment SellAvant accounts ✅ chosen
+### A. Dedicated production account, dev and staging shared ✅ chosen
 
-Matches ScanSafeGuard in the same organisation, so there is one pattern to learn.
 Gets production out of the management account, which is the only change here that
-removes a real risk rather than tidying. Makes SCPs meaningful: a guardrail can
-target the SellAvant Production OU.
+removes a real risk rather than tidying, and makes SCPs meaningful: a guardrail
+can target the SellAvant Production OU.
 
-Costs: two more accounts to bootstrap, and cross-account deploys to configure.
+Staging does not earn its own account yet. Staging exists to rehearse production,
+and sharing with dev costs exactly two things — blast radius between dev and
+staging, and the ability to prove a stricter SCP or IAM posture on staging before
+prod. Neither buys anything until there is a production worth rehearsing against.
+
+The decisive point is asymmetry. Adding a staging account later is create,
+bootstrap, deploy fresh: nothing migrates, because staging is disposable by
+definition. Getting **production** wrong is the expensive one, because live data
+has to move. So spend the care where it cannot be undone cheaply.
+
+### B. An account per environment, three in total
+
+The shape ScanSafeGuard runs, and where this ends up eventually. Rejected for now
+as cost without a benefit: another bootstrap, another profile, another deploy
+role and one more thing to keep straight, to isolate a staging tier that has no
+production to protect yet. Revisit on the triggers below.
 
 ### B. Keep prod in the management account
 
@@ -122,14 +141,24 @@ account owns it owns it for every environment — use subdomains
 **Positive**
 
 - Production stops running in an account that cannot be governed by SCPs.
-- An SCP baseline becomes possible and meaningful, targeted per OU.
-- SellAvant's sending reputation is its own.
-- One pattern across both products in the organisation.
+- An SCP baseline becomes possible and meaningful, targeted at the Production OU.
+- SellAvant's sending reputation is its own; dev and staging sharing one matters
+  less, since neither is production.
+- One account to create instead of two.
+
+**Add a staging account when any of these becomes true**
+
+- Real users in production, so a rehearsal has something to protect.
+- An SCP or IAM tightening wants proving somewhere before production.
+- Staging needs production-like data — with Amazon buyer PII that is a
+  data-protection reason to isolate, not a tidiness one.
+- Staging starts sending real email to real recipients.
 
 **Negative / costs**
 
-- Two accounts to create and bootstrap (CDK bootstrap, Identity Center
-  assignments, `stages.ts`, deploy roles).
+- One account to create and bootstrap (CDK bootstrap, Identity Center
+  assignment, `stages.ts`, deploy role).
+- Dev and staging share a blast radius until the triggers above are met.
 - SES sandbox lead time before production sending works.
 - Cross-account deployment needs a deploy role per account.
 
