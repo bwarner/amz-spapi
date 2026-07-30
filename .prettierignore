@@ -3,3 +3,11 @@
 /coverage
 /.nx/cache
 /.nx/workspace-data
+
+# Generated API types. These files are written by openapi-typescript, and
+# formatting them makes the checked-in copy differ from what the generator
+# emits — so the next `generate` run produces a tens-of-thousands-of-line diff
+# that has nothing to do with the change being made. The generator owns the
+# formatting; leave it alone.
+/packages/amazon-ads-generated/src/lib
+/packages/amazon-sp-generated/src/lib
