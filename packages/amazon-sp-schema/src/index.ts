@@ -1,1 +1,1 @@
-export * from './lib/amazon-sp-schema';
+export * from './lib/amazon-sp-schema.js';

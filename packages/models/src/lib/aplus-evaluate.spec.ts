@@ -5,9 +5,9 @@ import {
   lintAplusExperience,
   trigramSimilarity,
   type JudgeDimensionKey,
-} from './aplus-evaluate';
-import { compileExperienceToAplus } from './aplus-compiler';
-import type { Experience, Section } from './experience';
+} from './aplus-evaluate.js';
+import { compileExperienceToAplus } from './aplus-compiler.js';
+import type { Experience, Section } from './experience.js';
 
 function section(
   order: number,

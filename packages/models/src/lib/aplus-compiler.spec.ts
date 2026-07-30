@@ -1,7 +1,7 @@
 import {
   APLUS_GENERATED_MODULE_SCHEMA_BY_KIND,
   moduleTextFields,
-} from './aplus';
+} from './aplus.js';
 import {
   KIND_TO_AMAZON,
   KIND_TO_PREMIUM,
@@ -10,13 +10,13 @@ import {
   compileExperienceToAplus,
   planSliceStack,
   sectionSliceUnits,
-} from './aplus-compiler';
+} from './aplus-compiler.js';
 import {
   liftGeneratedPackageToExperience,
   liftModuleToSection,
-} from './experience-lift';
-import { REPRESENTATIVE_PACKAGE } from './experience-fixtures';
-import { APLUS_SLICE_CONSTANTS, type Section } from './experience';
+} from './experience-lift.js';
+import { REPRESENTATIVE_PACKAGE } from './experience-fixtures.js';
+import { APLUS_SLICE_CONSTANTS, type Section } from './experience.js';
 
 function sectionStub(
   order: number,

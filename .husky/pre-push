@@ -1,2 +1,2 @@
 # Mirror CI so build/lint/sync failures are caught before pushing, not in CI.
-npx nx sync:check && npx nx affected -t lint test build --parallel=3
+npx nx sync:check && npx nx affected -t lint typecheck test build --parallel=3

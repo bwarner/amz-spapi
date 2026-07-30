@@ -1,6 +1,6 @@
-import type { APlusGeneratedModule } from './aplus';
-import type { Experience, Section } from './experience';
-import { liftModuleToSection } from './experience-lift';
+import type { APlusGeneratedModule } from './aplus.js';
+import type { Experience, Section } from './experience.js';
+import { liftModuleToSection } from './experience-lift.js';
 import {
   IMMERSIVE_ARCHETYPES,
   PREMIUM_PLANNABLE_ARCHETYPES,
@@ -11,7 +11,7 @@ import {
   moduleKindForBeat,
   sanitizeNarrativeBeats,
   type NarrativeBeat,
-} from './narrative';
+} from './narrative.js';
 
 const slot = (role: string) => ({
   role,

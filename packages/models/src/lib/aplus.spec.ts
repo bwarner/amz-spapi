@@ -15,7 +15,7 @@ import {
   normalizeAmazonModuleType,
   setModuleTextField,
   type APlusGeneratedModule,
-} from './aplus';
+} from './aplus.js';
 
 const slot = (role: string) => ({
   role,

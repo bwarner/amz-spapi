@@ -11,7 +11,7 @@
       "options": {
         "outputPath": "dist/packages/ad-client",
         "main": "packages/ad-client/src/index.ts",
-        "tsConfig": "packages/ad-client/tsconfig.lib.json",
+        "tsConfig": "packages/ad-client/tsconfig.build.json",
         "assets": [
           "packages/ad-client/*.md",
           "packages/ad-client/package.json"

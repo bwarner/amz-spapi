@@ -8,7 +8,14 @@ export default [
       '@nx/dependency-checks': [
         'error',
         {
-          ignoredFiles: ['{projectRoot}/eslint.config.{js,cjs,mjs,ts,cts,mts}'],
+          // Tooling configs, not shipped code: the test runner supplies vite
+          // and vitest, so importing them here must not force a runtime
+          // dependency on the published package.
+          ignoredFiles: [
+            '{projectRoot}/eslint.config.{js,cjs,mjs,ts,cts,mts}',
+            '{projectRoot}/vite.config.{js,cjs,mjs,ts,cts,mts}',
+            '{projectRoot}/vitest.config.{js,cjs,mjs,ts,cts,mts}',
+          ],
           // Genuinely imported in src; removing them would break the package.
           //   axios   src/lib/ad-client.ts
           //

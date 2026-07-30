@@ -2,10 +2,15 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "baseUrl": "../..",
-    "outDir": "../../dist/out-tsc",
+    "outDir": "../../dist/out-tsc/libs/seller-agent",
     "declaration": true,
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"]
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../packages/sp-cache/tsconfig.lib.json"
+    }
+  ]
 }

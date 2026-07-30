@@ -1,12 +1,12 @@
-import { moduleTextFields } from './aplus';
-import { compileExperienceToAplus } from './aplus-compiler';
+import { moduleTextFields } from './aplus.js';
+import { compileExperienceToAplus } from './aplus-compiler.js';
 import {
   sectionTextFieldDescriptors,
   setSectionResolvedImage,
   setSectionTextField,
-} from './experience-fields';
-import { liftGeneratedPackageToExperience } from './experience-lift';
-import { REPRESENTATIVE_PACKAGE } from './experience-fixtures';
+} from './experience-fields.js';
+import { liftGeneratedPackageToExperience } from './experience-lift.js';
+import { REPRESENTATIVE_PACKAGE } from './experience-fixtures.js';
 
 const experience = liftGeneratedPackageToExperience(REPRESENTATIVE_PACKAGE);
 
