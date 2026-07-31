@@ -4,6 +4,7 @@ import {
   executeQuery,
   getDocument,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 
 /**
@@ -110,7 +111,7 @@ export async function listChats(userId: string): Promise<ChatSummary[]> {
   const result = await executeQuery<ChatSummary>(
     SCOPE,
     `SELECT c.chatId, c.title, c.createdAt, c.updatedAt, c.messageCount
-     FROM \`${META_COLLECTION}\` c
+     FROM \`${collectionName(SCOPE, META_COLLECTION)}\` c
      WHERE c.userId = $userId
      ORDER BY c.updatedAt DESC
      LIMIT ${LIST_LIMIT}`,
@@ -151,7 +152,7 @@ export async function loadMessages(params: {
   }>(
     SCOPE,
     `SELECT m.seq, m.updatedAt, m.message
-     FROM \`${MESSAGES_COLLECTION}\` m
+     FROM \`${collectionName(SCOPE, MESSAGES_COLLECTION)}\` m
      WHERE m.userId = $userId AND m.chatId = $chatId
        ${params.beforeSeq !== undefined ? 'AND m.seq < $beforeSeq' : ''}
      ORDER BY m.seq DESC
@@ -201,7 +202,7 @@ async function reserveSeqRange(params: {
 }): Promise<number | null> {
   const result = await executeQuery<number>(
     SCOPE,
-    `UPDATE \`${META_COLLECTION}\` USE KEYS $key
+    `UPDATE \`${collectionName(SCOPE, META_COLLECTION)}\` USE KEYS $key
      SET messageCount = IFMISSINGORNULL(messageCount, 0) + $count,
          updatedAt = $now,
          photoRegistry = OBJECT_CONCAT(IFMISSINGORNULL(photoRegistry, {}), $labels)
@@ -251,7 +252,7 @@ export async function saveChatTurn(params: {
     // reserves its range from the winner's counter.
     const inserted = await executeQuery<string>(
       SCOPE,
-      `INSERT INTO \`${META_COLLECTION}\` (KEY, VALUE)
+      `INSERT INTO \`${collectionName(SCOPE, META_COLLECTION)}\` (KEY, VALUE)
        VALUES ($key, $document)
        RETURNING RAW META().id`,
       {
@@ -333,7 +334,7 @@ export async function deleteChat(params: {
   if (!meta) return false;
   await executeQuery(
     SCOPE,
-    `DELETE FROM \`${MESSAGES_COLLECTION}\`
+    `DELETE FROM \`${collectionName(SCOPE, MESSAGES_COLLECTION)}\`
      WHERE userId = $userId AND chatId = $chatId`,
     { parameters: { userId: params.userId, chatId: params.chatId } }
   );

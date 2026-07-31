@@ -2,6 +2,7 @@ export {
   createCouchbaseCluster,
   connectToDatabase,
   getContext,
+  collectionName,
   getDocument,
   upsertDocument,
   insertDocument,

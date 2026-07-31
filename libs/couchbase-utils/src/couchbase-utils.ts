@@ -10,7 +10,8 @@ type DataApiConfig = {
   username: string;
   password: string;
   bucket: string;
-  defaultScope?: string;
+  /** The environment — `dev`, `staging`, `prod`. One scope holds everything. */
+  environmentScope: string;
 };
 
 type DataApiQueryResponse<T> = {
@@ -25,11 +26,12 @@ function getDataApiConfig(): DataApiConfig {
   const username = process.env['CB_USERNAME'];
   const password = process.env['CB_PASSWORD'];
   const bucket = process.env['CB_BUCKET'];
-  const defaultScope = process.env['CB_SCOPE'];
+  const environmentScope = process.env['CB_SCOPE'];
 
-  if (!baseUrl || !username || !password || !bucket) {
+  if (!baseUrl || !username || !password || !bucket || !environmentScope) {
     throw new Error(
-      'Couchbase Data API is not configured. Set CB_DATA_API_URL, CB_USERNAME, CB_PASSWORD, and CB_BUCKET.'
+      'Couchbase Data API is not configured. Set CB_DATA_API_URL, CB_USERNAME, ' +
+        'CB_PASSWORD, CB_BUCKET, and CB_SCOPE (the environment: dev, staging or prod).'
     );
   }
 
@@ -38,8 +40,45 @@ function getDataApiConfig(): DataApiConfig {
     username,
     password,
     bucket,
-    defaultScope,
+    environmentScope,
   };
+}
+
+/**
+ * The flat collection name for a domain's entity (ADR-0005).
+ *
+ * The scope is the ENVIRONMENT, so domains survive only as a naming prefix:
+ * `a_plus` + `drafts` is the collection `a_plus_drafts` inside scope `dev`.
+ * Because scope-plus-collection was already unique, so is the joined name —
+ * which is what keeps `sp_cache.listings` and `catalog.listings` apart.
+ *
+ * Exported because N1QL statements have to name collections themselves; the KV
+ * helpers below apply it for you.
+ */
+export function collectionName(domain: string, collection: string): string {
+  return `${domain}_${collection}`;
+}
+
+/**
+ * Catch a statement that still names a collection the old way.
+ *
+ * After ADR-0005 there is one scope per environment and collections are
+ * `<domain>_<entity>`, so `FROM \`drafts\`` resolves to nothing. Couchbase
+ * answers that with "keyspace not found", which is recoverable but arrives at
+ * runtime, in whichever code path happened to run. This turns it into an error
+ * that names the fix.
+ */
+function assertQualified(domain: string, statement: string): void {
+  const prefix = `${domain}_`;
+  for (const [, name] of statement.matchAll(/`([a-z][a-z0-9_]*)`/g)) {
+    // Bare entity names that look like this domain's old collections.
+    if (name.startsWith(prefix) || name.includes('_')) continue;
+    throw new Error(
+      `Statement names collection \`${name}\`, which no longer exists. ` +
+        `Collections are flat per environment: use collectionName('${domain}', '${name}') ` +
+        `→ \`${prefix}${name}\`. See docs/adr/0005-environment-scopes.md.`
+    );
+  }
 }
 
 function getAuthHeader(username: string, password: string): string {
@@ -55,23 +94,15 @@ function getQueryContext(bucket: string, scopeName: string): string {
 }
 
 async function executeDataApiQuery<T>(params: {
-  scopeName: string;
   statement: string;
   options?: QueryOptions;
 }): Promise<{ rows: T[]; meta: DataApiQueryResponse<T> }> {
   const config = getDataApiConfig();
   const { parameters, ...restOptions } = params.options ?? {};
-  const scopeName = params.scopeName || config.defaultScope;
-
-  if (!scopeName) {
-    throw new Error(
-      'Couchbase scope is required for Data API queries. Set CB_SCOPE.'
-    );
-  }
 
   const body: Record<string, unknown> = {
     statement: params.statement,
-    query_context: getQueryContext(config.bucket, scopeName),
+    query_context: getQueryContext(config.bucket, config.environmentScope),
     ...restOptions,
   };
 
@@ -139,14 +170,14 @@ export async function getContext() {
  */
 function documentUrl(
   config: DataApiConfig,
-  scopeName: string,
-  collectionName: string,
+  domain: string,
+  collection: string,
   key: string
 ): string {
   return (
     `${config.baseUrl}/v1/buckets/${encodeURIComponent(config.bucket)}` +
-    `/scopes/${encodeURIComponent(scopeName)}` +
-    `/collections/${encodeURIComponent(collectionName)}` +
+    `/scopes/${encodeURIComponent(config.environmentScope)}` +
+    `/collections/${encodeURIComponent(collectionName(domain, collection))}` +
     `/documents/${encodeURIComponent(key)}`
   );
 }
@@ -172,20 +203,17 @@ async function failureMessage(response: Response): Promise<string> {
 }
 
 export async function getDocument<T>(
-  scopeName: string,
-  collectionName: string,
+  domain: string,
+  collection: string,
   key: string
 ): Promise<T | null> {
   const config = getDataApiConfig();
-  const response = await fetch(
-    documentUrl(config, scopeName, collectionName, key),
-    {
-      headers: {
-        Authorization: getAuthHeader(config.username, config.password),
-        Accept: 'application/json',
-      },
-    }
-  );
+  const response = await fetch(documentUrl(config, domain, collection, key), {
+    headers: {
+      Authorization: getAuthHeader(config.username, config.password),
+      Accept: 'application/json',
+    },
+  });
 
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(await failureMessage(response));
@@ -193,25 +221,22 @@ export async function getDocument<T>(
 }
 
 export async function upsertDocument<T>(
-  scopeName: string,
-  collectionName: string,
+  domain: string,
+  collection: string,
   key: string,
   document: T,
   expirySeconds?: number
 ): Promise<void> {
   const config = getDataApiConfig();
-  const response = await fetch(
-    documentUrl(config, scopeName, collectionName, key),
-    {
-      method: 'PUT',
-      headers: {
-        Authorization: getAuthHeader(config.username, config.password),
-        'Content-Type': 'application/json',
-        ...expiresHeader(expirySeconds),
-      },
-      body: JSON.stringify(document),
-    }
-  );
+  const response = await fetch(documentUrl(config, domain, collection, key), {
+    method: 'PUT',
+    headers: {
+      Authorization: getAuthHeader(config.username, config.password),
+      'Content-Type': 'application/json',
+      ...expiresHeader(expirySeconds),
+    },
+    body: JSON.stringify(document),
+  });
   if (!response.ok) throw new Error(await failureMessage(response));
 }
 
@@ -222,45 +247,39 @@ export async function upsertDocument<T>(
  * write is lost. POST answers 409 for the loser instead.
  */
 export async function insertDocument<T>(
-  scopeName: string,
-  collectionName: string,
+  domain: string,
+  collection: string,
   key: string,
   document: T,
   expirySeconds?: number
 ): Promise<boolean> {
   const config = getDataApiConfig();
-  const response = await fetch(
-    documentUrl(config, scopeName, collectionName, key),
-    {
-      method: 'POST',
-      headers: {
-        Authorization: getAuthHeader(config.username, config.password),
-        'Content-Type': 'application/json',
-        ...expiresHeader(expirySeconds),
-      },
-      body: JSON.stringify(document),
-    }
-  );
+  const response = await fetch(documentUrl(config, domain, collection, key), {
+    method: 'POST',
+    headers: {
+      Authorization: getAuthHeader(config.username, config.password),
+      'Content-Type': 'application/json',
+      ...expiresHeader(expirySeconds),
+    },
+    body: JSON.stringify(document),
+  });
   if (response.status === 409) return false;
   if (!response.ok) throw new Error(await failureMessage(response));
   return true;
 }
 
 export async function deleteDocument(
-  scopeName: string,
-  collectionName: string,
+  domain: string,
+  collection: string,
   key: string
 ): Promise<boolean> {
   const config = getDataApiConfig();
-  const response = await fetch(
-    documentUrl(config, scopeName, collectionName, key),
-    {
-      method: 'DELETE',
-      headers: {
-        Authorization: getAuthHeader(config.username, config.password),
-      },
-    }
-  );
+  const response = await fetch(documentUrl(config, domain, collection, key), {
+    method: 'DELETE',
+    headers: {
+      Authorization: getAuthHeader(config.username, config.password),
+    },
+  });
   if (response.status === 404) return false;
   if (!response.ok) throw new Error(await failureMessage(response));
   return true;
@@ -275,8 +294,8 @@ export async function deleteDocument(
  * the delta here for that reason, so creation and increment agree.
  */
 export async function incrementCounter(
-  scopeName: string,
-  collectionName: string,
+  domain: string,
+  collection: string,
   key: string,
   delta: number,
   expirySeconds?: number
@@ -287,7 +306,7 @@ export async function incrementCounter(
   const amount = Math.round(delta);
   const config = getDataApiConfig();
   const response = await fetch(
-    `${documentUrl(config, scopeName, collectionName, key)}/increment`,
+    `${documentUrl(config, domain, collection, key)}/increment`,
     {
       method: 'POST',
       headers: {
@@ -302,13 +321,22 @@ export async function incrementCounter(
   return Number(await response.text());
 }
 
+/**
+ * Run a statement against the environment scope.
+ *
+ * `domain` is not a scope any more — it is the prefix that turns a bare entity
+ * name into the flat collection (ADR-0005). Statements name their own
+ * collections, so build them with `collectionName(domain, entity)`; passing the
+ * domain here keeps the call sites self-describing and lets this function say
+ * so when a statement still uses a bare name.
+ */
 export async function executeQuery<T>(
-  scopeName: string,
+  domain: string,
   query: string,
   options?: QueryOptions
 ): Promise<{ rows: T[]; meta?: Record<string, unknown> }> {
+  assertQualified(domain, query);
   const { rows, meta } = await executeDataApiQuery<T>({
-    scopeName,
     statement: query,
     options,
   });

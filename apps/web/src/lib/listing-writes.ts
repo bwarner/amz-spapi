@@ -9,6 +9,7 @@ import {
   executeQuery,
   getDocument,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 import { createAssetS3Client, getAsset } from './media-assets';
 
@@ -332,7 +333,7 @@ async function latestSnapshot(
 ): Promise<ListingSnapshot | null> {
   const result = await executeQuery<ListingSnapshot>(
     SCOPE,
-    `SELECT RAW v FROM \`${VERSIONS_COLLECTION}\` v
+    `SELECT RAW v FROM \`${collectionName(SCOPE, VERSIONS_COLLECTION)}\` v
      WHERE v.userId = $userId AND v.sku = $sku
      ORDER BY v.capturedAt DESC
      LIMIT 1`,
@@ -345,10 +346,13 @@ async function pruneSnapshots(userId: string, sku: string): Promise<void> {
   try {
     await executeQuery(
       SCOPE,
-      `DELETE FROM \`${VERSIONS_COLLECTION}\` v
+      `DELETE FROM \`${collectionName(SCOPE, VERSIONS_COLLECTION)}\` v
        WHERE v.userId = $userId AND v.sku = $sku
          AND META(v).id NOT IN (
-           SELECT RAW META(k).id FROM \`${VERSIONS_COLLECTION}\` k
+           SELECT RAW META(k).id FROM \`${collectionName(
+             SCOPE,
+             VERSIONS_COLLECTION
+           )}\` k
            WHERE k.userId = $userId AND k.sku = $sku
            ORDER BY k.capturedAt DESC
            LIMIT ${SNAPSHOT_KEEP}

@@ -7,7 +7,13 @@
  *
  * @see packages/credential-store/src/lib/couchbase-credential-store.ts for KMS version
  */
-import { getDocument, upsertDocument, deleteDocument, executeQuery } from '@amz-spapi/couchbase-utils';
+import {
+  getDocument,
+  upsertDocument,
+  deleteDocument,
+  executeQuery,
+  collectionName,
+} from '@amz-spapi/couchbase-utils';
 import type {
   AmazonApiType,
   AmazonCredentialProfile,
@@ -17,7 +23,11 @@ import type {
 const SCOPE = 'credentials';
 const COLLECTION = 'profiles';
 
-function getDocKey(profileName: string, apiType: AmazonApiType, userId?: string): string {
+function getDocKey(
+  profileName: string,
+  apiType: AmazonApiType,
+  userId?: string
+): string {
   const userPart = userId || 'default';
   return `${apiType}::${userPart}::${profileName}`;
 }
@@ -29,7 +39,11 @@ function getDefaultKey(apiType: AmazonApiType, userId?: string): string {
 
 class WebCredentialStore implements ICredentialRepository {
   async setProfile(profile: AmazonCredentialProfile): Promise<void> {
-    const key = getDocKey(profile.profile_name, profile.api_type, profile.user_id);
+    const key = getDocKey(
+      profile.profile_name,
+      profile.api_type,
+      profile.user_id
+    );
     await upsertDocument(SCOPE, COLLECTION, key, {
       ...profile,
       updated_at: Date.now(),
@@ -42,7 +56,9 @@ class WebCredentialStore implements ICredentialRepository {
     userId?: string
   ): Promise<AmazonCredentialProfile | null> {
     const key = getDocKey(profileName, apiType, userId);
-    const doc = await getDocument<AmazonCredentialProfile & { deleted?: boolean }>(SCOPE, COLLECTION, key);
+    const doc = await getDocument<
+      AmazonCredentialProfile & { deleted?: boolean }
+    >(SCOPE, COLLECTION, key);
     if (!doc || doc.deleted) return null;
     return doc;
   }
@@ -77,19 +93,20 @@ class WebCredentialStore implements ICredentialRepository {
     return Date.now() > profile.access_token_expires_at - 5 * 60 * 1000;
   }
 
-  async listProfiles(apiType?: AmazonApiType, userId?: string): Promise<string[]> {
+  async listProfiles(
+    apiType?: AmazonApiType,
+    userId?: string
+  ): Promise<string[]> {
     const userPart = userId || 'default';
     // Use N1QL to find all profiles for this user matching the key pattern
     // Keys are: {apiType}::{userId}::{profileName}
-    const prefix = apiType
-      ? `${apiType}::${userPart}::%`
-      : `%::${userPart}::%`;
+    const prefix = apiType ? `${apiType}::${userPart}::%` : `%::${userPart}::%`;
 
     try {
       const result = await executeQuery<{ profile_name: string }>(
         SCOPE,
         `SELECT profile_name
-         FROM \`${COLLECTION}\`
+         FROM \`${collectionName(SCOPE, COLLECTION)}\`
          WHERE META().id LIKE $prefix
          AND \`deleted\` IS MISSING`,
         { parameters: { prefix } }
@@ -97,36 +114,52 @@ class WebCredentialStore implements ICredentialRepository {
       return result.rows.map((r) => r.profile_name).filter(Boolean);
     } catch {
       // Fallback for when query service isn't available: check known default profile
-      const profile = await this.getProfile('default', apiType || 'SP_API', userId);
+      const profile = await this.getProfile(
+        'default',
+        apiType || 'SP_API',
+        userId
+      );
       return profile ? [profile.profile_name] : [];
     }
   }
 
-  async listFullProfiles(apiType?: AmazonApiType, userId?: string): Promise<AmazonCredentialProfile[]> {
+  async listFullProfiles(
+    apiType?: AmazonApiType,
+    userId?: string
+  ): Promise<AmazonCredentialProfile[]> {
     const userPart = userId || 'default';
-    const prefix = apiType
-      ? `${apiType}::${userPart}::%`
-      : `%::${userPart}::%`;
+    const prefix = apiType ? `${apiType}::${userPart}::%` : `%::${userPart}::%`;
 
     try {
       const result = await executeQuery<AmazonCredentialProfile>(
         SCOPE,
         `SELECT profile_name, api_type, marketplace_id, region, seller_id, advertiser_profile_id, created_at, updated_at
-         FROM \`${COLLECTION}\`
+         FROM \`${collectionName(SCOPE, COLLECTION)}\`
          WHERE META().id LIKE $prefix
          AND \`deleted\` IS MISSING`,
         { parameters: { prefix } }
       );
       return result.rows;
     } catch {
-      const profile = await this.getProfile('default', apiType || 'SP_API', userId);
+      const profile = await this.getProfile(
+        'default',
+        apiType || 'SP_API',
+        userId
+      );
       return profile ? [profile] : [];
     }
   }
 
-  async getDefaultProfile(apiType: AmazonApiType, userId?: string): Promise<string | null> {
+  async getDefaultProfile(
+    apiType: AmazonApiType,
+    userId?: string
+  ): Promise<string | null> {
     const key = getDefaultKey(apiType, userId);
-    const doc = await getDocument<{ profileName: string }>(SCOPE, COLLECTION, key);
+    const doc = await getDocument<{ profileName: string }>(
+      SCOPE,
+      COLLECTION,
+      key
+    );
     return doc?.profileName ?? null;
   }
 

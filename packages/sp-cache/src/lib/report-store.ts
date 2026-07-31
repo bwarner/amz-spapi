@@ -1,5 +1,9 @@
 import crypto from 'node:crypto';
-import { executeQuery, upsertDocument } from '@amz-spapi/couchbase-utils';
+import {
+  executeQuery,
+  upsertDocument,
+  collectionName,
+} from '@amz-spapi/couchbase-utils';
 import type { ReportKind } from './report-registry.js';
 import type { ReportRow } from './report-ingest.js';
 
@@ -26,8 +30,8 @@ const SCOPE = 'reports';
  * "syntax error ... at: rows (reserved word)". Every statement touching these
  * collections must use these constants rather than the bare names.
  */
-const ROWS = '`rows`';
-const IMPORTS = '`imports`';
+const ROWS = `\`${collectionName(SCOPE, 'rows')}\``;
+const IMPORTS = `\`${collectionName(SCOPE, 'imports')}\``;
 /** Unquoted form: upsertDocument escapes the identifier itself. */
 const IMPORTS_RAW = 'imports';
 

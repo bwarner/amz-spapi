@@ -3,6 +3,7 @@ import {
   executeQuery,
   getDocument,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 import {
   ProductListingSchema,
@@ -50,7 +51,10 @@ export async function listListings(params: {
   }
   const result = await executeQuery<ProductListing>(
     SCOPE,
-    `SELECT RAW l FROM \`${COLLECTION}\` l WHERE ${clauses.join(' AND ')}`,
+    `SELECT RAW l FROM \`${collectionName(
+      SCOPE,
+      COLLECTION
+    )}\` l WHERE ${clauses.join(' AND ')}`,
     { parameters }
   );
   return result.rows;
@@ -82,7 +86,7 @@ export async function findListingBySku(params: {
 }): Promise<ProductListing | null> {
   const result = await executeQuery<ProductListing>(
     SCOPE,
-    `SELECT RAW l FROM \`${COLLECTION}\` l
+    `SELECT RAW l FROM \`${collectionName(SCOPE, COLLECTION)}\` l
      WHERE l.userId = $userId AND l.platform = 'amazon'
        AND l.marketplaceId = $marketplaceId AND l.external.sku = $sku
        AND l.\`deleted\` IS MISSING
@@ -100,7 +104,7 @@ export async function listListingsByAsin(params: {
 }): Promise<ProductListing[]> {
   const result = await executeQuery<ProductListing>(
     SCOPE,
-    `SELECT RAW l FROM \`${COLLECTION}\` l
+    `SELECT RAW l FROM \`${collectionName(SCOPE, COLLECTION)}\` l
      WHERE l.userId = $userId AND l.platform = 'amazon'
        AND l.marketplaceId = $marketplaceId AND l.external.asin = $asin
        AND l.\`deleted\` IS MISSING`,
@@ -116,7 +120,7 @@ export async function listVariantThumbnails(
   const result = await executeQuery<{ variantId: string; url: string }>(
     SCOPE,
     `SELECT l.variantId, l.snapshot.mainImage.url AS url
-     FROM \`${COLLECTION}\` l
+     FROM \`${collectionName(SCOPE, COLLECTION)}\` l
      WHERE l.userId = $userId AND l.platform = 'amazon'
        AND l.snapshot.mainImage.url IS NOT MISSING
        AND l.\`deleted\` IS MISSING`,
