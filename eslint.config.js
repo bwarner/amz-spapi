@@ -11,6 +11,10 @@ export default [
       '**/next-env.d.ts',
       '**/vite.config.*.timestamp*',
       '**/vitest.config.*.timestamp*',
+      // CDK synth output, including aws-cdk-lib's own minified asset handlers.
+      // Gitignored, but ESLint's flat config does not read .gitignore — so
+      // without this, `lint` passes on a clean tree and fails after any `synth`.
+      '**/cdk.out',
     ],
   },
   {
