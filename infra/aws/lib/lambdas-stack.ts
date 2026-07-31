@@ -64,14 +64,35 @@ export class LambdasStack extends Stack {
   }
 
   private common(app: LambdaApp, config: StageConfig) {
+    const functionName = `${config.appName}-${config.stageName}-${app.name}`;
+
+    // Logs are the only way to see a Lambda that failed before it answered.
+    // Without a retention policy they are kept forever and billed forever.
+    //
+    // Declared as a real LogGroup rather than the deprecated `logRetention`,
+    // which is not just a rename: `logRetention` provisions a singleton custom
+    // resource — its own Lambda, role and log group — whose only job is to call
+    // PutRetentionPolicy after the fact. This owns the group outright, so the
+    // retention is set at create time and there is no second function to deploy,
+    // grant, or watch fail.
+    const logGroup = new logs.LogGroup(this, `${pascal(app.name)}Logs`, {
+      // Lambda writes here by convention. Deterministic because functionName is
+      // explicit above — an auto-generated name would make this a cycle.
+      logGroupName: `/aws/lambda/${functionName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      // CDK now owns the group, so tearing down a stage would take the logs of
+      // whatever failed with it. Follows the same flag as the ECR repositories.
+      removalPolicy: config.retainAssets
+        ? RemovalPolicy.RETAIN
+        : RemovalPolicy.DESTROY,
+    });
+
     return {
-      functionName: `${config.appName}-${config.stageName}-${app.name}`,
+      functionName,
       description: app.description,
       timeout: Duration.seconds(app.timeoutSeconds ?? 30),
       memorySize: app.memoryMb ?? 512,
-      // Logs are the only way to see a Lambda that failed before it answered.
-      // Without a retention policy they are kept forever and billed forever.
-      logRetention: logs.RetentionDays.ONE_MONTH,
+      logGroup,
       environment: {
         SERVICE_NAME: app.name,
         STAGE: config.stageName,
