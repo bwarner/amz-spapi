@@ -17,7 +17,7 @@
     "cdk:synth": "pnpm cdk -- synth",
     "cdk:diff": "pnpm cdk -- diff",
     "cdk:deploy": "pnpm cdk -- deploy",
-    "setup:couchbase": "tsx scripts/migrate-to-environment-scopes.ts",
+    "couchbase:ddl": "tsx scripts/couchbase-ddl.ts",
     "prepare": "husky"
   },
   "private": true,
