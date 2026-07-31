@@ -6,6 +6,16 @@
       "env": {
         "AUTH0_DOMAIN": "sellavant-dev.us.auth0.com"
       }
+    },
+    "couchbase": {
+      "command": "uvx",
+      "args": ["couchbase-mcp-server"],
+      "env": {
+        "CB_CONNECTION_STRING": "${CB_CONNECT_STRING}",
+        "CB_USERNAME": "${CB_USERNAME}",
+        "CB_PASSWORD": "${CB_PASSWORD}",
+        "CB_MCP_READ_ONLY_MODE": "true"
+      }
     }
   }
 }
