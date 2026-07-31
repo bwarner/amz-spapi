@@ -17,7 +17,7 @@
     "cdk:synth": "pnpm cdk -- synth",
     "cdk:diff": "pnpm cdk -- diff",
     "cdk:deploy": "pnpm cdk -- deploy",
-    "setup:couchbase": "npx nx run @amz-spapi/source:setup-couchbase",
+    "setup:couchbase": "tsx scripts/migrate-to-environment-scopes.ts",
     "prepare": "husky"
   },
   "private": true,

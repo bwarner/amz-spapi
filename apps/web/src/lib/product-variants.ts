@@ -3,6 +3,7 @@ import {
   executeQuery,
   getDocument,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 import {
   ProductVariantSchema,
@@ -31,7 +32,7 @@ export async function listVariants(params: {
 }): Promise<ProductVariant[]> {
   const result = await executeQuery<ProductVariant>(
     SCOPE,
-    `SELECT RAW v FROM \`${COLLECTION}\` v
+    `SELECT RAW v FROM \`${collectionName(SCOPE, COLLECTION)}\` v
      WHERE v.userId = $userId AND v.productId = $productId
        AND v.\`deleted\` IS MISSING
      ORDER BY v.isDefault DESC, v.title`,
@@ -46,7 +47,7 @@ export async function listAllVariants(
 ): Promise<ProductVariant[]> {
   const result = await executeQuery<ProductVariant>(
     SCOPE,
-    `SELECT RAW v FROM \`${COLLECTION}\` v
+    `SELECT RAW v FROM \`${collectionName(SCOPE, COLLECTION)}\` v
      WHERE v.userId = $userId AND v.\`deleted\` IS MISSING
      ORDER BY v.isDefault DESC, v.title`,
     { parameters: { userId } }

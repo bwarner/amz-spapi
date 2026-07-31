@@ -4,6 +4,7 @@ import {
   executeQuery,
   getDocument,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 import { ProductSchema, type Product } from '@farvisionllc/models';
 
@@ -25,7 +26,7 @@ function productDocKey(userId: string, productId: string): string {
 export async function listProducts(userId: string): Promise<Product[]> {
   const result = await executeQuery<Product>(
     SCOPE,
-    `SELECT RAW p FROM \`${COLLECTION}\` p
+    `SELECT RAW p FROM \`${collectionName(SCOPE, COLLECTION)}\` p
      WHERE p.userId = $userId AND p.\`deleted\` IS MISSING
      ORDER BY p.updatedAt DESC`,
     { parameters: { userId } }

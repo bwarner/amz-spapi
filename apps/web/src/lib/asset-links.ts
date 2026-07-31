@@ -3,6 +3,7 @@ import {
   deleteDocument,
   executeQuery,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 import {
   AssetLinkSchema,
@@ -75,7 +76,7 @@ export async function listAssetsForOwner(params: {
 }): Promise<AssetLink[]> {
   const result = await executeQuery<AssetLink>(
     SCOPE,
-    `SELECT RAW l FROM \`${COLLECTION}\` l
+    `SELECT RAW l FROM \`${collectionName(SCOPE, COLLECTION)}\` l
      WHERE l.userId = $userId AND l.ownerType = $ownerType AND l.ownerId = $ownerId`,
     { parameters: params }
   );
@@ -89,7 +90,7 @@ export async function listOwnersOfAsset(params: {
 }): Promise<AssetLink[]> {
   const result = await executeQuery<AssetLink>(
     SCOPE,
-    `SELECT RAW l FROM \`${COLLECTION}\` l
+    `SELECT RAW l FROM \`${collectionName(SCOPE, COLLECTION)}\` l
      WHERE l.userId = $userId AND l.assetId = $assetId`,
     { parameters: params }
   );
