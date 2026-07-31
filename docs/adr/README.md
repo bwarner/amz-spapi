@@ -14,11 +14,12 @@ in the repository?
 
 ## Index
 
-| #                                               | Title                                                                                  | Status   |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------- | -------- |
-| [0001](0001-cdk-deploys-sam-is-local-invoke.md) | CDK deploys AWS infrastructure; SAM is used only for local invoke                      | Accepted |
-| [0002](0002-aws-account-topology.md)            | A dedicated production account for SellAvant, and where the SES identity lives         | Proposed |
-| [0003](0003-dns-and-mail-routing.md)            | Move DNS to Route 53, and split mail by name                                           | Proposed |
-| [0004](0004-database-structure.md)              | Scopes are organisational; environments separate at the cluster boundary or not at all | Accepted |
+| #                                               | Title                                                                                  | Status     |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------- | ---------- |
+| [0001](0001-cdk-deploys-sam-is-local-invoke.md) | CDK deploys AWS infrastructure; SAM is used only for local invoke                      | Accepted   |
+| [0002](0002-aws-account-topology.md)            | A dedicated production account for SellAvant, and where the SES identity lives         | Proposed   |
+| [0003](0003-dns-and-mail-routing.md)            | Move DNS to Route 53, and split mail by name                                           | Proposed   |
+| [0004](0004-database-structure.md)              | Scopes are organisational; environments separate at the cluster boundary or not at all | Superseded |
+| [0005](0005-environment-scopes.md)              | One scope per environment, with a database user per scope                              | Accepted   |
 
 Related epic: [#51 — AWS integration](https://github.com/bwarner/amz-spapi/issues/51)

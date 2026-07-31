@@ -1,6 +1,6 @@
 # ADR-0004: Scopes are organisational; environments separate at the cluster boundary or not at all
 
-- **Status:** Accepted
+- **Status:** Superseded in part by [ADR-0005](0005-environment-scopes.md)
 - **Date:** 2026-07-31
 - **Deciders:** Byron Warner
 - **Depends on:** [ADR-0002](0002-aws-account-topology.md)
@@ -40,12 +40,20 @@ nothing may depend on them being one.**
 They stay as they are — readable, harmless, and not worth a migration — with two
 consequences that are the point of writing this down:
 
-**1. Environments are never separated by scope.** Separation happens at the
-cluster or bucket boundary, or it does not happen. A scope prefix
-(`dev_a_plus`) would give namespace separation without isolation: one
-credential, one cluster, and a wrong environment variable still reads the wrong
-data. That is the same isolation-by-convention that ADR-0002 rejected for AWS
-accounts, and it would cost a resolver threaded through every call site.
+**1. Environments are never separated by scope.**
+
+> **Superseded by [ADR-0005](0005-environment-scopes.md).** This reasoning
+> assumed a shared credential. Couchbase grants at scope level, so a database
+> user per environment makes a wrong environment variable fail closed rather
+> than read the wrong data. The rest of this ADR — scopes carry no inherent
+> boundary, no primary indexes, no reserved-word names, tenancy is a field —
+> still stands.
+> Separation happens at the
+> cluster or bucket boundary, or it does not happen. A scope prefix
+> (`dev_a_plus`) would give namespace separation without isolation: one
+> credential, one cluster, and a wrong environment variable still reads the wrong
+> data. That is the same isolation-by-convention that ADR-0002 rejected for AWS
+> accounts, and it would cost a resolver threaded through every call site.
 
 On the free tier there is one bucket, so **dev, staging and production share
 data**. That is honest for a single-operator product where they are the same
