@@ -8,12 +8,12 @@
       }
     },
     "couchbase": {
-      "command": "uvx",
-      "args": ["couchbase-mcp-server"],
+      "command": "sh",
+      "args": [
+        "-c",
+        "set -a && . ./apps/web/.env.local && set +a && CB_CONNECTION_STRING=\"$CB_CONNECT_STRING\" exec uvx couchbase-mcp-server"
+      ],
       "env": {
-        "CB_CONNECTION_STRING": "${CB_CONNECT_STRING}",
-        "CB_USERNAME": "${CB_USERNAME}",
-        "CB_PASSWORD": "${CB_PASSWORD}",
         "CB_MCP_READ_ONLY_MODE": "true"
       }
     }
