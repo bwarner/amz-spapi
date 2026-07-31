@@ -4,6 +4,7 @@ import {
   executeQuery,
   getDocument,
   upsertDocument,
+  collectionName,
 } from '@amz-spapi/couchbase-utils';
 
 const SCOPE = 'a_plus';
@@ -115,7 +116,7 @@ export async function listAPlusDrafts(
   const result = await executeQuery<APlusDraftSummary & { asin?: string }>(
     SCOPE,
     `SELECT draftId, userId, brandGuideId, name, productName, asin, asins, contentTier, createdAt, updatedAt
-     FROM \`${DRAFTS_COLLECTION}\`
+     FROM \`${collectionName(SCOPE, DRAFTS_COLLECTION)}\`
      WHERE userId = $userId
      AND \`deleted\` IS MISSING
      ORDER BY updatedAt DESC`,
@@ -135,7 +136,7 @@ export async function listAllAPlusDraftDocs(
   const result = await executeQuery<APlusDraft>(
     SCOPE,
     `SELECT RAW d
-     FROM \`${DRAFTS_COLLECTION}\` d
+     FROM \`${collectionName(SCOPE, DRAFTS_COLLECTION)}\` d
      WHERE d.userId = $userId
      AND d.\`deleted\` IS MISSING`,
     { parameters: { userId } }
@@ -240,7 +241,7 @@ export async function listDraftVersions(
   const result = await executeQuery<APlusDraftVersionSummary>(
     SCOPE,
     `SELECT ${VERSION_SUMMARY_FIELDS}
-     FROM \`${DRAFT_VERSIONS_COLLECTION}\`
+     FROM \`${collectionName(SCOPE, DRAFT_VERSIONS_COLLECTION)}\`
      WHERE userId = $userId AND draftId = $draftId
      ORDER BY createdAt DESC`,
     { parameters: { userId, draftId } }
@@ -329,7 +330,7 @@ export async function listAllDraftVersionDocs(
   const result = await executeQuery<APlusDraftVersion>(
     SCOPE,
     `SELECT RAW v
-     FROM \`${DRAFT_VERSIONS_COLLECTION}\` v
+     FROM \`${collectionName(SCOPE, DRAFT_VERSIONS_COLLECTION)}\` v
      WHERE v.userId = $userId`,
     { parameters: { userId } }
   );
@@ -364,7 +365,7 @@ export async function listBrandGuides(
   const result = await executeQuery<APlusBrandGuide>(
     SCOPE,
     `SELECT brandGuideId, userId, name, brandName, colors, palette, fonts, voice, logoAsset, logoNotes, styleGuideFiles, styleGuideLinks, styleGuideNotes, createdAt, updatedAt
-     FROM \`${BRAND_GUIDES_COLLECTION}\`
+     FROM \`${collectionName(SCOPE, BRAND_GUIDES_COLLECTION)}\`
      WHERE userId = $userId
      AND \`deleted\` IS MISSING
      ORDER BY updatedAt DESC`,

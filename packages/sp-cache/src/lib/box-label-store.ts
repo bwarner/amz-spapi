@@ -15,7 +15,11 @@
  */
 
 import { createHash } from 'node:crypto';
-import { executeQuery, upsertDocument } from '@amz-spapi/couchbase-utils';
+import {
+  executeQuery,
+  upsertDocument,
+  collectionName,
+} from '@amz-spapi/couchbase-utils';
 
 /** Seam for tests: ESM exports are read-only and cannot be monkey-patched. */
 export const boxLabelStorage = { executeQuery, upsertDocument };
@@ -132,7 +136,7 @@ export async function listBoxLabels(params: {
 
   const { rows } = await boxLabelStorage.executeQuery<StoredBoxLabel>(
     SCOPE,
-    `SELECT RAW d FROM \`${COLLECTION}\` AS d
+    `SELECT RAW d FROM \`${collectionName(SCOPE, COLLECTION)}\` AS d
        WHERE ${conditions.join(' AND ')}
        ORDER BY d.shipmentId, d.boxNumber`,
     { parameters, readonly: true }

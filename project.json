@@ -2,10 +2,10 @@
   "name": "@amz-spapi/source",
   "$schema": "node_modules/nx/schemas/project-schema.json",
   "targets": {
-    "setup-couchbase": {
+    "couchbase-ddl": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "node --loader ts-node/esm --env-file=apps/web/.env.local scripts/setup-couchbase.ts",
+        "command": "tsx --env-file=apps/web/.env.local scripts/couchbase-ddl.ts",
         "cwd": "{workspaceRoot}"
       }
     },
