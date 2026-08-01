@@ -100,8 +100,10 @@ export class AmazonAdsApiClient {
 
             // Retry the original request
             return this.httpClient(originalRequest);
-          } catch (refreshError) {
-            // Token refresh failed, reject with original error
+          } catch {
+            // Token refresh failed. Rejecting with the ORIGINAL error, so the
+            // caller sees the 401 that triggered the refresh rather than the
+            // refresh failure itself.
             return Promise.reject(error);
           }
         }

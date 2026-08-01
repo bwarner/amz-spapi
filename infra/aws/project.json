@@ -1,0 +1,27 @@
+{
+  "name": "infra-aws",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "infra/aws",
+  "projectType": "application",
+  "tags": ["scope:infra", "type:app"],
+  "targets": {
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../coverage/infra/aws"
+      }
+    },
+    "synth": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx cdk synth --app \"node --loader ts-node/esm bin/app.ts\"",
+        "cwd": "infra/aws"
+      },
+      "dependsOn": ["^build"]
+    }
+  }
+}

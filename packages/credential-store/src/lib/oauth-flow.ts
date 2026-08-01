@@ -76,7 +76,9 @@ export class AmazonOAuthFlow {
       createdAt: Date.now(),
     };
 
-    const stateString = Buffer.from(JSON.stringify(state)).toString('base64url');
+    const stateString = Buffer.from(JSON.stringify(state)).toString(
+      'base64url'
+    );
 
     // Determine scopes based on API type
     const scopes = apiType === 'SP_API' ? SP_API_SCOPES : ADS_API_SCOPES;
@@ -128,14 +130,15 @@ export class AmazonOAuthFlow {
 
   /**
    * Exchange authorization code for access and refresh tokens
+   *
+   * Took an `apiType` that it never read: the endpoint comes from `this.region`
+   * and the credentials from `this.config`, both fixed when the flow was
+   * constructed — so the caller has already chosen SP-API or Ads by then.
+   *
    * @param code Authorization code from OAuth callback
-   * @param apiType SP_API or ADS_API
    * @returns Token response from LWA
    */
-  public async exchangeCodeForTokens(
-    code: string,
-    apiType: AmazonApiType
-  ): Promise<LwaTokenResponse> {
+  public async exchangeCodeForTokens(code: string): Promise<LwaTokenResponse> {
     const tokenEndpoint = LWA_TOKEN_ENDPOINTS[this.region];
 
     const params = new URLSearchParams({
@@ -157,7 +160,9 @@ export class AmazonOAuthFlow {
     } catch (error: any) {
       if (error.response) {
         throw new Error(
-          `LWA token exchange failed: ${error.response.status} - ${JSON.stringify(error.response.data)}`
+          `LWA token exchange failed: ${
+            error.response.status
+          } - ${JSON.stringify(error.response.data)}`
         );
       }
       throw new Error(`LWA token exchange failed: ${error.message}`);
@@ -169,7 +174,9 @@ export class AmazonOAuthFlow {
    * @param refreshToken The refresh token from previous OAuth flow
    * @returns New access token and expiry
    */
-  public async refreshAccessToken(refreshToken: string): Promise<LwaTokenResponse> {
+  public async refreshAccessToken(
+    refreshToken: string
+  ): Promise<LwaTokenResponse> {
     const tokenEndpoint = LWA_TOKEN_ENDPOINTS[this.region];
 
     const params = new URLSearchParams({
@@ -190,7 +197,9 @@ export class AmazonOAuthFlow {
     } catch (error: any) {
       if (error.response) {
         throw new Error(
-          `LWA token refresh failed: ${error.response.status} - ${JSON.stringify(error.response.data)}`
+          `LWA token refresh failed: ${
+            error.response.status
+          } - ${JSON.stringify(error.response.data)}`
         );
       }
       throw new Error(`LWA token refresh failed: ${error.message}`);
@@ -214,7 +223,7 @@ export class AmazonOAuthFlow {
     advertiserProfileId?: string
   ): Promise<AmazonCredentialProfile> {
     // Exchange code for tokens
-    const tokens = await this.exchangeCodeForTokens(code, state.apiType);
+    const tokens = await this.exchangeCodeForTokens(code);
 
     // Create appropriate profile based on API type
     if (state.apiType === 'SP_API') {
@@ -258,7 +267,9 @@ export function validateOAuthCallback(params: {
 }): void {
   if (params.error) {
     throw new Error(
-      `OAuth error: ${params.error}${params.error_description ? ` - ${params.error_description}` : ''}`
+      `OAuth error: ${params.error}${
+        params.error_description ? ` - ${params.error_description}` : ''
+      }`
     );
   }
 

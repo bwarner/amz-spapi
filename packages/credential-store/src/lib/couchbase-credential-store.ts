@@ -44,7 +44,11 @@ export class CouchbaseCredentialStore implements ICredentialRepository {
   /**
    * Generate document key for Couchbase
    */
-  private getDocKey(profileName: string, apiType: AmazonApiType, userId?: string): string {
+  private getDocKey(
+    profileName: string,
+    apiType: AmazonApiType,
+    userId?: string
+  ): string {
     const userPart = userId || 'default';
     return `${apiType}::${userPart}::${profileName}`;
   }
@@ -145,7 +149,7 @@ export class CouchbaseCredentialStore implements ICredentialRepository {
           validated.user_id
         );
       }
-    } catch (error) {
+    } catch {
       // Ignore errors setting default - not critical
     }
   }
@@ -223,7 +227,10 @@ export class CouchbaseCredentialStore implements ICredentialRepository {
     return Date.now() >= profile.access_token_expires_at - bufferTime;
   }
 
-  async listProfiles(apiType?: AmazonApiType, userId?: string): Promise<string[]> {
+  async listProfiles(
+    apiType?: AmazonApiType,
+    userId?: string
+  ): Promise<string[]> {
     // Build N1QL query
     const bucketName = this.collection.scope.bucket.name;
     const scopeName = this.collection.scope.name;
@@ -249,11 +256,16 @@ export class CouchbaseCredentialStore implements ICredentialRepository {
 
     query += ' ORDER BY profile_name';
 
-    const result = await this.collection.scope.query(query, { parameters: params });
+    const result = await this.collection.scope.query(query, {
+      parameters: params,
+    });
     return result.rows.map((row: any) => row.profile_name);
   }
 
-  async getDefaultProfile(apiType: AmazonApiType, userId?: string): Promise<string | null> {
+  async getDefaultProfile(
+    apiType: AmazonApiType,
+    userId?: string
+  ): Promise<string | null> {
     try {
       const docKey = this.getDefaultKey(apiType, userId);
       const result = await this.collection.get(docKey);
@@ -301,7 +313,7 @@ export class CouchbaseCredentialStore implements ICredentialRepository {
       const defaultKey = this.getDefaultKey(apiType, userId);
       try {
         await this.collection.remove(defaultKey);
-      } catch (error) {
+      } catch {
         // Ignore if already deleted
       }
 

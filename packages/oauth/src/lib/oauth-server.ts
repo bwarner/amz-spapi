@@ -73,7 +73,9 @@ export async function startOAuthServer(
         const { code, state, error, error_description } = req.query;
 
         if (error) {
-          const errorMsg = `OAuth error: ${error} - ${error_description || 'Unknown error'}`;
+          const errorMsg = `OAuth error: ${error} - ${
+            error_description || 'Unknown error'
+          }`;
           console.error(errorMsg);
           res.send(`
             <!DOCTYPE html>
@@ -156,9 +158,11 @@ export async function startOAuthServer(
         }
 
         console.log('Exchanging authorization code for tokens...');
-        // Parse state to get the API type
-        const parsedState = oauthFlow.parseState(state);
-        const tokens = await oauthFlow.exchangeCodeForTokens(code, parsedState.apiType);
+        // Called for its validation, not its result: it throws on a tampered
+        // or expired state, which is the CSRF check. Nothing reads the parsed
+        // value here — every field this handler needs is already in `config`.
+        oauthFlow.parseState(state);
+        const tokens = await oauthFlow.exchangeCodeForTokens(code);
         console.log('Successfully obtained tokens');
 
         // Store the credentials
@@ -185,7 +189,9 @@ export async function startOAuthServer(
           config.apiType
         );
 
-        console.log(`Credentials stored successfully for profile: ${config.profileName}`);
+        console.log(
+          `Credentials stored successfully for profile: ${config.profileName}`
+        );
 
         res.send(`
           <!DOCTYPE html>
@@ -205,19 +211,31 @@ export async function startOAuthServer(
             <body>
               <div class="success">
                 <h1>✓ Authorization Successful!</h1>
-                <p>Your Amazon ${config.apiType === 'SP_API' ? 'Selling Partner' : 'Advertising'} API credentials have been saved.</p>
+                <p>Your Amazon ${
+                  config.apiType === 'SP_API'
+                    ? 'Selling Partner'
+                    : 'Advertising'
+                } API credentials have been saved.</p>
                 <div class="info">
                   <div class="info-item">
-                    <span class="info-label">Profile:</span> <code>${config.profileName}</code>
+                    <span class="info-label">Profile:</span> <code>${
+                      config.profileName
+                    }</code>
                   </div>
                   <div class="info-item">
-                    <span class="info-label">API Type:</span> <code>${config.apiType}</code>
+                    <span class="info-label">API Type:</span> <code>${
+                      config.apiType
+                    }</code>
                   </div>
                   <div class="info-item">
-                    <span class="info-label">Marketplace:</span> <code>${config.marketplaceId}</code>
+                    <span class="info-label">Marketplace:</span> <code>${
+                      config.marketplaceId
+                    }</code>
                   </div>
                   <div class="info-item">
-                    <span class="info-label">Region:</span> <code>${config.region || 'NA'}</code>
+                    <span class="info-label">Region:</span> <code>${
+                      config.region || 'NA'
+                    }</code>
                   </div>
                 </div>
                 <p><strong>You can now close this window and return to the terminal.</strong></p>
