@@ -38,8 +38,7 @@ function backgroundRemovalPublicPath(): string {
  * as a new `generated-*` asset.
  */
 
-const GRAVITY_POSITIONS = ['center', 'top', 'bottom', 'left', 'right'] as const;
-type Gravity = (typeof GRAVITY_POSITIONS)[number];
+type Gravity = 'center' | 'top' | 'bottom' | 'left' | 'right';
 
 function outputFormat(mimeType: string): {
   mime: string;

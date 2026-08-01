@@ -97,7 +97,11 @@ export class SqliteCredentialStore implements ICredentialRepository {
   /**
    * Encrypt sensitive fields
    */
-  private encrypt(data: string): { encrypted: string; iv: string; authTag: string } {
+  private encrypt(data: string): {
+    encrypted: string;
+    iv: string;
+    authTag: string;
+  } {
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv(ALGORITHM, this.encryptionKey, iv);
 
@@ -115,7 +119,11 @@ export class SqliteCredentialStore implements ICredentialRepository {
   /**
    * Decrypt sensitive fields
    */
-  private decrypt(encrypted: string, ivHex: string, authTagHex: string): string {
+  private decrypt(
+    encrypted: string,
+    ivHex: string,
+    authTagHex: string
+  ): string {
     const iv = Buffer.from(ivHex, 'hex');
     const authTag = Buffer.from(authTagHex, 'hex');
     const decipher = crypto.createDecipheriv(ALGORITHM, this.encryptionKey, iv);
@@ -190,7 +198,7 @@ export class SqliteCredentialStore implements ICredentialRepository {
   async getProfile(
     profileName: string,
     apiType: AmazonApiType,
-    userId?: string // Ignored for CLI
+    _userId?: string // Ignored: this store is single-user (CLI)
   ): Promise<AmazonCredentialProfile | null> {
     const stmt = this.db.prepare(`
       SELECT * FROM profiles
@@ -216,11 +224,15 @@ export class SqliteCredentialStore implements ICredentialRepository {
       client_secret: secrets.client_secret,
       ...(secrets.refresh_token && { refresh_token: secrets.refresh_token }),
       ...(secrets.access_token && { access_token: secrets.access_token }),
-      ...(row.access_token_expires_at && { access_token_expires_at: row.access_token_expires_at }),
+      ...(row.access_token_expires_at && {
+        access_token_expires_at: row.access_token_expires_at,
+      }),
       marketplace_id: row.marketplace_id,
       ...(row.region && { region: row.region }),
       ...(row.seller_id && { seller_id: row.seller_id }),
-      ...(row.advertiser_profile_id && { advertiser_profile_id: row.advertiser_profile_id }),
+      ...(row.advertiser_profile_id && {
+        advertiser_profile_id: row.advertiser_profile_id,
+      }),
       created_at: row.created_at,
       updated_at: row.updated_at,
     });
@@ -261,8 +273,10 @@ export class SqliteCredentialStore implements ICredentialRepository {
     return Date.now() >= profile.access_token_expires_at - bufferTime;
   }
 
-  async listProfiles(apiType?: AmazonApiType, userId?: string): Promise<string[]> {
-    // userId ignored for CLI single-user mode
+  async listProfiles(
+    apiType?: AmazonApiType,
+    _userId?: string // Ignored: this store is single-user (CLI)
+  ): Promise<string[]> {
     let query = 'SELECT DISTINCT profile_name FROM profiles WHERE 1=1';
     const params: any[] = [];
 
@@ -278,8 +292,10 @@ export class SqliteCredentialStore implements ICredentialRepository {
     return rows.map((r) => r.profile_name);
   }
 
-  async getDefaultProfile(apiType: AmazonApiType, userId?: string): Promise<string | null> {
-    // userId ignored for CLI
+  async getDefaultProfile(
+    apiType: AmazonApiType,
+    _userId?: string // Ignored: this store is single-user (CLI)
+  ): Promise<string | null> {
     const stmt = this.db.prepare(`
       SELECT profile_name FROM default_profiles WHERE api_type = ?
     `);
@@ -291,7 +307,7 @@ export class SqliteCredentialStore implements ICredentialRepository {
   async setDefaultProfile(
     profileName: string,
     apiType: AmazonApiType,
-    userId?: string // Ignored for CLI
+    _userId?: string // Ignored: this store is single-user (CLI)
   ): Promise<void> {
     // Verify profile exists
     const profile = await this.getProfile(profileName, apiType);
@@ -312,7 +328,7 @@ export class SqliteCredentialStore implements ICredentialRepository {
   async deleteProfile(
     profileName: string,
     apiType: AmazonApiType,
-    userId?: string // Ignored for CLI
+    _userId?: string // Ignored: this store is single-user (CLI)
   ): Promise<void> {
     const stmt = this.db.prepare(`
       DELETE FROM profiles
