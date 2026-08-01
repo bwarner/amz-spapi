@@ -25,6 +25,7 @@ import {
 } from '../../../lib/media-assets';
 import { createImageOps } from '../../../lib/image-ops';
 import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
+import { createDocumentOps } from '../../../lib/document-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
@@ -321,6 +322,7 @@ export async function POST(request: Request) {
     webOps: createWebOps(chatUserId, chatId),
     sourcingOps: createSourcingOps(chatUserId, chatId),
     complianceOps: createComplianceOps(chatUserId),
+    documentOps: createDocumentOps({ userId: chatUserId }),
     reportOps,
     listingWrites,
     marketplaceId: userMarketplaceId,

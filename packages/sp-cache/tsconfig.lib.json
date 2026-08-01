@@ -14,6 +14,9 @@
       "path": "../sp-client/tsconfig.lib.json"
     },
     {
+      "path": "../models/tsconfig.lib.json"
+    },
+    {
       "path": "../../libs/couchbase-utils/tsconfig.lib.json"
     }
   ]

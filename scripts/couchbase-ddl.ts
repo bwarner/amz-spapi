@@ -56,6 +56,17 @@ requireConfig();
 const DECLARED = SOURCES.map(flatName);
 
 /**
+ * Collections the integration suite creates and cleans up after itself.
+ *
+ * Matches the prefix that suite uses (`CB_TEST_DOMAIN`, default `itest`), so a
+ * developer who points it at a different prefix gets the same exemption.
+ */
+function isTestOwned(name: string): boolean {
+  const domain = process.env['CB_TEST_DOMAIN'] || 'itest';
+  return name.startsWith(`${domain}_`);
+}
+
+/**
  * The system keyspaces do not agree on their own column names: `system:scopes`
  * and `system:keyspaces` use `bucket` and `scope`, while `system:indexes` below
  * uses `bucket_id`, `scope_id` and `keyspace_id`. Filtering either one with the
@@ -126,8 +137,15 @@ async function main() {
   // Collections are never dropped, only reported. A collection holds data and a
   // declaration file is a weak reason to destroy it; removing one should be a
   // deliberate act with a human looking at the row count.
+  //
+  // The integration suite provisions and owns its own collections
+  // (`libs/couchbase-utils`, prefix from CB_TEST_DOMAIN). They are deliberately
+  // not declared here — declaring them would create them in production — so
+  // without this exclusion `--check` reports permanent drift on any environment
+  // the suite has ever run against, and a drift gate that is always red is one
+  // nobody reads.
   const extraCollections = [...collections].filter(
-    (name) => !DECLARED.includes(name)
+    (name) => !DECLARED.includes(name) && !isTestOwned(name)
   );
 
   const missingIndexes: IndexSpec[] = [];

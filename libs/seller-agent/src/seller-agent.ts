@@ -242,6 +242,83 @@ export interface SellerReportOps {
   }): Promise<ReportCoverage>;
 }
 
+/** What reading a document tells the agent, before anything is filed. */
+export type DocumentReading = {
+  assetId: string;
+  fileName?: string;
+  /** The recogniser's verdict on what kind of document this is. */
+  kind: string;
+  confidence: number;
+  /** True when recognition could not decide — ask rather than guess. */
+  needsUserChoice: boolean;
+  /** Runners-up, so a question can name real options. */
+  alternatives: string[];
+  /** The purchase role this kind implies, or null if it is not a purchase document. */
+  suggestedRole: string | null;
+  /**
+   * Whether this vendor already appears in the seller's stored documents.
+   *
+   * The evidence that recognition cannot supply. A grocery receipt and a
+   * supplier receipt are both `receipt` with high confidence; what tells them
+   * apart is whether we have bought from this vendor before.
+   */
+  vendorIsKnownSupplier: boolean;
+  extraction?: {
+    vendorName: string;
+    documentDate?: string;
+    currency: string;
+    total: number;
+    lines: Array<{
+      description: string;
+      kind: string;
+      quantity?: number;
+      amount: number;
+    }>;
+    needsReview: boolean;
+  };
+  /** Set when there was nothing to extract, or extraction failed. */
+  note?: string;
+  /** True when this asset is already filed, so saving again is a no-op. */
+  alreadySaved: boolean;
+};
+
+/**
+ * Host-provided document reading and filing (#73).
+ *
+ * Reading and filing are separate operations on purpose. Answering a question
+ * about landed cost should not silently put someone's document into the
+ * business record — filing is its own decision, and the agent has to say it is
+ * doing it.
+ */
+export interface SellerDocumentOps {
+  /** Read and extract WITHOUT persisting anything. */
+  readDocument(params: { assetId: string }): Promise<DocumentReading>;
+  /** File a previously read document. Explicit, never implied by reading. */
+  saveDocument(params: {
+    assetId: string;
+    role?: string;
+  }): Promise<{ documentId: string; role: string }>;
+  listDocuments(params: {
+    from?: string;
+    to?: string;
+    vendorName?: string;
+  }): Promise<
+    Array<{
+      documentId: string;
+      role: string;
+      vendorName: string;
+      documentDate?: string;
+      currency: string;
+      total: number;
+      needsReview: boolean;
+    }>
+  >;
+  setDocumentRole(params: {
+    documentId: string;
+    role: string;
+  }): Promise<{ documentId: string; role: string }>;
+}
+
 /**
  * Host-provided LIVE listing writes. Implementations must ownership-check
  * assets, snapshot before writing, and honor any SKU allowlist.
@@ -357,6 +434,7 @@ export interface SellerAgentConfig {
   sourcingOps?: SellerSourcingOps;
   complianceOps?: SellerComplianceOps;
   reportOps?: SellerReportOps;
+  documentOps?: SellerDocumentOps;
   listingWrites?: SellerListingWrites;
   modelTier?: ModelTier;
   marketplaceId: string;
@@ -2505,6 +2583,180 @@ function getImageTools(
   };
 }
 
+/**
+ * Reading and filing documents (#73).
+ *
+ * Two tools rather than one, because the seller's rule is not "keep everything
+ * you read". A supplier invoice is evidence for reconciliation later; a grocery
+ * receipt is not, unless asked. Reading answers the question in front of you;
+ * filing is a separate act the agent has to announce.
+ *
+ * Relevance is not a confidence threshold on recognition. `recognizeDocument`
+ * reports what a document IS, and a grocery receipt and a supplier receipt are
+ * both `receipt` at high confidence — the recogniser is working correctly and
+ * still cannot tell them apart for this purpose. So `read-document` returns
+ * `vendorIsKnownSupplier` and the model decides, asking when it is unclear.
+ * Getting this wrong is asymmetric: filing someone's personal receipts into the
+ * business record is worse than one unnecessary question.
+ */
+function getDocumentTools(documentOps: SellerDocumentOps) {
+  const roleSchema = z
+    .enum([
+      'commercial-invoice',
+      'proforma',
+      'payment-record',
+      'customs-declaration',
+      'freight-invoice',
+      'transport-document',
+      'proof-of-delivery',
+      'packing-list',
+      'other',
+    ])
+    .describe(
+      'Which question this document is authoritative for. A waybill is a ' +
+        'transport-document and bills NOTHING — filing it as an invoice would ' +
+        'count the freight twice.'
+    );
+
+  return {
+    'read-document': {
+      description:
+        'Read an uploaded document (invoice, receipt, waybill, proof of delivery) ' +
+        'and return what it says, WITHOUT filing it. Use this to answer a question ' +
+        'from a document the user just attached — landed cost, what a supplier ' +
+        'charged, what a carrier weighed. ' +
+        'Reading does NOT keep the document. If it is business evidence worth ' +
+        'keeping, call save-document as a separate, announced step. ' +
+        'Check the result before deciding: when needsUserChoice is true, ask which ' +
+        'of the alternatives it is rather than guessing. When ' +
+        'vendorIsKnownSupplier is false, this may be a personal receipt rather ' +
+        'than a supplier document — ask before filing it, and say why you are ' +
+        'asking. Never file a document the user did not ask you to keep and whose ' +
+        'relevance you are unsure of.',
+      inputSchema: z.object({
+        assetId: z
+          .string()
+          .describe('The uploaded file, as returned when it was attached.'),
+      }),
+      execute: async (input: { assetId: string }) => {
+        try {
+          return {
+            success: true as const,
+            ...(await documentOps.readDocument(input)),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not read document.',
+          };
+        }
+      },
+    },
+
+    'save-document': {
+      description:
+        'File a document that has already been read, so reconciliation can use it ' +
+        'weeks later when the rest of the purchase arrives. Only call this when ' +
+        'the document is business evidence AND either the user asked to keep it or ' +
+        'you have confirmed it is relevant. Tell the user you are filing it. ' +
+        'Safe to repeat: the same file is stored once, so re-filing does not ' +
+        'duplicate. Pass role only to override a wrong classification.',
+      inputSchema: z.object({
+        assetId: z.string(),
+        role: roleSchema.optional(),
+      }),
+      execute: async (input: { assetId: string; role?: string }) => {
+        try {
+          const saved = await documentOps.saveDocument(input);
+          return {
+            success: true as const,
+            ...saved,
+            note: 'Filed. Say so, and say what role it was filed under.',
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not save document.',
+          };
+        }
+      },
+    },
+
+    'list-documents': {
+      description:
+        'Documents already filed for this seller, newest first by the date on the ' +
+        'document. Use this to answer questions that span uploads — what a ' +
+        'supplier has invoiced, what a purchase cost all-in, whether the waybill ' +
+        'for an invoice has arrived. Filter by vendor or date range to keep it ' +
+        'small. Free and instant; no model call.',
+      inputSchema: z.object({
+        vendorName: z.string().optional(),
+        from: z
+          .string()
+          .optional()
+          .describe('YYYY-MM-DD, on the document date'),
+        to: z.string().optional().describe('YYYY-MM-DD'),
+      }),
+      execute: async (input: {
+        vendorName?: string;
+        from?: string;
+        to?: string;
+      }) => {
+        try {
+          const documents = await documentOps.listDocuments(input);
+          return {
+            success: true as const,
+            documents,
+            note: documents.some((doc) => doc.needsReview)
+              ? 'Some of these are flagged needsReview — say so before using ' +
+                'their figures as cost.'
+              : undefined,
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not list documents.',
+          };
+        }
+      },
+    },
+
+    'set-document-role': {
+      description:
+        'Correct how a filed document is classified. The role decides which ' +
+        'document is authoritative for cost, weight, payment and delivery, so a ' +
+        'misfiled waybill makes freight count as cost. Use when the user says a ' +
+        'document was filed wrongly.',
+      inputSchema: z.object({ documentId: z.string(), role: roleSchema }),
+      execute: async (input: { documentId: string; role: string }) => {
+        try {
+          return {
+            success: true as const,
+            ...(await documentOps.setDocumentRole(input)),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not set the role.',
+          };
+        }
+      },
+    },
+  };
+}
+
 export function createSellerAgent({
   spCache,
   provider,
@@ -2515,6 +2767,7 @@ export function createSellerAgent({
   sourcingOps,
   complianceOps,
   reportOps,
+  documentOps,
   listingWrites,
   modelTier,
   marketplaceId,
@@ -2539,6 +2792,7 @@ export function createSellerAgent({
     ? getComplianceTools(complianceOps)
     : {};
   const reportTools = reportOps ? getReportTools(reportOps) : {};
+  const documentTools = documentOps ? getDocumentTools(documentOps) : {};
   const listingWriteTools = listingWrites
     ? getListingWriteTools(listingWrites)
     : {};
@@ -2553,6 +2807,7 @@ export function createSellerAgent({
     ...sourcingTools,
     ...complianceTools,
     ...reportTools,
+    ...documentTools,
     ...listingWriteTools,
   };
 

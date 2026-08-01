@@ -58,3 +58,21 @@ export {
   BoxLabelError,
 } from './lib/box-label-store.js';
 export type { StoredBoxLabel, BoxLabelInput } from './lib/box-label-store.js';
+export {
+  confirmPurchase,
+  documentStorage,
+  DocumentStoreError,
+  getStoredDocument,
+  listDocuments,
+  purchaseGrouping,
+  roleForRecognisedKind,
+  setDocumentRole,
+  storeExtractedDocument,
+} from './lib/document-store.js';
+export type {
+  ListDocumentsFilters,
+  RoleSource,
+  StoreDocumentParams,
+  StoredDocument,
+  StoredRecognition,
+} from './lib/document-store.js';

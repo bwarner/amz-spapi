@@ -3,7 +3,7 @@ import {
   recognizeDocument,
   summariseBoxLabels,
 } from '@farvisionllc/models';
-import { storeBoxLabel } from '@amz-spapi/sp-cache';
+import { storeBoxLabel, storeExtractedDocument } from '@amz-spapi/sp-cache';
 import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
 import { auth0 } from '../../../../lib/auth0';
 import {
@@ -239,6 +239,46 @@ export async function POST(request: Request) {
       }
     }
 
+    // Keep the extraction, so reconciliation can read it weeks later when the
+    // waybill for this invoice finally arrives (#50). Without this the figures
+    // lived only in the response below, and the next upload paid the model
+    // again for a document already read.
+    //
+    // Failing to store must not fail the upload, for the same reason the box
+    // label path does not: the file is kept and classified either way, and the
+    // seller is told which happened.
+    let documentId: string | undefined;
+    let documentStoreError: string | undefined;
+    if (extraction) {
+      try {
+        const record = await storeExtractedDocument({
+          userId: session.user.sub,
+          assetId: asset.assetId,
+          fileName: file.name,
+          recognition: {
+            kind: recognition.kind,
+            confidence: recognition.confidence,
+            needsUserChoice: recognition.needsUserChoice,
+            alternatives: recognition.alternatives.map((entry) => entry.kind),
+            signals: recognition.signals.map((signal) => signal.reason),
+          },
+          extracted: extraction.document,
+          issues: extraction.issues,
+          needsReview: extraction.needsReview,
+          modelId: extraction.modelId,
+        });
+        documentId = record.documentId;
+      } catch (error) {
+        documentStoreError =
+          error instanceof Error ? error.message : 'Could not store document.';
+        console.error(
+          '[documents] extraction not stored',
+          file.name,
+          documentStoreError
+        );
+      }
+    }
+
     return Response.json({
       assetId: asset.assetId,
       url: `/api/a-plus/assets/${asset.assetId}`,
@@ -275,6 +315,10 @@ export async function POST(request: Request) {
       extractionError,
       spreadsheet,
       spreadsheetError,
+      // Present once the extraction is kept, so a caller can refile the role or
+      // group it into a purchase without re-uploading.
+      documentId,
+      documentStoreError,
       recognition: {
         kind: recognition.kind,
         confidence: recognition.confidence,
