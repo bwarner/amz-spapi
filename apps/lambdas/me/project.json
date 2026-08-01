@@ -1,0 +1,48 @@
+{
+  "name": "lambda-me",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/lambdas/me/src",
+  "projectType": "application",
+  "tags": ["scope:lambda", "type:app"],
+  "metadata": {
+    "lambda": {
+      "packaging": "zip",
+      "handler": "main.handler",
+      "description": "Echoes the caller's verified Auth0 claims — proves the authenticated hop.",
+      "timeoutSeconds": 10,
+      "memoryMb": 256,
+      "routes": ["GET /me"]
+    }
+  },
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/lambdas/me",
+        "main": "apps/lambdas/me/src/main.ts",
+        "tsConfig": "apps/lambdas/me/tsconfig.app.json",
+        "platform": "node",
+        "format": ["esm"],
+        "bundle": true,
+        "thirdParty": true,
+        "minify": false,
+        "sourcemap": true,
+        "generatePackageJson": false,
+        "esbuildOptions": {
+          "outExtension": { ".js": ".js" }
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../../coverage/apps/lambdas/me"
+      }
+    }
+  }
+}

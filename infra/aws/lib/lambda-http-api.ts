@@ -17,8 +17,12 @@ export type LambdaHttpApiProps = {
    */
   targets: ReadonlyMap<string, lambda.IFunction>;
   /**
-   * The Auth0 authorizer from #54, applied to every route once it exists.
-   * Until then routes are **unauthenticated** and synth says so.
+   * Applied to every route. Built from the stage's Auth0 settings by
+   * `createAuth0Authorizer`, and undefined for a stage that has none — those
+   * routes are **unauthenticated** and synth says so.
+   *
+   * Typed as the interface, not as the JWT authorizer, so swapping in a Lambda
+   * authorizer later is a change to the factory and nothing here.
    */
   authorizer?: apigwv2.IHttpRouteAuthorizer;
 };
