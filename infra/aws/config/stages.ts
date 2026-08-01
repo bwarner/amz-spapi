@@ -10,6 +10,19 @@ export type StageConfig = {
   retainAssets: boolean;
   noncurrentObjectExpirationDays: number;
   /**
+   * Which Vercel deployment may assume this stage's AWS role (#11).
+   *
+   * All three values end up inside the role's trust policy, so they are the
+   * boundary rather than decoration: `teamSlug` selects the OIDC issuer, and
+   * `projectName` plus `environment` pin the subject to one deployment target.
+   * Absent means the stage grants Vercel no AWS access at all.
+   */
+  vercel?: {
+    teamSlug: string;
+    projectName: string;
+    environment: 'production' | 'preview';
+  };
+  /**
    * The Auth0 tenant that issues the access tokens the API accepts, and the
    * API identifier those tokens must be addressed to (#54).
    *
@@ -38,9 +51,24 @@ export type StageConfig = {
   clientErrorAlarmThreshold?: number;
 };
 
-const MANAGEMENT_ACCOUNT_ID = '132664187310';
-const SHARED_SERVICES_ACCOUNT_ID = '058264463518';
+/**
+ * SellAvant's own account. Dev and staging both live here.
+ *
+ * Staging shares it deliberately: every resource is already named
+ * `<app>-<stage>-…`, so the two stages cannot collide, and a second account
+ * buys isolation nothing yet depends on. Moving staging out later is a change
+ * to one constant.
+ */
 const SELLAVANT_DEV_ACCOUNT_ID = '853583158600';
+
+/**
+ * SellAvant's production account, in the SellAvant OU alongside dev.
+ *
+ * Not the Organizations management account (132664187310), which is where this
+ * used to point, and not SSG's `ssg-prod` (260820062117) — that is a different
+ * product in the same organisation.
+ */
+const SELLAVANT_PROD_ACCOUNT_ID = '108248327073';
 const DEFAULT_REGION = 'us-east-1';
 
 const envAccount = (name: StageName, fallback: string) =>
@@ -82,13 +110,23 @@ export const STAGES: Record<StageName, StageConfig> = {
     ],
     retainAssets: false,
     noncurrentObjectExpirationDays: 30,
+    // Preview deployments only. Production belongs to the prod stage, in the
+    // production account — a dev-account role that trusted Vercel production
+    // would let a preview-grade environment decrypt live seller credentials.
+    vercel: {
+      teamSlug: 'bfwarnergmailcoms-projects',
+      projectName: 'sellavant',
+      environment: 'preview',
+    },
     auth0Domain: envAuth0('dev', 'DOMAIN') || 'sellavant-dev.us.auth0.com',
     auth0Audience: envAuth0('dev', 'AUDIENCE') || 'https://local.sellavant.com',
     alarmEmail: process.env.SELLAVANT_DEV_ALARM_EMAIL,
   },
   staging: {
     stageName: 'staging',
-    account: envAccount('staging', SHARED_SERVICES_ACCOUNT_ID),
+    // Same account as dev, by decision. Resource names carry the stage, so the
+    // two never collide.
+    account: envAccount('staging', SELLAVANT_DEV_ACCOUNT_ID),
     region: envRegion('staging'),
     appName: 'sellavant',
     mediaBucketBaseName: 'sellavant-media-assets',
@@ -101,13 +139,18 @@ export const STAGES: Record<StageName, StageConfig> = {
   },
   prod: {
     stageName: 'prod',
-    account: envAccount('prod', MANAGEMENT_ACCOUNT_ID),
+    account: envAccount('prod', SELLAVANT_PROD_ACCOUNT_ID),
     region: envRegion('prod'),
     appName: 'sellavant',
     mediaBucketBaseName: 'sellavant-media-assets',
     allowedOrigins: ['https://sellavant.com', 'https://www.sellavant.com'],
     retainAssets: true,
     noncurrentObjectExpirationDays: 90,
+    vercel: {
+      teamSlug: 'bfwarnergmailcoms-projects',
+      projectName: 'sellavant',
+      environment: 'production',
+    },
     auth0Domain: envAuth0('prod', 'DOMAIN'),
     auth0Audience: envAuth0('prod', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,

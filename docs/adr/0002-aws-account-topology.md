@@ -1,10 +1,48 @@
 # ADR-0002: A dedicated production account for SellAvant, and where the SES identity lives
 
-- **Status:** Proposed
+- **Status:** Accepted — built 2026-08-01
 - **Date:** 2026-07-30
 - **Deciders:** Byron Warner
 - **Epic:** [#51](https://github.com/bwarner/amz-spapi/issues/51)
 - **Depends on:** [ADR-0001](0001-cdk-deploys-sam-is-local-invoke.md)
+
+## As built (2026-08-01)
+
+The decision below was carried out. The account exists:
+
+```
+SellAvant (ou-8xck-p9uto1vg)
+├── 853583158600  SellAvant Development   dev + staging
+└── 108248327073  SellAvant Production    bfwarner+sellavant-prod@gmail.com
+```
+
+| stage   | account          |
+| ------- | ---------------- |
+| dev     | 853583158600     |
+| staging | 853583158600     |
+| prod    | **108248327073** |
+
+The Context table further down records the _problem_ state and is kept as
+written; this is what is true now.
+
+Created with `organizations create-account` (billing access `DENY`), then moved
+from the root into the SellAvant OU — new accounts land in the root by default,
+so the move is a required second step rather than a tidy-up.
+
+Access is the `WorkloadAdmin` permission set, assigned through the `Developers`
+group in Identity Center, matching how the dev account is reached. Note the
+management account's `OrgAdmin` set can create accounts but can neither
+`sts:AssumeRole` into `OrganizationAccountAccessRole` nor read Identity Center,
+so the assignment cannot be done from the CLI with it — expect to use the
+console.
+
+The account is CDK-bootstrapped, and `media-assets`, `credentials-key` and
+`vercel-access` are deployed. `lambdas` is deliberately **not** deployed yet:
+its one route has no authorizer until [#54](https://github.com/bwarner/amz-spapi/issues/54)
+lands, and deploying it would publish an unauthenticated public API.
+
+Still outstanding: no `prod` Couchbase scope exists, and the SES work in
+[#65](https://github.com/bwarner/amz-spapi/issues/65) has not started.
 
 ## Context
 
