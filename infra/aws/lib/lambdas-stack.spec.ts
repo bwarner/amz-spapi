@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { STAGES } from '../config/stages.js';
+import { STAGES, type StageConfig } from '../config/stages.js';
 import { LambdasStack } from './lambdas-stack.js';
 
 /**
@@ -62,14 +62,24 @@ function workspace(apps: Record<string, Fixture>): string {
   return root;
 }
 
-function synth(root: string): Template {
+/** A stage with no Auth0 tenant, i.e. one that has not reached #54 yet. */
+const UNAUTHENTICATED_STAGE: StageConfig = {
+  ...STAGES.dev,
+  auth0Domain: undefined,
+  auth0Audience: undefined,
+};
+
+function stackOf(root: string, config: StageConfig = STAGES.dev): LambdasStack {
   const app = new cdk.App();
-  const stack = new LambdasStack(app, 'test-lambdas', {
+  return new LambdasStack(app, 'test-lambdas', {
     env: { account: '111122223333', region: 'us-east-1' },
-    config: STAGES.dev,
+    config,
     workspaceRoot: root,
   });
-  return Template.fromStack(stack);
+}
+
+function synth(root: string, config: StageConfig = STAGES.dev): Template {
+  return Template.fromStack(stackOf(root, config));
 }
 
 /** The tag on an image function's ImageUri, which is the asset's content hash. */
@@ -279,18 +289,14 @@ describe('LambdasStack HTTP routes', () => {
     });
   });
 
-  it('warns at synth that the routes have no authorizer yet', () => {
-    // #54 has not wired Auth0. Until it does, every route is open, and that
-    // should be impossible to miss rather than a comment in a file.
-    const root = workspace({
-      orders: { packaging: 'zip', routes: ['GET /orders'] },
-    });
-    const app = new cdk.App();
-    const stack = new LambdasStack(app, 'test-lambdas', {
-      env: { account: '111122223333', region: 'us-east-1' },
-      config: STAGES.dev,
-      workspaceRoot: root,
-    });
+  it('warns at synth when the stage has no Auth0 tenant', () => {
+    // A stage can be stood up before its Auth0 API exists, but every route is
+    // then open, and that should be impossible to miss rather than a comment
+    // in a file.
+    const stack = stackOf(
+      workspace({ orders: { packaging: 'zip', routes: ['GET /orders'] } }),
+      UNAUTHENTICATED_STAGE
+    );
     Template.fromStack(stack);
 
     const warnings = Annotations.fromStack(stack).findWarning(
@@ -298,6 +304,66 @@ describe('LambdasStack HTTP routes', () => {
       Match.stringLikeRegexp('no authorizer')
     );
     expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe('LambdasStack Auth0 authorizer', () => {
+  const routed = () =>
+    workspace({ orders: { packaging: 'zip', routes: ['GET /orders'] } });
+
+  it('attaches a JWT authorizer built from the stage settings', () => {
+    const template = synth(routed());
+
+    template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      AuthorizerType: 'JWT',
+      JwtConfiguration: {
+        Issuer: 'https://sellavant-dev.us.auth0.com/',
+        Audience: ['https://local.sellavant.com'],
+      },
+    });
+  });
+
+  it('authorizes every route, leaving none open by omission', () => {
+    const template = synth(
+      workspace({
+        orders: { packaging: 'zip', routes: ['GET /orders', 'POST /orders'] },
+        me: { packaging: 'zip', routes: ['GET /me'] },
+      })
+    );
+
+    const routes = Object.values(
+      template.findResources('AWS::ApiGatewayV2::Route')
+    );
+    expect(routes).toHaveLength(3);
+    for (const route of routes) {
+      expect(route.Properties.AuthorizationType).toBe('JWT');
+    }
+  });
+
+  it('does not warn when an authorizer is attached', () => {
+    const stack = stackOf(routed());
+    Template.fromStack(stack);
+
+    expect(
+      Annotations.fromStack(stack).findWarning(
+        '*',
+        Match.stringLikeRegexp('no authorizer')
+      )
+    ).toHaveLength(0);
+  });
+
+  it('builds no authorizer for a stage with no Auth0 tenant', () => {
+    const template = synth(routed(), UNAUTHENTICATED_STAGE);
+
+    template.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 0);
+  });
+
+  it('creates no authorizer Lambda — the gateway does the validation', () => {
+    // One function, the routed one. A second would mean a Lambda authorizer
+    // crept back in, which is the cost this design exists to avoid.
+    const template = synth(routed());
+
+    template.resourceCountIs('AWS::Lambda::Function', 1);
   });
 });
 

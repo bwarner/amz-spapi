@@ -7,8 +7,10 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import type { StageConfig } from '../config/stages.js';
+import { createAuth0Authorizer } from './auth0-authorizer.js';
 import { discoverLambdaApps, type LambdaApp } from './lambda-apps.js';
 import { LambdaHttpApi } from './lambda-http-api.js';
+import { ApiMonitoring } from './monitoring.js';
 
 export type LambdasStackProps = cdk.StackProps & {
   config: StageConfig;
@@ -53,6 +55,8 @@ export class LambdasStack extends Stack {
   public readonly functions = new Map<string, lambda.Function>();
   /** What callers invoke. Route traffic here, never at the bare function. */
   public readonly aliases = new Map<string, lambda.Alias>();
+  /** Alarms and the topic they publish to. Subscribe to the topic. */
+  public readonly monitoring: ApiMonitoring;
 
   constructor(scope: Construct, id: string, props: LambdasStackProps) {
     super(scope, id, props);
@@ -91,13 +95,29 @@ export class LambdasStack extends Stack {
     // Only when something asked to be reachable — an API with no routes is a
     // resource nobody can call, deployed on the chance that one day somebody
     // declares one.
-    if (apps.some((app) => app.routes?.length)) {
-      new LambdaHttpApi(this, 'HttpApi', {
-        config,
-        apps,
-        targets: this.aliases,
-      });
-    }
+    const httpApi = apps.some((app) => app.routes?.length)
+      ? new LambdaHttpApi(this, 'HttpApi', {
+          config,
+          apps,
+          targets: this.aliases,
+          // Undefined until a stage has an Auth0 tenant configured, which the
+          // API construct turns into a synth warning rather than a failure.
+          authorizer: createAuth0Authorizer(config),
+        })
+      : undefined;
+
+    // Watches real traffic rather than probing a synthetic endpoint — see the
+    // construct, and ADR-0007 on why `/health` is not the uptime signal.
+    this.monitoring = new ApiMonitoring(this, 'Monitoring', {
+      config,
+      api: httpApi?.api,
+      targets: this.aliases,
+    });
+
+    new CfnOutput(this, 'AlarmTopicArn', {
+      value: this.monitoring.topic.topicArn,
+      description: 'Subscribe to be told when an alarm fires.',
+    });
 
     new CfnOutput(this, 'DeployedLambdaCount', {
       value: String(apps.length),
