@@ -10,7 +10,8 @@
       "handler": "main.handler",
       "description": "Health check — proves the build, package and deploy path.",
       "timeoutSeconds": 10,
-      "memoryMb": 256
+      "memoryMb": 256,
+      "routes": ["GET /health"]
     }
   },
   "targets": {

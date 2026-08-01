@@ -23,8 +23,13 @@ export type LambdaAppMetadata = {
   description?: string;
   timeoutSeconds?: number;
   memoryMb?: number;
-  /** Set for HTTP-facing functions once #54 lands; ignored until then. */
-  route?: string;
+  /**
+   * API Gateway route keys this function answers, in the form `METHOD /path` —
+   * the same string `HttpApi.addRoutes` consumes, so there is one
+   * representation and nothing to translate. Absent means the function is not
+   * HTTP-facing, which is the normal case for queue and event consumers.
+   */
+  routes?: string[];
 };
 
 export type LambdaApp = LambdaAppMetadata & {
@@ -40,11 +45,71 @@ export type LambdaApp = LambdaAppMetadata & {
 
 const PACKAGING: readonly LambdaPackaging[] = ['zip', 'image'];
 
+/** What API Gateway v2 accepts in a route key. `ANY` matches every method. */
+const HTTP_METHODS = [
+  'ANY',
+  'DELETE',
+  'GET',
+  'HEAD',
+  'OPTIONS',
+  'PATCH',
+  'POST',
+  'PUT',
+];
+
+/** `GET /orders/{orderId}` — method, one space, then an absolute path. */
+const ROUTE_KEY = /^([A-Z]+) (\/\S*)$/;
+
 function fail(name: string, problem: string): never {
   throw new Error(
     `Lambda app "${name}": ${problem}. Fix metadata.lambda in ` +
       `apps/lambdas/${name}/project.json — see apps/lambdas/README.md.`
   );
+}
+
+/**
+ * Route keys, rejected loudly rather than half-understood.
+ *
+ * A path with no method would have to be given one by the API stack, and the
+ * only honest default is "all of them" — which silently exposes DELETE on a
+ * function whose author was thinking about GET.
+ */
+function parseRoutes(name: string, raw: unknown): string[] | undefined {
+  if (raw === undefined) return undefined;
+
+  if (!Array.isArray(raw) || raw.length === 0) {
+    fail(
+      name,
+      'metadata.lambda.routes must be a non-empty array of route keys like ' +
+        '["GET /health"]'
+    );
+  }
+
+  const seen = new Set<string>();
+  for (const route of raw) {
+    if (typeof route !== 'string' || !ROUTE_KEY.test(route)) {
+      fail(
+        name,
+        `metadata.lambda.routes entries must look like "GET /health", got ${JSON.stringify(
+          route
+        )}`
+      );
+    }
+    const method = ROUTE_KEY.exec(route)![1];
+    if (!HTTP_METHODS.includes(method)) {
+      fail(
+        name,
+        `"${route}" uses method ${method}, which API Gateway does not accept. ` +
+          `Use one of: ${HTTP_METHODS.join(', ')}`
+      );
+    }
+    if (seen.has(route)) {
+      fail(name, `metadata.lambda.routes lists "${route}" twice`);
+    }
+    seen.add(route);
+  }
+
+  return raw as string[];
 }
 
 /** Parse one project.json's `metadata.lambda` block. */
@@ -117,8 +182,7 @@ export function parseLambdaMetadata(
           : undefined,
       timeoutSeconds: numberOrUndefined('timeoutSeconds'),
       memoryMb: numberOrUndefined('memoryMb'),
-      route:
-        typeof metadata['route'] === 'string' ? metadata['route'] : undefined,
+      routes: parseRoutes(name, metadata['routes']),
     },
   };
 }
@@ -155,5 +219,32 @@ export function discoverLambdaApps(workspaceRoot: string): LambdaApp[] {
     });
   }
 
-  return apps.sort((a, b) => a.name.localeCompare(b.name));
+  apps.sort((a, b) => a.name.localeCompare(b.name));
+  assertNoRouteConflicts(apps);
+  return apps;
+}
+
+/**
+ * Two apps claiming one route key is a mistake in one of them.
+ *
+ * Left to API Gateway it surfaces as a duplicate-construct error naming a
+ * synthesised path, which says nothing about which two `project.json` files
+ * disagree. Checked here, the message names both.
+ */
+function assertNoRouteConflicts(apps: LambdaApp[]): void {
+  const claimed = new Map<string, string>();
+
+  for (const app of apps) {
+    for (const route of app.routes ?? []) {
+      const owner = claimed.get(route);
+      if (owner) {
+        throw new Error(
+          `Route "${route}" is claimed by both "${owner}" and "${app.name}". ` +
+            `Remove it from one of apps/lambdas/${owner}/project.json or ` +
+            `apps/lambdas/${app.name}/project.json.`
+        );
+      }
+      claimed.set(route, app.name);
+    }
+  }
 }

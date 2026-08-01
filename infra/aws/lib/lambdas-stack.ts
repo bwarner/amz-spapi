@@ -2,12 +2,13 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
-import * as ecr from 'aws-cdk-lib/aws-ecr';
+import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import type { StageConfig } from '../config/stages.js';
 import { discoverLambdaApps, type LambdaApp } from './lambda-apps.js';
+import { LambdaHttpApi } from './lambda-http-api.js';
 
 export type LambdasStackProps = cdk.StackProps & {
   config: StageConfig;
@@ -24,18 +25,34 @@ export type LambdasStackProps = cdk.StackProps & {
  *   zip   — an esbuild bundle from `nx build`. No node_modules is shipped;
  *           pnpm's linked layout does not survive packaging, and bundling makes
  *           workspace-dependency resolution a non-issue at runtime.
- *   image — a container built from the app's Dockerfile and pushed to ECR, for
- *           functions with native binaries or model files that cannot be
- *           bundled (ONNX, sharp), and the only way past 250MB unzipped.
+ *   image — a container built from the Dockerfile the build copied next to that
+ *           bundle, for functions with native binaries or model files that
+ *           cannot be bundled (ONNX, sharp), and the only way past 250MB
+ *           unzipped.
  *
- * The zip path deliberately uses `Code.fromAsset` over the built output rather
- * than `NodejsFunction`: that construct bundles with its own esbuild at synth
- * time, which would rebuild the code outside Nx and stop `nx affected` from
- * governing what is deployed.
+ * Both read the same directory, `dist/apps/lambdas/<name>`, and both identify
+ * the deployed artefact by a hash of its contents — the zip through
+ * `Code.fromAsset`, the image through `DockerImageCode.fromImageAsset`. That is
+ * the whole reason there is no image tag, no version parameter and no push
+ * target to keep in step: the template changes when, and only when, the built
+ * output changes, which is exactly when CloudFormation must call
+ * UpdateFunctionCode. A named tag cannot do this — Lambda resolves a tag to a
+ * digest at deploy time and will not revisit it, so re-pushing `:latest` leaves
+ * the old code running while the deploy reports success. See ADR-0006.
+ *
+ * Neither path uses the construct that bundles for you (`NodejsFunction`, or a
+ * Dockerfile that compiles TypeScript): those build at synth time, outside Nx,
+ * which would stop `nx affected` from governing what is deployed. Nx compiles;
+ * CDK only packages what Nx produced.
  */
+/** The alias every caller invokes. One name across every function and stage. */
+export const LIVE_ALIAS = 'live';
+
 export class LambdasStack extends Stack {
-  public readonly functions = new Map<string, lambda.IFunction>();
-  public readonly repositories = new Map<string, ecr.Repository>();
+  /** The functions themselves. Use these for grants, metrics and alarms. */
+  public readonly functions = new Map<string, lambda.Function>();
+  /** What callers invoke. Route traffic here, never at the bare function. */
+  public readonly aliases = new Map<string, lambda.Alias>();
 
   constructor(scope: Construct, id: string, props: LambdasStackProps) {
     super(scope, id, props);
@@ -46,14 +63,39 @@ export class LambdasStack extends Stack {
     for (const app of apps) {
       const fn =
         app.packaging === 'image'
-          ? this.imageFunction(app, config)
+          ? this.imageFunction(app, config, workspaceRoot)
           : this.zipFunction(app, config, workspaceRoot);
 
       this.functions.set(app.name, fn);
 
+      // `$LATEST` is mutable and cannot be rolled back to — there is only ever
+      // one of it, and deploying over it destroys what was there. Publishing a
+      // version per change and pointing a fixed alias at it gives callers one
+      // stable ARN, keeps the previous version invocable, and is the seam
+      // CodeDeploy needs to shift traffic gradually rather than all at once
+      // (CLAUDE.md §10). Callers never name a version, so this stays invisible
+      // until the day it is needed.
+      const alias = new lambda.Alias(this, `${pascal(app.name)}Alias`, {
+        aliasName: LIVE_ALIAS,
+        version: fn.currentVersion,
+      });
+      this.aliases.set(app.name, alias);
+
       new CfnOutput(this, `${pascal(app.name)}FunctionArn`, {
-        value: fn.functionArn,
-        description: `${app.name} (${app.packaging})`,
+        // The alias, because that is what anything calling this should use.
+        value: alias.functionArn,
+        description: `${app.name} (${app.packaging}, alias ${LIVE_ALIAS})`,
+      });
+    }
+
+    // Only when something asked to be reachable — an API with no routes is a
+    // resource nobody can call, deployed on the chance that one day somebody
+    // declares one.
+    if (apps.some((app) => app.routes?.length)) {
+      new LambdaHttpApi(this, 'HttpApi', {
+        config,
+        apps,
+        targets: this.aliases,
       });
     }
 
@@ -101,59 +143,65 @@ export class LambdasStack extends Stack {
     };
   }
 
-  private zipFunction(
-    app: LambdaApp,
-    config: StageConfig,
-    workspaceRoot: string
-  ): lambda.Function {
+  /**
+   * The built directory, or a failure naming the command that produces it.
+   *
+   * Synthesising against a stale or missing build would deploy whatever was
+   * last on disk, or nothing at all.
+   */
+  private artefact(app: LambdaApp, workspaceRoot: string): string {
     const artefact = join(workspaceRoot, app.distPath);
     if (!existsSync(artefact)) {
-      // Synthesising against a stale or missing build would deploy whatever was
-      // last there, or nothing. Say which command produces it.
       throw new Error(
         `Lambda "${app.name}" has no build output at ${app.distPath}. ` +
           `Run: nx build ${app.projectName}`
       );
     }
+    return artefact;
+  }
 
+  private zipFunction(
+    app: LambdaApp,
+    config: StageConfig,
+    workspaceRoot: string
+  ): lambda.Function {
     return new lambda.Function(this, `${pascal(app.name)}Function`, {
       ...this.common(app, config),
       runtime: lambda.Runtime.NODEJS_24_X,
       handler: app.handler,
-      code: lambda.Code.fromAsset(artefact),
+      code: lambda.Code.fromAsset(this.artefact(app, workspaceRoot)),
     });
   }
 
   private imageFunction(
     app: LambdaApp,
-    config: StageConfig
+    config: StageConfig,
+    workspaceRoot: string
   ): lambda.DockerImageFunction {
-    // One repository per function, so a rollback is per-function and image
-    // lifecycle rules do not evict another function's last good image.
-    const repository = new ecr.Repository(this, `${pascal(app.name)}Repo`, {
-      repositoryName: `${config.appName}/${config.stageName}/${app.name}`,
-      imageScanOnPush: true,
-      removalPolicy: config.retainAssets
-        ? RemovalPolicy.RETAIN
-        : RemovalPolicy.DESTROY,
-      lifecycleRules: [
-        { maxImageCount: 10, description: 'Keep the last ten images.' },
-      ],
-    });
-    this.repositories.set(app.name, repository);
+    const artefact = this.artefact(app, workspaceRoot);
 
-    const { handler: _handler, ...common } = {
-      ...this.common(app, config),
-      handler: app.handler,
-    };
+    // The build context is the built output, so the asset hash covers exactly
+    // what ships. That means the Dockerfile has to be in there too — Docker
+    // cannot reach outside its context, and a context one directory up would
+    // put unbuilt sources into the hash.
+    if (!existsSync(join(artefact, 'Dockerfile'))) {
+      throw new Error(
+        `Lambda "${app.name}" is packaged as an image but ${app.distPath}/Dockerfile ` +
+          `does not exist. Its build must copy the Dockerfile into the output — ` +
+          `see apps/lambdas/README.md.`
+      );
+    }
 
     return new lambda.DockerImageFunction(this, `${pascal(app.name)}Function`, {
-      ...common,
-      // The tag is pushed by the app's `push` target. `latest` is deliberate
-      // for now and wrong later: pin to the commit sha once CI does the push,
-      // or a redeploy cannot be reproduced.
-      code: lambda.DockerImageCode.fromEcr(repository, {
-        tagOrDigest: 'latest',
+      ...this.common(app, config),
+      code: lambda.DockerImageCode.fromImageAsset(artefact, {
+        // Lambda runs x86-64 unless told otherwise, and the build machine is
+        // arm64. Without this the image builds clean and fails on the first
+        // invocation with an exec format error.
+        platform: Platform.LINUX_AMD64,
+        // Same `handler` declaration the zip path uses, so one line in
+        // project.json governs both and no Dockerfile can disagree with it.
+        cmd: [app.handler],
       }),
     });
   }

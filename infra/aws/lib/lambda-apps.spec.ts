@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { discoverLambdaApps, parseLambdaMetadata } from './lambda-apps.js';
 
 /**
@@ -77,6 +80,75 @@ describe('parseLambdaMetadata', () => {
     }
   });
 
+  it('reads route keys, which are what HttpApi consumes', () => {
+    const parsed = parseLambdaMetadata('orders', {
+      name: 'lambda-orders',
+      metadata: {
+        lambda: {
+          packaging: 'zip',
+          handler: 'main.handler',
+          routes: ['GET /orders', 'GET /orders/{orderId}', 'ANY /orders/sync'],
+        },
+      },
+    });
+
+    expect(parsed?.metadata.routes).toEqual([
+      'GET /orders',
+      'GET /orders/{orderId}',
+      'ANY /orders/sync',
+    ]);
+  });
+
+  it('treats a function with no routes as not HTTP-facing', () => {
+    const parsed = parseLambdaMetadata('triage', {
+      name: 'lambda-triage',
+      metadata: { lambda: { packaging: 'zip', handler: 'main.handler' } },
+    });
+
+    expect(parsed?.metadata.routes).toBeUndefined();
+  });
+
+  it('rejects a bare path, which would have to be given every method', () => {
+    expect(() =>
+      parseLambdaMetadata('orders', {
+        name: 'lambda-orders',
+        metadata: {
+          lambda: {
+            packaging: 'zip',
+            handler: 'main.handler',
+            routes: ['/orders'],
+          },
+        },
+      })
+    ).toThrow(/must look like "GET \/health"/);
+  });
+
+  it('rejects a method API Gateway does not accept', () => {
+    expect(() =>
+      parseLambdaMetadata('orders', {
+        name: 'lambda-orders',
+        metadata: {
+          lambda: {
+            packaging: 'zip',
+            handler: 'main.handler',
+            routes: ['FETCH /orders'],
+          },
+        },
+      })
+    ).toThrow(/method FETCH, which API Gateway does not accept/);
+  });
+
+  it('rejects an empty routes array rather than building a routeless API', () => {
+    expect(() =>
+      parseLambdaMetadata('orders', {
+        name: 'lambda-orders',
+        metadata: {
+          lambda: { packaging: 'zip', handler: 'main.handler', routes: [] },
+        },
+      })
+    ).toThrow(/non-empty array/);
+  });
+
   it('names the file to fix in every error', () => {
     expect(() =>
       parseLambdaMetadata('health', {
@@ -108,5 +180,29 @@ describe('discoverLambdaApps', () => {
 
   it('returns nothing when there is no lambdas directory', () => {
     expect(discoverLambdaApps('/tmp/definitely-not-a-workspace')).toEqual([]);
+  });
+
+  it('refuses two apps claiming one route, naming both', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lambda-apps-'));
+    for (const name of ['orders', 'orders-legacy']) {
+      const dir = join(root, 'apps', 'lambdas', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'project.json'),
+        JSON.stringify({
+          name: `lambda-${name}`,
+          metadata: {
+            lambda: {
+              packaging: 'zip',
+              handler: 'main.handler',
+              routes: ['GET /orders'],
+            },
+          },
+        })
+      );
+    }
+
+    expect(() => discoverLambdaApps(root)).toThrow(/claimed by both/);
+    expect(() => discoverLambdaApps(root)).toThrow(/orders-legacy/);
   });
 });
