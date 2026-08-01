@@ -77,6 +77,15 @@ same place either way.
 - Access tokens must be addressed to the API's audience, so `AUTH0_AUDIENCE`
   must match the Auth0 API identifier exactly. A mismatch is a 401 the token
   cannot explain, since the token itself is perfectly valid.
+- **The Auth0 tenant needs configuration this repository cannot carry**, and a
+  new environment will fail without it. Under a _Per-app authorization_ access
+  policy the application must be granted access to the API on **both** the
+  user-delegated and client-access paths — they are separate grants, and
+  authorizing only one leaves login failing with `invalid_request: Client "…" is
+not authorized to access resource server "…"`. The API's signing algorithm
+  must also be **RS256**: API Gateway supports RSA only, so an HS256 API signs
+  tokens the gateway can never validate, and JWE encryption must stay off for
+  the same reason.
 - The gateway rejects bad tokens before the function runs, so functions are
   never invoked — and never billed — for unauthenticated traffic.
 - Functions still check for a subject rather than assuming one. A route
