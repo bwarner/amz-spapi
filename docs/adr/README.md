@@ -23,5 +23,6 @@ in the repository?
 | [0005](0005-environment-scopes.md)                               | One scope per environment, with a database user per scope                              | Accepted   |
 | [0006](0006-lambda-images-are-content-addressed-assets.md)       | Container Lambdas are deployed as content-addressed CDK image assets                   | Accepted   |
 | [0007](0007-page-shaped-endpoints-and-gateway-jwt-validation.md) | Private API endpoints are page-shaped, and the gateway validates the token             | Accepted   |
+| [0008](0008-stored-bytes-are-retained-not-billed.md)             | Stored bytes are retained by policy, not metered for billing                           | Accepted   |
 
 Related epic: [#51 — AWS integration](https://github.com/bwarner/amz-spapi/issues/51)
