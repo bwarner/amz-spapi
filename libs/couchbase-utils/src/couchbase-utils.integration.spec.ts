@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  collectionName,
   deleteDocument,
   executeQuery,
   getDocument,
@@ -29,9 +30,10 @@ import {
  * cluster credentials are present. A skipped suite proves nothing — when you
  * change this package, run it against a real cluster.
  *
- * The suite provisions its own scope (`itest`, override with CB_TEST_SCOPE) and
- * deletes every key it writes. It never touches an application collection: the
- * cost ledger is an auditable record and test rows have no business in it.
+ * The suite provisions its own collections (`itest_*`, override the prefix with
+ * CB_TEST_DOMAIN) inside the environment scope, and deletes every key it
+ * writes. It never touches an application collection: the cost ledger is an
+ * auditable record and test rows have no business in it.
  */
 
 const REQUIRED_ENV = [
@@ -39,19 +41,30 @@ const REQUIRED_ENV = [
   'CB_USERNAME',
   'CB_PASSWORD',
   'CB_BUCKET',
+  // The package refuses to build a config without it, so a suite that omitted
+  // it would fail inside the first helper rather than skip.
+  'CB_SCOPE',
 ] as const;
 
 const missingEnv = REQUIRED_ENV.filter((name) => !process.env[name]);
 const configured = missingEnv.length === 0;
 
-/** Isolated from every application scope, and created by the suite itself. */
-const SCOPE = process.env['CB_TEST_SCOPE'] || 'itest';
+/**
+ * The test domain — a name prefix, not a scope (ADR-0005).
+ *
+ * There is one scope per environment and collections are flat inside it, so
+ * isolation from application data is the `itest_` prefix rather than a scope of
+ * its own. The suite used to create a scope called `itest`, which no longer
+ * matched where either the KV helpers or the query context actually looked.
+ */
+const DOMAIN = process.env['CB_TEST_DOMAIN'] || 'itest';
 const DOCS = 'docs';
 /** Deliberately a N1QL reserved word — that is the behaviour it pins. */
 const ROWS = 'rows';
 
-/** DDL runs under a context that exists before the target scope does. */
-const DDL_SCOPE = '_default';
+/** What the collections are really called: `itest_docs`, `itest_rows`. */
+const DOCS_COLLECTION = collectionName(DOMAIN, DOCS);
+const ROWS_COLLECTION = collectionName(DOMAIN, ROWS);
 
 const DAY_SECONDS = 24 * 60 * 60;
 
@@ -59,7 +72,12 @@ const suiteName = configured
   ? 'Couchbase Data API contracts'
   : `Couchbase Data API contracts [skipped: set ${missingEnv.join(', ')}]`;
 
-type DataApiConfig = { baseUrl: string; auth: string; bucket: string };
+type DataApiConfig = {
+  baseUrl: string;
+  auth: string;
+  bucket: string;
+  environmentScope: string;
+};
 
 function config(): DataApiConfig {
   return {
@@ -68,6 +86,10 @@ function config(): DataApiConfig {
       `${process.env['CB_USERNAME']}:${process.env['CB_PASSWORD']}`
     ).toString('base64')}`,
     bucket: process.env['CB_BUCKET'] ?? '',
+    // The same scope the package uses. The raw requests below must address
+    // exactly what the helpers address, or a test that writes raw and reads
+    // through the helper is comparing two different documents.
+    environmentScope: process.env['CB_SCOPE'] ?? '',
   };
 }
 
@@ -78,17 +100,17 @@ function config(): DataApiConfig {
  * both at the wire and at the surface that has to survive it.
  */
 function documentUrl(collection: string, key: string): string {
-  const { baseUrl, bucket } = config();
+  const { baseUrl, bucket, environmentScope } = config();
   return (
     `${baseUrl}/v1/buckets/${encodeURIComponent(bucket)}` +
-    `/scopes/${encodeURIComponent(SCOPE)}` +
+    `/scopes/${encodeURIComponent(environmentScope)}` +
     `/collections/${encodeURIComponent(collection)}` +
     `/documents/${encodeURIComponent(key)}`
   );
 }
 
 function rawGet(key: string): Promise<Response> {
-  return fetch(documentUrl(DOCS, key), {
+  return fetch(documentUrl(DOCS_COLLECTION, key), {
     headers: { Authorization: config().auth, Accept: 'application/json' },
   });
 }
@@ -99,7 +121,7 @@ function rawWrite(
   document: unknown,
   headers: Record<string, string> = {}
 ): Promise<Response> {
-  return fetch(documentUrl(DOCS, key), {
+  return fetch(documentUrl(DOCS_COLLECTION, key), {
     method,
     headers: {
       Authorization: config().auth,
@@ -114,7 +136,7 @@ function rawIncrement(
   key: string,
   body: { initial?: number; delta?: number }
 ): Promise<Response> {
-  return fetch(`${documentUrl(DOCS, key)}/increment`, {
+  return fetch(`${documentUrl(DOCS_COLLECTION, key)}/increment`, {
     method: 'POST',
     headers: {
       Authorization: config().auth,
@@ -140,19 +162,21 @@ function nowSeconds(): number {
 
 describe.skipIf(!configured)(suiteName, () => {
   beforeAll(async () => {
-    const { bucket } = config();
+    const { bucket, environmentScope } = config();
     const quoted = (name: string) => `\`${name.replace(/`/g, '``')}\``;
 
-    for (const statement of [
-      `CREATE SCOPE ${quoted(bucket)}.${quoted(SCOPE)} IF NOT EXISTS`,
-      `CREATE COLLECTION ${quoted(bucket)}.${quoted(SCOPE)}.${quoted(
-        DOCS
-      )} IF NOT EXISTS`,
-      `CREATE COLLECTION ${quoted(bucket)}.${quoted(SCOPE)}.${quoted(
-        ROWS
-      )} IF NOT EXISTS`,
-    ]) {
-      await executeQuery(DDL_SCOPE, statement);
+    // Into the environment scope, which already exists. The suite no longer
+    // creates a scope of its own: there is one scope per environment and
+    // `itest` is a name prefix inside it (ADR-0005). Creating `itest` as a
+    // scope put these collections somewhere neither the KV helpers nor the
+    // query context ever looked.
+    for (const collection of [DOCS_COLLECTION, ROWS_COLLECTION]) {
+      await executeQuery(
+        DOMAIN,
+        `CREATE COLLECTION ${quoted(bucket)}.${quoted(
+          environmentScope
+        )}.${quoted(collection)} IF NOT EXISTS`
+      );
     }
 
     // A new collection is not queryable the instant DDL returns. USE KEYS makes
@@ -161,8 +185,10 @@ describe.skipIf(!configured)(suiteName, () => {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
         await executeQuery(
-          SCOPE,
-          `SELECT RAW 1 FROM ${quoted(ROWS)} USE KEYS "readiness-probe"`
+          DOMAIN,
+          `SELECT RAW 1 FROM ${quoted(
+            ROWS_COLLECTION
+          )} USE KEYS "readiness-probe"`
         );
         return;
       } catch (error) {
@@ -175,7 +201,7 @@ describe.skipIf(!configured)(suiteName, () => {
   afterAll(async () => {
     await Promise.all(
       [...writtenKeys].map((key) =>
-        deleteDocument(SCOPE, DOCS, key).catch(() => false)
+        deleteDocument(DOMAIN, DOCS, key).catch(() => false)
       )
     );
   }, 60_000);
@@ -218,7 +244,7 @@ describe.skipIf(!configured)(suiteName, () => {
         }
       );
       expect(accepted.status).toBe(200);
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({ v: 4 });
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({ v: 4 });
     });
 
     it('treats an RFC-style quoted ETag as malformed (400), so the CAS must be echoed verbatim', async () => {
@@ -247,12 +273,12 @@ describe.skipIf(!configured)(suiteName, () => {
       const staleEtag = created.headers.get('etag') as string;
       await rawWrite('PUT', key, { v: 2 });
 
-      const conflict = await fetch(documentUrl(DOCS, key), {
+      const conflict = await fetch(documentUrl(DOCS_COLLECTION, key), {
         method: 'DELETE',
         headers: { Authorization: config().auth, 'If-Match': staleEtag },
       });
       expect(conflict.status).toBe(409);
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({ v: 2 });
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({ v: 2 });
     });
   });
 
@@ -273,7 +299,7 @@ describe.skipIf(!configured)(suiteName, () => {
       // The header is accepted and ignored. Used as insert-if-absent it is a
       // silent lost update, which is why POST is the create-only verb below.
       expect(overwrite.status).toBe(200);
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({
         v: 'overwritten',
       });
     });
@@ -287,7 +313,7 @@ describe.skipIf(!configured)(suiteName, () => {
       const second = await rawWrite('POST', key, { v: 'second' });
       expect(second.status).toBe(409);
       expect(await second.json()).toMatchObject({ code: 'DocumentExists' });
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({ v: 'first' });
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({ v: 'first' });
     });
 
     it('reports the loser of an insert race as false through insertDocument', async () => {
@@ -295,18 +321,18 @@ describe.skipIf(!configured)(suiteName, () => {
 
       const results = await Promise.all(
         Array.from({ length: 5 }, (_, index) =>
-          insertDocument(SCOPE, DOCS, key, { winner: index })
+          insertDocument(DOMAIN, DOCS, key, { winner: index })
         )
       );
 
       expect(results.filter(Boolean)).toHaveLength(1);
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({
         winner: results.indexOf(true),
       });
     });
 
     it('reads a missing document as null rather than throwing', async () => {
-      expect(await getDocument(SCOPE, DOCS, testKey('absent'))).toBeNull();
+      expect(await getDocument(DOMAIN, DOCS, testKey('absent'))).toBeNull();
     });
   });
 
@@ -335,19 +361,19 @@ describe.skipIf(!configured)(suiteName, () => {
     it('counts the first increment because incrementCounter sends initial = delta', async () => {
       const key = testKey('counter-lib');
 
-      expect(await incrementCounter(SCOPE, DOCS, key, 7)).toBe(7);
-      expect(await incrementCounter(SCOPE, DOCS, key, 7)).toBe(14);
+      expect(await incrementCounter(DOMAIN, DOCS, key, 7)).toBe(7);
+      expect(await incrementCounter(DOMAIN, DOCS, key, 7)).toBe(14);
     });
 
     it('increments atomically once the counter exists, so concurrent callers cannot lose a unit', async () => {
       const key = testKey('counter-atomic');
-      await incrementCounter(SCOPE, DOCS, key, 1);
+      await incrementCounter(DOMAIN, DOCS, key, 1);
 
       await Promise.all(
-        Array.from({ length: 10 }, () => incrementCounter(SCOPE, DOCS, key, 1))
+        Array.from({ length: 10 }, () => incrementCounter(DOMAIN, DOCS, key, 1))
       );
 
-      expect(await getDocument<number>(SCOPE, DOCS, key)).toBe(11);
+      expect(await getDocument<number>(DOMAIN, DOCS, key)).toBe(11);
     });
   });
 
@@ -383,7 +409,7 @@ describe.skipIf(!configured)(suiteName, () => {
       const expirySeconds = 180 * DAY_SECONDS;
 
       await upsertDocument(
-        SCOPE,
+        DOMAIN,
         DOCS,
         key,
         { v: 'long-lived' },
@@ -392,8 +418,8 @@ describe.skipIf(!configured)(suiteName, () => {
 
       const before = nowSeconds();
       const { rows } = await executeQuery<{ expiration: number }>(
-        SCOPE,
-        'SELECT META(d).expiration AS expiration FROM `docs` AS d USE KEYS $key',
+        DOMAIN,
+        `SELECT META(d).expiration AS expiration FROM ${DOCS_COLLECTION} AS d USE KEYS $key`,
         { parameters: { key } }
       );
 
@@ -407,16 +433,16 @@ describe.skipIf(!configured)(suiteName, () => {
       expect(rows[0].expiration).toBeLessThanOrEqual(
         before + expirySeconds + 120
       );
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({ v: 'long-lived' });
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({ v: 'long-lived' });
     });
 
     it('leaves a document with no expiry when no TTL is given', async () => {
       const key = testKey('ttl-none');
-      await upsertDocument(SCOPE, DOCS, key, { v: 'permanent' });
+      await upsertDocument(DOMAIN, DOCS, key, { v: 'permanent' });
 
       const { rows } = await executeQuery<{ expiration: number }>(
-        SCOPE,
-        'SELECT META(d).expiration AS expiration FROM `docs` AS d USE KEYS $key',
+        DOMAIN,
+        `SELECT META(d).expiration AS expiration FROM ${DOCS_COLLECTION} AS d USE KEYS $key`,
         { parameters: { key } }
       );
 
@@ -429,12 +455,12 @@ describe.skipIf(!configured)(suiteName, () => {
       const key = testKey('tximplicit');
 
       await executeQuery(
-        SCOPE,
-        'UPSERT INTO `docs` (KEY, VALUE) VALUES ($key, {"v": "tximplicit"})',
+        DOMAIN,
+        `UPSERT INTO ${DOCS_COLLECTION} (KEY, VALUE) VALUES ($key, {"v": "tximplicit"})`,
         { parameters: { key }, tximplicit: true }
       );
 
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({
         v: 'tximplicit',
       });
     });
@@ -442,46 +468,50 @@ describe.skipIf(!configured)(suiteName, () => {
     it('threads an explicit transaction through the txid from BEGIN WORK to COMMIT', async () => {
       const key = testKey('txn-commit');
 
-      const begin = await executeQuery<{ txid?: string }>(SCOPE, 'BEGIN WORK');
+      const begin = await executeQuery<{ txid?: string }>(DOMAIN, 'BEGIN WORK');
       const txid = begin.rows[0]?.txid;
       expect(txid).toMatch(/^[0-9a-f-]{36}$/);
 
       await executeQuery(
-        SCOPE,
-        'UPSERT INTO `docs` (KEY, VALUE) VALUES ($key, {"v": "committed"})',
+        DOMAIN,
+        `UPSERT INTO ${DOCS_COLLECTION} (KEY, VALUE) VALUES ($key, {"v": "committed"})`,
         { parameters: { key }, txid }
       );
-      await executeQuery(SCOPE, 'COMMIT WORK', { txid });
+      await executeQuery(DOMAIN, 'COMMIT WORK', { txid });
 
-      expect(await getDocument(SCOPE, DOCS, key)).toEqual({ v: 'committed' });
+      expect(await getDocument(DOMAIN, DOCS, key)).toEqual({ v: 'committed' });
     });
 
     it('discards a rolled-back transaction, leaving the document absent', async () => {
       const key = testKey('txn-rollback');
 
-      const begin = await executeQuery<{ txid?: string }>(SCOPE, 'BEGIN WORK');
+      const begin = await executeQuery<{ txid?: string }>(DOMAIN, 'BEGIN WORK');
       const txid = begin.rows[0]?.txid;
 
       await executeQuery(
-        SCOPE,
-        'UPSERT INTO `docs` (KEY, VALUE) VALUES ($key, {"v": "rolled-back"})',
+        DOMAIN,
+        `UPSERT INTO ${DOCS_COLLECTION} (KEY, VALUE) VALUES ($key, {"v": "rolled-back"})`,
         { parameters: { key }, txid }
       );
-      await executeQuery(SCOPE, 'ROLLBACK WORK', { txid });
+      await executeQuery(DOMAIN, 'ROLLBACK WORK', { txid });
 
-      expect(await getDocument(SCOPE, DOCS, key)).toBeNull();
+      expect(await getDocument(DOMAIN, DOCS, key)).toBeNull();
     });
 
     it('needs backticks around a reserved word used as a keyspace', async () => {
       // Found twice, one runtime error at a time: `rows` and `options` are
-      // reserved, and an unbackticked keyspace fails at parse time.
+      // reserved, and an unbackticked keyspace fails at parse time — before the
+      // keyspace is resolved, so this holds whether or not one exists.
       await expect(
-        executeQuery(SCOPE, 'SELECT RAW 1 FROM rows USE KEYS "any"')
+        executeQuery(DOMAIN, 'SELECT RAW 1 FROM rows USE KEYS "any"')
       ).rejects.toThrow(/reserved word/i);
 
+      // And the reason the flat name retires the problem (ADR-0005): the real
+      // collection is `itest_rows`, which is not reserved and needs no
+      // backticks. That is the whole benefit of the prefix, so pin it.
       const { rows } = await executeQuery(
-        SCOPE,
-        'SELECT RAW 1 FROM `rows` USE KEYS "any"'
+        DOMAIN,
+        `SELECT RAW 1 FROM ${ROWS_COLLECTION} USE KEYS "any"`
       );
       expect(rows).toEqual([]);
     });
@@ -489,7 +519,7 @@ describe.skipIf(!configured)(suiteName, () => {
     it('surfaces a query-service error as a thrown Error rather than an empty result set', async () => {
       await expect(
         executeQuery(
-          SCOPE,
+          DOMAIN,
           'SELECT RAW 1 FROM `no_such_collection` USE KEYS "any"'
         )
       ).rejects.toThrow();
