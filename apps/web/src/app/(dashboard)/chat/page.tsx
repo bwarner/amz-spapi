@@ -92,26 +92,42 @@ type PendingDocument = {
   fileName: string;
   /** What the recogniser made of it, so the chip can say more than "file". */
   kind?: string;
+  /**
+   * A markdown table of the first rows, for spreadsheets only.
+   *
+   * Inlined because there is no tool that reads a sheet: a PDF invoice has
+   * `read-document`, a spreadsheet has nothing, so an asset id alone would
+   * attach a file the agent cannot open. The preview is bounded server-side —
+   * enough to answer a question about a small sheet, and for a large one it
+   * says it is truncated so the agent offers report import instead.
+   */
+  preview?: string;
+  totalRows?: number;
 };
 
 /**
  * Tell the agent which documents are attached and how to reach them.
  *
- * The asset id is the handle its `read-document` tool takes, so this is what
- * turns "here is my invoice" into something it can actually open. Deliberately
- * does NOT inline the extracted figures: reading is the agent's job and its own
- * decision, and pasting them here would file nothing while paying for the
- * extraction twice.
+ * PDFs travel as an asset id and nothing more: `read-document` opens them, and
+ * that is the agent's own decision and its own metered call, so inlining the
+ * extracted figures here would pay for the extraction twice and file nothing.
+ *
+ * Spreadsheets are the opposite case, and deliberately so. No tool reads a
+ * sheet, so an id alone would attach a file the agent cannot open — the same
+ * silence #72 is about, in a different container. Their rows travel inline,
+ * bounded server-side, and a truncated preview says so.
  */
 function documentManifest(documents: PendingDocument[]): string {
-  const lines = documents.map(
-    (doc) =>
-      `- ${doc.fileName}${
-        doc.kind ? ` (looks like: ${doc.kind})` : ''
-      } — assetId: ${doc.assetId}`
-  );
-  return `Attached documents (read them with read-document before answering):\n\n${lines.join(
-    '\n'
+  const entries = documents.map((doc) => {
+    const head = `- ${doc.fileName}${
+      doc.kind ? ` (looks like: ${doc.kind})` : ''
+    } — assetId: ${doc.assetId}`;
+    if (!doc.preview) return head;
+    const rows = doc.totalRows != null ? ` — ${doc.totalRows} rows` : '';
+    return `${head}${rows}\n\n${doc.preview}`;
+  });
+  return `Attached documents (open any PDF with read-document before answering):\n\n${entries.join(
+    '\n\n'
   )}`;
 }
 
@@ -126,6 +142,27 @@ function photoManifest(photos: PendingPhoto[]): string {
 
 // Conversations live server-side (Couchbase); the browser only remembers
 // which conversation it was on.
+/**
+ * Attachable non-image files.
+ *
+ * Extension as well as mime type, because browsers label these
+ * inconsistently — an .xlsx arrives as octet-stream often enough that trusting
+ * `file.type` alone silently rejects real spreadsheets.
+ */
+const DOCUMENT_EXTENSIONS = ['pdf', 'csv', 'tsv', 'xlsx', 'xls', 'xlsm'];
+
+function isDocumentFile(file: File): boolean {
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  if (DOCUMENT_EXTENSIONS.includes(extension)) return true;
+  return (
+    file.type === 'application/pdf' ||
+    file.type === 'text/csv' ||
+    file.type === 'text/tab-separated-values' ||
+    file.type.includes('spreadsheet') ||
+    file.type.includes('ms-excel')
+  );
+}
+
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
 /**
@@ -405,11 +442,19 @@ export default function ChatPage() {
           assetId?: string;
           error?: string;
           recognition?: { kind?: string };
+          spreadsheet?: {
+            markdown?: string;
+            totalRows?: number;
+            truncated?: boolean;
+          };
+          spreadsheetError?: string;
         };
         if (!res.ok || !data.assetId) {
           failed.push(`${file.name}${data.error ? ` (${data.error})` : ''}`);
           continue;
         }
+        if (data.spreadsheetError)
+          failed.push(`${file.name} (${data.spreadsheetError})`);
         attached.push({
           assetId: data.assetId,
           fileName: file.name,
@@ -417,6 +462,8 @@ export default function ChatPage() {
             data.recognition?.kind && data.recognition.kind !== 'unknown'
               ? data.recognition.kind
               : undefined,
+          preview: data.spreadsheet?.markdown,
+          totalRows: data.spreadsheet?.totalRows,
         });
       } catch {
         failed.push(file.name);
@@ -443,11 +490,7 @@ export default function ChatPage() {
 
     const all = Array.from(files);
     const selected = all.filter((file) => file.type.startsWith('image/'));
-    const documents = all.filter(
-      (file) =>
-        file.type === 'application/pdf' ||
-        file.name.toLowerCase().endsWith('.pdf')
-    );
+    const documents = all.filter((file) => isDocumentFile(file));
     const rejected = all.filter(
       (file) => !selected.includes(file) && !documents.includes(file)
     );
@@ -458,7 +501,7 @@ export default function ChatPage() {
       setUploadError(
         `Cannot attach ${rejected
           .map((file) => file.name)
-          .join(', ')} — chat takes images and PDFs.`
+          .join(', ')} — chat takes images, PDFs and spreadsheets.`
       );
     }
     if (!selected.length && !documents.length) return;
@@ -785,7 +828,7 @@ export default function ChatPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*,application/pdf,.pdf"
+                accept="image/*,application/pdf,.pdf,.csv,.tsv,.xlsx,.xls,.xlsm"
                 multiple
                 hidden
                 onChange={(e) => handleFilesSelected(e.target.files)}
