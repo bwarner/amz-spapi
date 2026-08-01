@@ -61,6 +61,10 @@ export const SOURCES: Source[] = [
     domain: 'ops',
     collection: c,
   })),
+  // Extracted purchase documents (#50). Its own domain rather than a `reports`
+  // collection: these are the seller's own evidence — a supplier's invoice, a
+  // carrier's waybill — not anything Amazon produced.
+  { domain: 'purchases', collection: 'documents' },
 ];
 
 export type IndexSpec = {
@@ -184,6 +188,22 @@ export const INDEXES: IndexSpec[] = [
     collection: 'catalog_listing_versions',
     name: 'idx_listing_versions_user_sku',
     keys: ['`userId`', '`sku`', '`capturedAt`'],
+  },
+  {
+    // The default read: one seller's documents, newest first, optionally within
+    // a date range. `documentDate` rather than `storedAt`, because a purchase is
+    // grouped by when it happened, not when the PDF was uploaded — the waybill
+    // for a January order often arrives in March.
+    collection: 'purchases_documents',
+    name: 'idx_purchase_documents_user_date',
+    keys: ['`userId`', '(`extracted`.`documentDate`)'],
+  },
+  {
+    // "Everything from this supplier", which is how a human looks for the other
+    // half of a purchase when no shared identifier joined it automatically.
+    collection: 'purchases_documents',
+    name: 'idx_purchase_documents_user_vendor',
+    keys: ['`userId`', '(`extracted`.`vendorName`)'],
   },
 ];
 

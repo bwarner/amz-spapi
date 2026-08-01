@@ -514,18 +514,6 @@ importers:
         specifier: ^7.8.0
         version: 7.13.0(typescript@5.9.3)
 
-  packages/api-services:
-    dependencies:
-      '@farvisionllc/models':
-        specifier: '*'
-        version: link:../models
-      axios:
-        specifier: ^1.7.9
-        version: 1.18.1
-      tslib:
-        specifier: ^2.3.0
-        version: 2.8.1
-
   packages/credential-store:
     dependencies:
       '@aws-sdk/client-kms':
@@ -577,6 +565,9 @@ importers:
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:../../libs/couchbase-utils
+      '@farvisionllc/models':
+        specifier: 0.0.1
+        version: link:../models
       '@farvisionllc/sp-client':
         specifier: 0.0.1
         version: link:../sp-client
