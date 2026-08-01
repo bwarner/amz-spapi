@@ -87,6 +87,34 @@ function nextPhotoLetters(used: Set<string>, count: number): string[] {
   return letters;
 }
 
+type PendingDocument = {
+  assetId: string;
+  fileName: string;
+  /** What the recogniser made of it, so the chip can say more than "file". */
+  kind?: string;
+};
+
+/**
+ * Tell the agent which documents are attached and how to reach them.
+ *
+ * The asset id is the handle its `read-document` tool takes, so this is what
+ * turns "here is my invoice" into something it can actually open. Deliberately
+ * does NOT inline the extracted figures: reading is the agent's job and its own
+ * decision, and pasting them here would file nothing while paying for the
+ * extraction twice.
+ */
+function documentManifest(documents: PendingDocument[]): string {
+  const lines = documents.map(
+    (doc) =>
+      `- ${doc.fileName}${
+        doc.kind ? ` (looks like: ${doc.kind})` : ''
+      } — assetId: ${doc.assetId}`
+  );
+  return `Attached documents (read them with read-document before answering):\n\n${lines.join(
+    '\n'
+  )}`;
+}
+
 function photoManifest(photos: PendingPhoto[]): string {
   const lines = photos.map(
     (photo) => `![${photo.label}](${photo.url} "${photo.fileName}")`
@@ -143,6 +171,9 @@ function relativeTime(timestamp: number): string {
 export default function ChatPage() {
   const [input, setInput] = useState('');
   const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>(
+    []
+  );
   const [uploadingCount, setUploadingCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -349,16 +380,94 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  /**
+   * Send PDFs through the existing document importer.
+   *
+   * That route already stores the file as an asset, recognises it and extracts
+   * cost data — the machinery the chat surface simply had no entry point into.
+   * Only the asset id and the verdict come back here; the agent reads the
+   * document itself when it needs to, so attaching one costs nothing until it
+   * is used.
+   */
+  const uploadDocuments = async (files: File[]) => {
+    const attached: PendingDocument[] = [];
+    const failed: string[] = [];
+
+    for (const file of files) {
+      const body = new FormData();
+      body.append('file', file);
+      try {
+        const res = await fetch('/api/documents/import', {
+          method: 'POST',
+          body,
+        });
+        const data = (await res.json()) as {
+          assetId?: string;
+          error?: string;
+          recognition?: { kind?: string };
+        };
+        if (!res.ok || !data.assetId) {
+          failed.push(`${file.name}${data.error ? ` (${data.error})` : ''}`);
+          continue;
+        }
+        attached.push({
+          assetId: data.assetId,
+          fileName: file.name,
+          kind:
+            data.recognition?.kind && data.recognition.kind !== 'unknown'
+              ? data.recognition.kind
+              : undefined,
+        });
+      } catch {
+        failed.push(file.name);
+      }
+    }
+
+    if (attached.length) {
+      setPendingDocuments((current) => [
+        ...current,
+        // Same file twice in one turn is a slip, not an instruction.
+        ...attached.filter(
+          (doc) => !current.some((existing) => existing.assetId === doc.assetId)
+        ),
+      ]);
+    }
+    if (failed.length) {
+      setUploadError(`Could not attach ${failed.join(', ')}.`);
+    }
+  };
+
   const handleFilesSelected = async (files: FileList | null) => {
     if (!files?.length) return;
     setUploadError(null);
-    const selected = Array.from(files).filter((file) =>
-      file.type.startsWith('image/')
-    );
-    if (!selected.length) return;
 
-    setUploadingCount((count) => count + selected.length);
+    const all = Array.from(files);
+    const selected = all.filter((file) => file.type.startsWith('image/'));
+    const documents = all.filter(
+      (file) =>
+        file.type === 'application/pdf' ||
+        file.name.toLowerCase().endsWith('.pdf')
+    );
+    const rejected = all.filter(
+      (file) => !selected.includes(file) && !documents.includes(file)
+    );
+
+    // Never silence (#72). A file that is dropped and then simply vanishes is
+    // indistinguishable from a broken app; say which ones were not taken.
+    if (rejected.length) {
+      setUploadError(
+        `Cannot attach ${rejected
+          .map((file) => file.name)
+          .join(', ')} — chat takes images and PDFs.`
+      );
+    }
+    if (!selected.length && !documents.length) return;
+
+    setUploadingCount((count) => count + selected.length + documents.length);
     try {
+      if (documents.length) await uploadDocuments(documents);
+      if (!selected.length) return;
+
       const uploaded = await Promise.all(
         selected.map((file) => uploadImageAsset(file))
       );
@@ -382,7 +491,7 @@ export default function ChatPage() {
         error instanceof Error ? error.message : 'Photo upload failed.'
       );
     } finally {
-      setUploadingCount((count) => count - selected.length);
+      setUploadingCount((count) => count - selected.length - documents.length);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -396,15 +505,26 @@ export default function ChatPage() {
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim();
-    if ((!text && pendingPhotos.length === 0) || isStreaming) return;
+    if (
+      (!text && pendingPhotos.length === 0 && pendingDocuments.length === 0) ||
+      isStreaming
+    ) {
+      return;
+    }
     if (uploadingCount > 0) return;
 
     const photos = pendingPhotos;
+    const documents = pendingDocuments;
     setInput('');
     setPendingPhotos([]);
-    const combined = photos.length
-      ? `${text ? `${text}\n\n` : ''}${photoManifest(photos)}`
-      : text;
+    setPendingDocuments([]);
+    const combined = [
+      text,
+      photos.length ? photoManifest(photos) : '',
+      documents.length ? documentManifest(documents) : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     await sendMessage({ text: combined });
   };
 
@@ -518,7 +638,7 @@ export default function ChatPage() {
           ref={scrollContainerRef}
           className="min-h-0 flex-1 overflow-y-auto"
         >
-          <div className="mx-auto max-w-3xl px-4 py-6">
+          <div className="mx-auto max-w-3xl xl:max-w-5xl 2xl:max-w-6xl px-4 py-6">
             {messages.length === 0 ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
                 <div className="rounded-full bg-primary/10 p-4">
@@ -579,7 +699,7 @@ export default function ChatPage() {
         {/* Error banner */}
         {error && (
           <div className="shrink-0 border-t border-destructive/30 bg-destructive/5 px-4 py-3">
-            <div className="mx-auto flex max-w-3xl items-start gap-2">
+            <div className="mx-auto flex max-w-3xl xl:max-w-5xl 2xl:max-w-6xl items-start gap-2">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <p className="text-sm text-destructive">
                 {error.message || 'Something went wrong'}
@@ -590,8 +710,9 @@ export default function ChatPage() {
 
         {/* Input area */}
         <div className="shrink-0 border-t bg-background">
-          <div className="mx-auto max-w-3xl px-2 py-3 sm:px-4 sm:py-4">
+          <div className="mx-auto max-w-3xl xl:max-w-5xl 2xl:max-w-6xl px-2 py-3 sm:px-4 sm:py-4">
             {(pendingPhotos.length > 0 ||
+              pendingDocuments.length > 0 ||
               uploadingCount > 0 ||
               uploadError) && (
               <div className="mb-2">
@@ -619,6 +740,39 @@ export default function ChatPage() {
                       </figcaption>
                     </figure>
                   ))}
+                  {pendingDocuments.map((doc) => (
+                    <div
+                      key={doc.assetId}
+                      className="relative flex h-16 items-center gap-2 rounded-md border bg-background px-2 pr-6"
+                      title={doc.fileName}
+                    >
+                      <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0">
+                        <p className="max-w-[10rem] truncate text-xs font-medium">
+                          {doc.fileName}
+                        </p>
+                        {doc.kind && (
+                          <p className="text-[10px] text-muted-foreground">
+                            {doc.kind.replace(/-/g, ' ')}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPendingDocuments((current) =>
+                            current.filter(
+                              (entry) => entry.assetId !== doc.assetId
+                            )
+                          )
+                        }
+                        className="absolute -right-1.5 -top-1.5 rounded-full border bg-background p-0.5 shadow-sm"
+                        title={`Remove ${doc.fileName}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
                   {uploadingCount > 0 && (
                     <div className="flex h-16 w-16 items-center justify-center rounded-md border">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -631,7 +785,7 @@ export default function ChatPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,application/pdf,.pdf"
                 multiple
                 hidden
                 onChange={(e) => handleFilesSelected(e.target.files)}
@@ -671,7 +825,9 @@ export default function ChatPage() {
                 <Button
                   type="submit"
                   disabled={
-                    (!input.trim() && pendingPhotos.length === 0) ||
+                    (!input.trim() &&
+                      pendingPhotos.length === 0 &&
+                      pendingDocuments.length === 0) ||
                     uploadingCount > 0
                   }
                   size="icon"
