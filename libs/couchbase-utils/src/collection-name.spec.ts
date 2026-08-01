@@ -65,4 +65,51 @@ describe('executeQuery guard', () => {
       executeQuery('a_plus', 'SELECT COUNT(*) FROM `a_plus_drafts`')
     ).rejects.not.toThrow(/no longer exists/);
   });
+
+  it('does not mistake a backticked field for a collection', async () => {
+    // `deleted` is a document field, and N1QL escapes fields exactly the way it
+    // escapes keyspaces. Matching every quoted token made the soft-delete guard
+    // on nearly every read look like an unmigrated collection, so /api/products
+    // answered 500 while the statement was correct.
+    await expect(
+      executeQuery(
+        'catalog',
+        'SELECT RAW p FROM `catalog_products` p WHERE p.`deleted` IS MISSING'
+      )
+    ).rejects.not.toThrow(/no longer exists/);
+  });
+
+  it('does not mistake a bare selected field for a collection', async () => {
+    await expect(
+      executeQuery('catalog', 'SELECT `title` FROM `catalog_products`')
+    ).rejects.not.toThrow(/no longer exists/);
+  });
+
+  it('still catches a bare keyspace in a JOIN', async () => {
+    await expect(
+      executeQuery(
+        'catalog',
+        'SELECT * FROM `catalog_products` p JOIN `variants` v ON v.productId = p.productId'
+      )
+    ).rejects.toThrow(/catalog_variants/);
+  });
+
+  it('still catches a bare keyspace in UPDATE and DELETE FROM', async () => {
+    await expect(
+      executeQuery('catalog', 'UPDATE `products` SET x = 1')
+    ).rejects.toThrow(/no longer exists/);
+
+    await expect(
+      executeQuery('catalog', 'DELETE FROM `products` WHERE x = 1')
+    ).rejects.toThrow(/no longer exists/);
+  });
+
+  it('still catches a bare keyspace in UPSERT INTO', async () => {
+    await expect(
+      executeQuery(
+        'catalog',
+        'UPSERT INTO `products` (KEY, VALUE) VALUES ($k, $v)'
+      )
+    ).rejects.toThrow(/no longer exists/);
+  });
 });

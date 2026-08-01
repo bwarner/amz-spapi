@@ -60,6 +60,25 @@ export function collectionName(domain: string, collection: string): string {
 }
 
 /**
+ * Every identifier this statement uses as a keyspace.
+ *
+ * Only these positions can name a collection, which is the whole reason this is
+ * matched rather than every backtick-quoted token: N1QL escapes *field* names
+ * the same way, so `p.\`deleted\`` — the soft-delete guard on nearly every read
+ * — is syntactically identical to a collection reference and is not one.
+ *
+ * `FROM` also covers `DELETE FROM`; `INTO` covers `INSERT INTO` and
+ * `UPSERT INTO`.
+ */
+function keyspaceNames(statement: string): string[] {
+  return [
+    ...statement.matchAll(
+      /\b(?:from|join|into|update)\s+`([a-z][a-z0-9_]*)`/gi
+    ),
+  ].map(([, name]) => name);
+}
+
+/**
  * Catch a statement that still names a collection the old way.
  *
  * After ADR-0005 there is one scope per environment and collections are
@@ -70,9 +89,10 @@ export function collectionName(domain: string, collection: string): string {
  */
 function assertQualified(domain: string, statement: string): void {
   const prefix = `${domain}_`;
-  for (const [, name] of statement.matchAll(/`([a-z][a-z0-9_]*)`/g)) {
-    // Bare entity names that look like this domain's old collections.
-    if (name.startsWith(prefix) || name.includes('_')) continue;
+  for (const name of keyspaceNames(statement)) {
+    // A flattened name always contains the joining underscore; a bare entity
+    // name never does.
+    if (name.includes('_')) continue;
     throw new Error(
       `Statement names collection \`${name}\`, which no longer exists. ` +
         `Collections are flat per environment: use collectionName('${domain}', '${name}') ` +
