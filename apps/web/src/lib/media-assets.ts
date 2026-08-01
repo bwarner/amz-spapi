@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { awsCredentials } from './aws-credentials';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -75,6 +76,9 @@ export function getAssetBucket(): string {
 export function createAssetS3Client(): S3Client {
   return new S3Client({
     region: process.env['AWS_REGION'] || 'us-east-1',
+    // Undefined locally, so the SDK uses the SSO profile; on Vercel this is the
+    // OIDC-assumed role, because there is no credential there to find (#11).
+    credentials: awsCredentials(),
   });
 }
 

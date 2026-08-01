@@ -1,11 +1,16 @@
 /**
- * Simplified Couchbase credential store for the web app (v1).
+ * Couchbase credential store for the web app.
  *
- * WARNING: This v1 implementation stores tokens WITHOUT KMS encryption.
- * This is acceptable for development only. Before production, implement
- * proper KMS encryption per GitHub issue #11.
+ * Secrets are encrypted under KMS before they reach the database and decrypted
+ * on the way out, so a caller sees a plain `AmazonCredentialProfile` and never
+ * handles ciphertext (#11). What is stored is a different shape from what is
+ * returned: `client_secret`, `refresh_token` and `access_token` are replaced by
+ * a single `encrypted_secrets` blob.
  *
- * @see packages/credential-store/src/lib/couchbase-credential-store.ts for KMS version
+ * There is no path that reads a plaintext profile. A document written before
+ * encryption fails loudly and names the migration rather than being read as-is
+ * — a store that accepts both would leave plaintext working indefinitely, which
+ * is the state this exists to end.
  */
 import {
   getDocument,
@@ -19,9 +24,40 @@ import type {
   AmazonCredentialProfile,
   ICredentialRepository,
 } from '@farvisionllc/models';
+import {
+  decryptSecrets,
+  encryptSecrets,
+  type CredentialContext,
+} from './credential-encryption';
 
 const SCOPE = 'credentials';
 const COLLECTION = 'profiles';
+
+/**
+ * A profile as it exists in Couchbase: metadata in the clear, secrets not.
+ *
+ * The clear fields are the ones queries filter and list on. None of them is a
+ * credential.
+ */
+export type StoredProfile = Omit<
+  AmazonCredentialProfile,
+  'client_secret' | 'refresh_token' | 'access_token'
+> & {
+  encrypted_secrets: string;
+  deleted?: boolean;
+};
+
+function contextOf(profile: {
+  profile_name: string;
+  api_type: AmazonApiType;
+  user_id?: string;
+}): CredentialContext {
+  return {
+    userId: profile.user_id,
+    apiType: profile.api_type,
+    profileName: profile.profile_name,
+  };
+}
 
 function getDocKey(
   profileName: string,
@@ -44,10 +80,21 @@ class WebCredentialStore implements ICredentialRepository {
       profile.api_type,
       profile.user_id
     );
-    await upsertDocument(SCOPE, COLLECTION, key, {
-      ...profile,
+
+    // Destructured out rather than deleted afterwards, so a secret cannot
+    // survive into the stored document by being forgotten here.
+    const { client_secret, refresh_token, access_token, ...metadata } = profile;
+
+    const stored: StoredProfile = {
+      ...metadata,
       updated_at: Date.now(),
-    });
+      encrypted_secrets: await encryptSecrets(
+        { client_secret, refresh_token, access_token },
+        contextOf(profile)
+      ),
+    };
+
+    await upsertDocument(SCOPE, COLLECTION, key, stored);
   }
 
   async getProfile(
@@ -56,11 +103,29 @@ class WebCredentialStore implements ICredentialRepository {
     userId?: string
   ): Promise<AmazonCredentialProfile | null> {
     const key = getDocKey(profileName, apiType, userId);
-    const doc = await getDocument<
-      AmazonCredentialProfile & { deleted?: boolean }
-    >(SCOPE, COLLECTION, key);
+    const doc = await getDocument<StoredProfile>(SCOPE, COLLECTION, key);
     if (!doc || doc.deleted) return null;
-    return doc;
+
+    if (!doc.encrypted_secrets) {
+      // Written before #11. Reading it would mean handling plaintext secrets
+      // on a path that is supposed to have none, so refuse and say what fixes
+      // it.
+      throw new Error(
+        `Credential profile "${profileName}" (${apiType}) predates encryption ` +
+          `and has no encrypted_secrets. Run: npx tsx apps/web/scripts/encrypt-credentials.ts`
+      );
+    }
+
+    const secrets = await decryptSecrets(doc.encrypted_secrets, contextOf(doc));
+
+    // Shaped back into what callers expect; `encrypted_secrets` is an artefact
+    // of storage and has no business leaving this file.
+    const {
+      encrypted_secrets: _ciphertext,
+      deleted: _deleted,
+      ...metadata
+    } = doc;
+    return { ...metadata, ...secrets };
   }
 
   async updateAccessToken(
