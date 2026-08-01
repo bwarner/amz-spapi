@@ -62,10 +62,28 @@ one route key fails the synth, naming both files.
 Declaring no routes at all builds no API — there is no empty gateway waiting for
 someone to need it.
 
-> **Not authenticated yet.** The Auth0 authorizer is
-> [#54](https://github.com/bwarner/amz-spapi/issues/54) and is not wired.
-> Until it is, every route answers anyone who has the URL, and synth prints a
-> warning saying so. Do not route anything that reads seller data yet.
+### Every route is authenticated
+
+Routes require a valid Auth0 access token ([#54](https://github.com/bwarner/amz-spapi/issues/54)).
+API Gateway validates it against the tenant's JWKS — signature, `iss`, `aud`,
+`exp` — before your function is invoked, so an unauthenticated request never
+reaches it and is never billed. The verified claims arrive at
+`event.requestContext.authorizer.jwt.claims`; `claims.sub` is the Auth0 user id,
+the same value `session.user.sub` gives the web app.
+
+There is no authorizer Lambda. The gateway does the validation itself — see
+[ADR-0007](../../docs/adr/0007-page-shaped-endpoints-and-gateway-jwt-validation.md),
+which also records what would justify adding one.
+
+**Still check for a subject.** `metadata.lambda.routes` cannot express "public",
+so today authentication is all-or-nothing per stage — but a stage with no Auth0
+settings configured deploys open, and synth warns loudly when that happens. A
+handler that assumes `sub` is present would treat an unauthenticated caller as a
+verified one, so read it and refuse when it is missing, the way
+`apps/lambdas/me` does.
+
+Endpoints should be **page-shaped** — one call per view, not one per row. The
+reasoning, and what it costs to get wrong, is in ADR-0007.
 
 ## Choosing packaging: can it be bundled?
 
