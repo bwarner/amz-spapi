@@ -5,7 +5,14 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
-import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useCallback,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -93,6 +100,25 @@ function photoManifest(photos: PendingPhoto[]): string {
 // which conversation it was on.
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
+/**
+ * How close to the bottom still counts as "following along".
+ *
+ * Shared by the auto-scroll and the scroll-to-bottom button so they cannot
+ * disagree — a button that appears while the view is still being auto-scrolled
+ * is its own kind of flicker.
+ */
+const FOLLOW_THRESHOLD_PX = 100;
+
+/**
+ * `useLayoutEffect` on the client, `useEffect` on the server.
+ *
+ * The scroll correction has to run before paint or the wrong position is
+ * visible, but `useLayoutEffect` warns when React renders on the server, which
+ * it does for this component's first pass.
+ */
+const useIsomorphicLayoutEffect =
+  typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
 type ChatSummary = {
   chatId: string;
   title: string;
@@ -158,6 +184,12 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  /**
+   * Set whenever a whole conversation is swapped in, so the next scroll jumps
+   * to the end instead of animating through the history that just appeared.
+   * True initially: the first paint of a resumed conversation is the same case.
+   */
+  const jumpToEndRef = useRef(true);
 
   // Resume the last conversation from the server (browser only remembers its id).
   useEffect(() => {
@@ -176,7 +208,10 @@ export default function ChatPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { chat?: { messages?: AppMessage[] } } | null) => {
         if (cancelled) return;
-        if (data?.chat?.messages?.length) setMessages(data.chat.messages);
+        if (data?.chat?.messages?.length) {
+          jumpToEndRef.current = true;
+          setMessages(data.chat.messages);
+        }
       })
       .catch(() => {
         // Offline / not yet saved — start empty.
@@ -191,6 +226,9 @@ export default function ChatPage() {
     chatIdRef.current = chatId;
     setActiveChatId(chatId);
     window.localStorage.setItem(CHAT_ID_KEY, chatId);
+    // Also a whole-conversation swap, even though the new one is empty: the
+    // first reply should not animate up from wherever the old one was left.
+    jumpToEndRef.current = true;
     setMessages([]);
     setPendingPhotos([]);
   }, [setMessages]);
@@ -219,6 +257,7 @@ export default function ChatPage() {
         chatIdRef.current = chatId;
         setActiveChatId(chatId);
         window.localStorage.setItem(CHAT_ID_KEY, chatId);
+        jumpToEndRef.current = true;
         setMessages(data.chat?.messages ?? []);
         setPendingPhotos([]);
       } catch {
@@ -256,8 +295,39 @@ export default function ChatPage() {
     'Check inventory levels for my FBA products',
   ];
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  /**
+   * Keep the latest message in view, without hijacking the scroll.
+   *
+   * Three cases, which the previous single `scrollIntoView({ behavior:
+   * 'smooth' })` conflated:
+   *
+   * 1. **Opening a conversation.** It should already be at the end, so this
+   *    jumps with no animation, in a LAYOUT effect — before the browser paints.
+   *    Running after paint is what produced the blink: the newly loaded
+   *    conversation was painted at the previous scroll position and only then
+   *    animated all the way down through its history.
+   * 2. **A message arriving while you are at the bottom.** Follow it smoothly.
+   * 3. **A message arriving while you have scrolled up to read.** Leave the
+   *    scroll alone — the button that appears is how you come back. Being
+   *    yanked to the end mid-sentence is the same complaint as (1), just later.
+   */
+  useIsomorphicLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    if (jumpToEndRef.current) {
+      jumpToEndRef.current = false;
+      // `scrollTop` rather than scrollIntoView: the latter can scroll ancestors
+      // too, which on a short conversation moves the whole page.
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < FOLLOW_THRESHOLD_PX) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -266,7 +336,8 @@ export default function ChatPage() {
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container;
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+      const isNearBottom =
+        scrollHeight - scrollTop - clientHeight < FOLLOW_THRESHOLD_PX;
       setShowScrollButton(!isNearBottom && messages.length > 0);
     };
 
