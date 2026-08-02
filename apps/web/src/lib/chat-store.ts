@@ -221,6 +221,41 @@ async function reserveSeqRange(params: {
 }
 
 /**
+ * Seqs already assigned to these message ids, by id.
+ *
+ * Scoped to the ids in this turn rather than the whole conversation: a long
+ * chat has hundreds of messages and the window is at most twenty.
+ */
+async function storedSeqsFor(
+  userId: string,
+  chatId: string,
+  messageIds: string[]
+): Promise<Map<string, number>> {
+  if (!messageIds.length) return new Map();
+
+  try {
+    const result = await executeQuery<{ id: string; seq: number }>(
+      SCOPE,
+      `SELECT RAW { "id": m.message.id, "seq": m.seq }
+       FROM \`${collectionName(SCOPE, MESSAGES_COLLECTION)}\` m
+       WHERE m.userId = $userId AND m.chatId = $chatId
+         AND m.message.id IN $ids`,
+      { parameters: { userId, chatId, ids: messageIds } }
+    );
+    return new Map(result.rows.map((row) => [row.id, row.seq]));
+  } catch (error) {
+    // Fall back to trusting the client rather than failing the save. That
+    // reintroduces the over-count, which is a wrong number — losing the turn
+    // would be lost work.
+    console.error(
+      '[chat-store] could not read stored seqs',
+      error instanceof Error ? error.message : error
+    );
+    return new Map();
+  }
+}
+
+/**
  * Persist a completed turn: append new messages (those without a seq),
  * re-upsert the final message, merge photo labels, refresh the meta doc.
  */
@@ -235,8 +270,34 @@ export async function saveChatTurn(params: {
 
   const now = Date.now();
   const photoLabels = params.photoLabels ?? {};
+
+  /**
+   * Which of these messages we have already stored.
+   *
+   * "New" used to mean "the client did not send a seq", which is not the same
+   * thing. The server assigns seqs and never tells the client, so every message
+   * streamed during a live session still looked new on the next turn — and was
+   * re-counted and re-sequenced, every turn, for the life of the conversation.
+   * One chat reported 4094 messages against 308 actual documents.
+   *
+   * Message documents are keyed by message id, so what is stored is the
+   * authority. Asking costs one query per turn and makes the count correct
+   * regardless of what the client believes.
+   */
+  const storedSeqs = await storedSeqsFor(
+    userId,
+    chatId,
+    messages.map((message) => message.id)
+  );
+
+  const seqFor = (message: ChatUIMessage): number | undefined =>
+    storedSeqs.get(message.id) ??
+    (typeof message.metadata?.seq === 'number'
+      ? message.metadata.seq
+      : undefined);
+
   const newCount = messages.filter(
-    (message) => typeof message.metadata?.seq !== 'number'
+    (message) => seqFor(message) === undefined
   ).length;
 
   let baseSeq = await reserveSeqRange({
@@ -292,7 +353,7 @@ export async function saveChatTurn(params: {
     seq: number;
     isNew: boolean;
   }> = messages.map((message) => {
-    const known = message.metadata?.seq;
+    const known = seqFor(message);
     if (typeof known === 'number') {
       return { message, seq: known, isNew: false };
     }

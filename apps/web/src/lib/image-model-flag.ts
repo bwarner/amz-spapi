@@ -1,4 +1,4 @@
-import { PostHog } from 'posthog-node';
+import { getPostHog } from './posthog-server';
 import type { ImageModelVariant } from '@amz-spapi/ai-provider';
 
 /**
@@ -17,30 +17,6 @@ const VALID_VARIANTS: readonly ImageModelVariant[] = [
   'grok',
 ];
 
-// Module-scope singleton — reused across warm serverless invocations / the dev
-// server. `undefined` = not yet initialized, `null` = PostHog not configured.
-let client: PostHog | null | undefined;
-
-function getClient(): PostHog | null {
-  if (client !== undefined) return client;
-  const key =
-    process.env['POSTHOG_KEY'] ?? process.env['NEXT_PUBLIC_POSTHOG_KEY'];
-  if (!key) {
-    client = null;
-    return client;
-  }
-  client = new PostHog(key, {
-    host:
-      process.env['POSTHOG_HOST'] ??
-      process.env['NEXT_PUBLIC_POSTHOG_HOST'] ??
-      'https://us.i.posthog.com',
-    // We only read flags here; keep the client from buffering analytics events.
-    flushAt: 1,
-    flushInterval: 0,
-  });
-  return client;
-}
-
 /**
  * Resolve which image backend to use for a given user (Auth0 `sub` as the
  * PostHog distinct id). Returns `openai` when unconfigured/unknown.
@@ -53,7 +29,7 @@ export async function resolveImageModelVariant(
   if (override && (VALID_VARIANTS as readonly string[]).includes(override)) {
     return override as ImageModelVariant;
   }
-  const ph = getClient();
+  const ph = getPostHog();
   if (!ph) return 'openai';
   try {
     const value = await ph.getFeatureFlag(IMAGE_MODEL_FLAG, distinctId);
@@ -83,7 +59,7 @@ export async function resolveAplusGenerationMode(
   // Dev/local override — takes precedence over the PostHog flag.
   const override = process.env['A_PLUS_GENERATION_MODE'];
   if (override === 'single' || override === 'parallel') return override;
-  const ph = getClient();
+  const ph = getPostHog();
   if (!ph) return 'single';
   try {
     const value = await ph.getFeatureFlag(GENERATION_MODE_FLAG, distinctId);

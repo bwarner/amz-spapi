@@ -28,6 +28,7 @@ import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
 import { createDocumentOps } from '../../../lib/document-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
+import { recordModelUsage } from '../../../lib/model-usage';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
 import {
@@ -142,6 +143,20 @@ export async function POST(request: Request) {
   let sellerId = process.env['SP_SELLER_ID'];
   let userMarketplaceId = marketplaceId;
 
+  /**
+   * True when the credentials could not be READ, as distinct from absent.
+   *
+   * These are two different situations that used to look identical. Since #11
+   * the secrets are KMS-encrypted, so reading them can fail for reasons that
+   * have nothing to do with whether the seller connected an account —
+   * unreachable KMS, expired AWS credentials, a key policy change. Swallowing
+   * that turned every such failure into "your Amazon account isn't connected",
+   * which is both wrong and unfixable by the person reading it: the Connections
+   * page still says connected, because listing profiles reads metadata only and
+   * never decrypts.
+   */
+  let credentialsUnreadable = false;
+
   try {
     const userId = session.user.sub;
     const resolved = await resolveAmazonConnection({
@@ -156,8 +171,15 @@ export async function POST(request: Request) {
       sellerId = profile.seller_id || sellerId;
       userMarketplaceId = profile.marketplace_id || marketplaceId;
     }
-  } catch {
-    // Couchbase not available — fall back to env vars
+  } catch (error) {
+    // Still falls back to env vars, which is what makes local development
+    // without Couchbase work — but it no longer does so in silence.
+    credentialsUnreadable = true;
+    console.error(
+      '[chat] could not read stored Amazon credentials for',
+      session.user.sub,
+      error instanceof Error ? `${error.name}: ${error.message}` : error
+    );
   }
 
   // Create SP client and cache only if credentials are available
@@ -313,6 +335,27 @@ export async function POST(request: Request) {
           .join('\n')}`
       : undefined;
 
+  /**
+   * Tell the agent that the credentials are unreadable, not absent.
+   *
+   * Without this it sees no `spCache`, concludes the seller never connected an
+   * account, and tells them to go and connect one — advice that cannot work,
+   * because they already did and the Connections page agrees with them.
+   */
+  const credentialNotice = credentialsUnreadable
+    ? `AMAZON CREDENTIALS COULD NOT BE READ THIS TURN.\n` +
+      `This is NOT the same as the seller having no connected account, and it is ` +
+      `very likely they do have one — the Connections page reads profile ` +
+      `metadata and never decrypts, so it will still show them as connected. ` +
+      `Do NOT tell them to connect an account or to re-authorize. Say that their ` +
+      `Amazon data is temporarily unreadable on our side, that it is being looked ` +
+      `at, and answer whatever you can without it.`
+    : undefined;
+
+  const additionalInstructions =
+    [registryInstructions, credentialNotice].filter(Boolean).join('\n\n') ||
+    undefined;
+
   const agent = createSellerAgent({
     spCache,
     provider,
@@ -326,7 +369,7 @@ export async function POST(request: Request) {
     reportOps,
     listingWrites,
     marketplaceId: userMarketplaceId,
-    additionalInstructions: registryInstructions,
+    additionalInstructions,
   });
 
   const trimmedMessages = trimHistory(messages as UIMessage[], {
@@ -364,6 +407,35 @@ export async function POST(request: Request) {
       writer.merge(result.toUIMessageStream());
     },
     onFinish: async ({ messages: updatedMessages }) => {
+      // Token spend, which nothing recorded before: the gateway bills it and
+      // the ledger never saw it, so a heavy month first showed up as a balance
+      // running out. Awaited here because `totalUsage` only settles once the
+      // whole agent loop has finished, steps included.
+      try {
+        const [usage, response, steps] = await Promise.all([
+          result.totalUsage,
+          result.response,
+          result.steps,
+        ]);
+        await recordModelUsage({
+          userId: chatUserId,
+          feature: 'chat',
+          // The model that actually served the turn, not the tier we asked
+          // for — a gateway fallback would otherwise be billed to the wrong
+          // name and priced with the wrong table.
+          modelId: response?.modelId ?? 'unknown',
+          usage,
+          chatId,
+          steps: steps?.length,
+        });
+      } catch (error) {
+        // Metering must never cost the seller their answer.
+        console.error(
+          '[chat] usage not recorded',
+          error instanceof Error ? error.message : error
+        );
+      }
+
       if (!chatId) return;
       try {
         await saveChatTurn({

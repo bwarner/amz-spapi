@@ -30,6 +30,11 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { uploadImageAsset } from '@/lib/asset-upload-client';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { MessageBubble, type AppMessage } from './message-bubble';
 
 type PendingPhoto = {
@@ -634,16 +639,34 @@ export default function ChatPage() {
                     : 'hover:bg-muted/60'
                 )}
               >
-                <button
-                  type="button"
-                  onClick={() => void selectChat(chat.chatId)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <span className="block truncate text-sm">{chat.title}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {relativeTime(chat.updatedAt)}
-                  </span>
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => void selectChat(chat.chatId)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <span className="block truncate text-sm">
+                        {chat.title}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {relativeTime(chat.updatedAt)}
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  {/*
+                    The sidebar truncates to its width, which for most prompts
+                    hides the part that distinguishes one conversation from
+                    another — several can open with the same few words. This
+                    shows the stored title whole, wrapped rather than clipped.
+                  */}
+                  <TooltipContent
+                    side="right"
+                    className="max-w-xs whitespace-normal break-words"
+                  >
+                    {chat.title}
+                  </TooltipContent>
+                </Tooltip>
                 <button
                   type="button"
                   onClick={() => void deleteChatById(chat.chatId)}
