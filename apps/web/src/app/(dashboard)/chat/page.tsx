@@ -5,7 +5,14 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
-import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useCallback,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -80,6 +87,50 @@ function nextPhotoLetters(used: Set<string>, count: number): string[] {
   return letters;
 }
 
+type PendingDocument = {
+  assetId: string;
+  fileName: string;
+  /** What the recogniser made of it, so the chip can say more than "file". */
+  kind?: string;
+  /**
+   * A markdown table of the first rows, for spreadsheets only.
+   *
+   * Inlined because there is no tool that reads a sheet: a PDF invoice has
+   * `read-document`, a spreadsheet has nothing, so an asset id alone would
+   * attach a file the agent cannot open. The preview is bounded server-side —
+   * enough to answer a question about a small sheet, and for a large one it
+   * says it is truncated so the agent offers report import instead.
+   */
+  preview?: string;
+  totalRows?: number;
+};
+
+/**
+ * Tell the agent which documents are attached and how to reach them.
+ *
+ * PDFs travel as an asset id and nothing more: `read-document` opens them, and
+ * that is the agent's own decision and its own metered call, so inlining the
+ * extracted figures here would pay for the extraction twice and file nothing.
+ *
+ * Spreadsheets are the opposite case, and deliberately so. No tool reads a
+ * sheet, so an id alone would attach a file the agent cannot open — the same
+ * silence #72 is about, in a different container. Their rows travel inline,
+ * bounded server-side, and a truncated preview says so.
+ */
+function documentManifest(documents: PendingDocument[]): string {
+  const entries = documents.map((doc) => {
+    const head = `- ${doc.fileName}${
+      doc.kind ? ` (looks like: ${doc.kind})` : ''
+    } — assetId: ${doc.assetId}`;
+    if (!doc.preview) return head;
+    const rows = doc.totalRows != null ? ` — ${doc.totalRows} rows` : '';
+    return `${head}${rows}\n\n${doc.preview}`;
+  });
+  return `Attached documents (open any PDF with read-document before answering):\n\n${entries.join(
+    '\n\n'
+  )}`;
+}
+
 function photoManifest(photos: PendingPhoto[]): string {
   const lines = photos.map(
     (photo) => `![${photo.label}](${photo.url} "${photo.fileName}")`
@@ -91,7 +142,47 @@ function photoManifest(photos: PendingPhoto[]): string {
 
 // Conversations live server-side (Couchbase); the browser only remembers
 // which conversation it was on.
+/**
+ * Attachable non-image files.
+ *
+ * Extension as well as mime type, because browsers label these
+ * inconsistently — an .xlsx arrives as octet-stream often enough that trusting
+ * `file.type` alone silently rejects real spreadsheets.
+ */
+const DOCUMENT_EXTENSIONS = ['pdf', 'csv', 'tsv', 'xlsx', 'xls', 'xlsm'];
+
+function isDocumentFile(file: File): boolean {
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  if (DOCUMENT_EXTENSIONS.includes(extension)) return true;
+  return (
+    file.type === 'application/pdf' ||
+    file.type === 'text/csv' ||
+    file.type === 'text/tab-separated-values' ||
+    file.type.includes('spreadsheet') ||
+    file.type.includes('ms-excel')
+  );
+}
+
 const CHAT_ID_KEY = 'sellavant-chat-id';
+
+/**
+ * How close to the bottom still counts as "following along".
+ *
+ * Shared by the auto-scroll and the scroll-to-bottom button so they cannot
+ * disagree — a button that appears while the view is still being auto-scrolled
+ * is its own kind of flicker.
+ */
+const FOLLOW_THRESHOLD_PX = 100;
+
+/**
+ * `useLayoutEffect` on the client, `useEffect` on the server.
+ *
+ * The scroll correction has to run before paint or the wrong position is
+ * visible, but `useLayoutEffect` warns when React renders on the server, which
+ * it does for this component's first pass.
+ */
+const useIsomorphicLayoutEffect =
+  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 type ChatSummary = {
   chatId: string;
@@ -117,6 +208,9 @@ function relativeTime(timestamp: number): string {
 export default function ChatPage() {
   const [input, setInput] = useState('');
   const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>(
+    []
+  );
   const [uploadingCount, setUploadingCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -158,6 +252,12 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  /**
+   * Set whenever a whole conversation is swapped in, so the next scroll jumps
+   * to the end instead of animating through the history that just appeared.
+   * True initially: the first paint of a resumed conversation is the same case.
+   */
+  const jumpToEndRef = useRef(true);
 
   // Resume the last conversation from the server (browser only remembers its id).
   useEffect(() => {
@@ -176,7 +276,10 @@ export default function ChatPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { chat?: { messages?: AppMessage[] } } | null) => {
         if (cancelled) return;
-        if (data?.chat?.messages?.length) setMessages(data.chat.messages);
+        if (data?.chat?.messages?.length) {
+          jumpToEndRef.current = true;
+          setMessages(data.chat.messages);
+        }
       })
       .catch(() => {
         // Offline / not yet saved — start empty.
@@ -191,6 +294,9 @@ export default function ChatPage() {
     chatIdRef.current = chatId;
     setActiveChatId(chatId);
     window.localStorage.setItem(CHAT_ID_KEY, chatId);
+    // Also a whole-conversation swap, even though the new one is empty: the
+    // first reply should not animate up from wherever the old one was left.
+    jumpToEndRef.current = true;
     setMessages([]);
     setPendingPhotos([]);
   }, [setMessages]);
@@ -219,6 +325,7 @@ export default function ChatPage() {
         chatIdRef.current = chatId;
         setActiveChatId(chatId);
         window.localStorage.setItem(CHAT_ID_KEY, chatId);
+        jumpToEndRef.current = true;
         setMessages(data.chat?.messages ?? []);
         setPendingPhotos([]);
       } catch {
@@ -256,8 +363,39 @@ export default function ChatPage() {
     'Check inventory levels for my FBA products',
   ];
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  /**
+   * Keep the latest message in view, without hijacking the scroll.
+   *
+   * Three cases, which the previous single `scrollIntoView({ behavior:
+   * 'smooth' })` conflated:
+   *
+   * 1. **Opening a conversation.** It should already be at the end, so this
+   *    jumps with no animation, in a LAYOUT effect — before the browser paints.
+   *    Running after paint is what produced the blink: the newly loaded
+   *    conversation was painted at the previous scroll position and only then
+   *    animated all the way down through its history.
+   * 2. **A message arriving while you are at the bottom.** Follow it smoothly.
+   * 3. **A message arriving while you have scrolled up to read.** Leave the
+   *    scroll alone — the button that appears is how you come back. Being
+   *    yanked to the end mid-sentence is the same complaint as (1), just later.
+   */
+  useIsomorphicLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    if (jumpToEndRef.current) {
+      jumpToEndRef.current = false;
+      // `scrollTop` rather than scrollIntoView: the latter can scroll ancestors
+      // too, which on a short conversation moves the whole page.
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < FOLLOW_THRESHOLD_PX) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -266,7 +404,8 @@ export default function ChatPage() {
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container;
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+      const isNearBottom =
+        scrollHeight - scrollTop - clientHeight < FOLLOW_THRESHOLD_PX;
       setShowScrollButton(!isNearBottom && messages.length > 0);
     };
 
@@ -278,16 +417,100 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  /**
+   * Send PDFs through the existing document importer.
+   *
+   * That route already stores the file as an asset, recognises it and extracts
+   * cost data — the machinery the chat surface simply had no entry point into.
+   * Only the asset id and the verdict come back here; the agent reads the
+   * document itself when it needs to, so attaching one costs nothing until it
+   * is used.
+   */
+  const uploadDocuments = async (files: File[]) => {
+    const attached: PendingDocument[] = [];
+    const failed: string[] = [];
+
+    for (const file of files) {
+      const body = new FormData();
+      body.append('file', file);
+      try {
+        const res = await fetch('/api/documents/import', {
+          method: 'POST',
+          body,
+        });
+        const data = (await res.json()) as {
+          assetId?: string;
+          error?: string;
+          recognition?: { kind?: string };
+          spreadsheet?: {
+            markdown?: string;
+            totalRows?: number;
+            truncated?: boolean;
+          };
+          spreadsheetError?: string;
+        };
+        if (!res.ok || !data.assetId) {
+          failed.push(`${file.name}${data.error ? ` (${data.error})` : ''}`);
+          continue;
+        }
+        if (data.spreadsheetError)
+          failed.push(`${file.name} (${data.spreadsheetError})`);
+        attached.push({
+          assetId: data.assetId,
+          fileName: file.name,
+          kind:
+            data.recognition?.kind && data.recognition.kind !== 'unknown'
+              ? data.recognition.kind
+              : undefined,
+          preview: data.spreadsheet?.markdown,
+          totalRows: data.spreadsheet?.totalRows,
+        });
+      } catch {
+        failed.push(file.name);
+      }
+    }
+
+    if (attached.length) {
+      setPendingDocuments((current) => [
+        ...current,
+        // Same file twice in one turn is a slip, not an instruction.
+        ...attached.filter(
+          (doc) => !current.some((existing) => existing.assetId === doc.assetId)
+        ),
+      ]);
+    }
+    if (failed.length) {
+      setUploadError(`Could not attach ${failed.join(', ')}.`);
+    }
+  };
+
   const handleFilesSelected = async (files: FileList | null) => {
     if (!files?.length) return;
     setUploadError(null);
-    const selected = Array.from(files).filter((file) =>
-      file.type.startsWith('image/')
-    );
-    if (!selected.length) return;
 
-    setUploadingCount((count) => count + selected.length);
+    const all = Array.from(files);
+    const selected = all.filter((file) => file.type.startsWith('image/'));
+    const documents = all.filter((file) => isDocumentFile(file));
+    const rejected = all.filter(
+      (file) => !selected.includes(file) && !documents.includes(file)
+    );
+
+    // Never silence (#72). A file that is dropped and then simply vanishes is
+    // indistinguishable from a broken app; say which ones were not taken.
+    if (rejected.length) {
+      setUploadError(
+        `Cannot attach ${rejected
+          .map((file) => file.name)
+          .join(', ')} — chat takes images, PDFs and spreadsheets.`
+      );
+    }
+    if (!selected.length && !documents.length) return;
+
+    setUploadingCount((count) => count + selected.length + documents.length);
     try {
+      if (documents.length) await uploadDocuments(documents);
+      if (!selected.length) return;
+
       const uploaded = await Promise.all(
         selected.map((file) => uploadImageAsset(file))
       );
@@ -311,7 +534,7 @@ export default function ChatPage() {
         error instanceof Error ? error.message : 'Photo upload failed.'
       );
     } finally {
-      setUploadingCount((count) => count - selected.length);
+      setUploadingCount((count) => count - selected.length - documents.length);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -325,15 +548,26 @@ export default function ChatPage() {
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim();
-    if ((!text && pendingPhotos.length === 0) || isStreaming) return;
+    if (
+      (!text && pendingPhotos.length === 0 && pendingDocuments.length === 0) ||
+      isStreaming
+    ) {
+      return;
+    }
     if (uploadingCount > 0) return;
 
     const photos = pendingPhotos;
+    const documents = pendingDocuments;
     setInput('');
     setPendingPhotos([]);
-    const combined = photos.length
-      ? `${text ? `${text}\n\n` : ''}${photoManifest(photos)}`
-      : text;
+    setPendingDocuments([]);
+    const combined = [
+      text,
+      photos.length ? photoManifest(photos) : '',
+      documents.length ? documentManifest(documents) : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     await sendMessage({ text: combined });
   };
 
@@ -447,7 +681,7 @@ export default function ChatPage() {
           ref={scrollContainerRef}
           className="min-h-0 flex-1 overflow-y-auto"
         >
-          <div className="mx-auto max-w-3xl px-4 py-6">
+          <div className="mx-auto max-w-3xl xl:max-w-5xl 2xl:max-w-6xl px-4 py-6">
             {messages.length === 0 ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
                 <div className="rounded-full bg-primary/10 p-4">
@@ -508,7 +742,7 @@ export default function ChatPage() {
         {/* Error banner */}
         {error && (
           <div className="shrink-0 border-t border-destructive/30 bg-destructive/5 px-4 py-3">
-            <div className="mx-auto flex max-w-3xl items-start gap-2">
+            <div className="mx-auto flex max-w-3xl xl:max-w-5xl 2xl:max-w-6xl items-start gap-2">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <p className="text-sm text-destructive">
                 {error.message || 'Something went wrong'}
@@ -519,8 +753,9 @@ export default function ChatPage() {
 
         {/* Input area */}
         <div className="shrink-0 border-t bg-background">
-          <div className="mx-auto max-w-3xl px-2 py-3 sm:px-4 sm:py-4">
+          <div className="mx-auto max-w-3xl xl:max-w-5xl 2xl:max-w-6xl px-2 py-3 sm:px-4 sm:py-4">
             {(pendingPhotos.length > 0 ||
+              pendingDocuments.length > 0 ||
               uploadingCount > 0 ||
               uploadError) && (
               <div className="mb-2">
@@ -548,6 +783,39 @@ export default function ChatPage() {
                       </figcaption>
                     </figure>
                   ))}
+                  {pendingDocuments.map((doc) => (
+                    <div
+                      key={doc.assetId}
+                      className="relative flex h-16 items-center gap-2 rounded-md border bg-background px-2 pr-6"
+                      title={doc.fileName}
+                    >
+                      <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0">
+                        <p className="max-w-[10rem] truncate text-xs font-medium">
+                          {doc.fileName}
+                        </p>
+                        {doc.kind && (
+                          <p className="text-[10px] text-muted-foreground">
+                            {doc.kind.replace(/-/g, ' ')}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPendingDocuments((current) =>
+                            current.filter(
+                              (entry) => entry.assetId !== doc.assetId
+                            )
+                          )
+                        }
+                        className="absolute -right-1.5 -top-1.5 rounded-full border bg-background p-0.5 shadow-sm"
+                        title={`Remove ${doc.fileName}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
                   {uploadingCount > 0 && (
                     <div className="flex h-16 w-16 items-center justify-center rounded-md border">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -560,7 +828,7 @@ export default function ChatPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/*,application/pdf,.pdf,.csv,.tsv,.xlsx,.xls,.xlsm"
                 multiple
                 hidden
                 onChange={(e) => handleFilesSelected(e.target.files)}
@@ -600,7 +868,9 @@ export default function ChatPage() {
                 <Button
                   type="submit"
                   disabled={
-                    (!input.trim() && pendingPhotos.length === 0) ||
+                    (!input.trim() &&
+                      pendingPhotos.length === 0 &&
+                      pendingDocuments.length === 0) ||
                     uploadingCount > 0
                   }
                   size="icon"

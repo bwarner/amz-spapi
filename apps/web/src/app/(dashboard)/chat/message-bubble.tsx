@@ -4,6 +4,7 @@ import { Bot, User, Loader2, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import type { UIMessage } from 'ai';
 import { APlusDocumentSchema, type APlusDocument } from '@farvisionllc/models';
 import { APlusPreview } from '@/components/aplus-preview/aplus-preview';
@@ -29,6 +30,29 @@ function parseAPlusDoc(output: unknown): APlusDocument | null {
 }
 
 const MARKDOWN_COMPONENTS: Components = {
+  /**
+   * Wide tables scroll rather than compress.
+   *
+   * A tracking-number table is a dozen columns of fixed-width identifiers; with
+   * nowhere to go it squeezes every column until the values wrap mid-token and
+   * stop being readable as identifiers at all. Its own scroll container keeps
+   * the page from scrolling sideways with it.
+   */
+  table: ({ children }) => (
+    <div className="my-2 max-w-full overflow-x-auto">
+      <table className="w-max min-w-full text-xs">{children}</table>
+    </div>
+  ),
+  // Identifiers — SKUs, FNSKUs, tracking numbers — read as one token in a
+  // fixed pitch and as noise in a proportional one.
+  td: ({ children }) => (
+    <td className="whitespace-nowrap align-top font-mono text-xs">
+      {children}
+    </td>
+  ),
+  th: ({ children }) => (
+    <th className="whitespace-nowrap text-left align-bottom">{children}</th>
+  ),
   img: ({ src, alt, title }) => {
     if (!src) return null;
     return (
@@ -145,6 +169,24 @@ const LISTING_IMAGE_TOOL_TYPES = new Set([
 
 /** Cap for one catalog item's image set so a single lookup can't flood the grid. */
 const CATALOG_IMAGES_MAX = 8;
+
+/**
+ * One renderable step of an assistant turn, in the order it happened.
+ *
+ * Rendering by sequence rather than by kind is what keeps a tool badge next to
+ * the sentence that explains it.
+ */
+type MessageBlock =
+  | { kind: 'text'; text: string }
+  | { kind: 'tool'; toolName: string; state: string }
+  | { kind: 'aplus'; doc: APlusDocument }
+  | { kind: 'images'; images: Array<{ url: string; label?: string }> }
+  | {
+      kind: 'approval';
+      approvalId: string;
+      toolName: string;
+      input: unknown;
+    };
 
 type CatalogImageEntry = { variant?: string; link?: string };
 type CatalogImageSet = { images?: CatalogImageEntry[] };
@@ -272,34 +314,55 @@ export function MessageBubble({
 }) {
   const isUser = message.role === 'user';
 
-  // Collect tool calls + special-render any A+ preview / listing image output
-  const toolCalls: { toolName: string; state: string }[] = [];
-  const aplusDocs: APlusDocument[] = [];
-  const listingImages: Array<{ url: string; label?: string }> = [];
-  const pendingApprovals: Array<{
-    approvalId: string;
-    toolName: string;
-    input: unknown;
-  }> = [];
+  /**
+   * The turn, in the order it happened.
+   *
+   * Previously every text part was concatenated into one string and every tool
+   * call collected into a separate list, so a turn that went
+   * `text → removeBackground → text → composite → text` rendered as all the
+   * tool badges followed by all the prose. The reader lost which commentary
+   * belonged to which step, and the text parts were glued together with no
+   * separator — running the last sentence of one into the first of the next.
+   *
+   * Walking the parts in sequence fixes both: the concatenation bug is a
+   * consequence of the ordering bug, not a separate defect.
+   */
+  const blocks: MessageBlock[] = [];
   const seenImageUrls = new Set<string>();
-  let textContent = '';
+
+  /**
+   * Adjacent text parts join with no separator, because streaming splits text
+   * at arbitrary points — a paragraph break between them would land mid
+   * sentence. A tool part is what ends a block, so the next text starts a new
+   * one.
+   */
+  const appendText = (text: string) => {
+    const last = blocks[blocks.length - 1];
+    if (last?.kind === 'text') last.text += text;
+    else blocks.push({ kind: 'text', text });
+  };
 
   if (message.parts) {
     for (const part of message.parts as ToolPart[]) {
       if (part.type === 'text') {
-        textContent += (part as { type: 'text'; text: string }).text;
+        appendText((part as { type: 'text'; text: string }).text);
         continue;
       }
       const toolName = getToolName(part.type);
       if (!toolName) continue;
 
-      toolCalls.push({ toolName, state: part.state ?? 'input-streaming' });
+      blocks.push({
+        kind: 'tool',
+        toolName,
+        state: part.state ?? 'input-streaming',
+      });
 
       if (part.state === 'approval-requested') {
         const approval = (part as unknown as { approval?: { id?: string } })
           .approval;
         if (approval?.id) {
-          pendingApprovals.push({
+          blocks.push({
+            kind: 'approval',
             approvalId: approval.id,
             toolName,
             input: (part as unknown as { input?: unknown }).input,
@@ -312,21 +375,30 @@ export function MessageBubble({
         part.state === 'output-available'
       ) {
         const doc = parseAPlusDoc(part.output);
-        if (doc) aplusDocs.push(doc);
+        if (doc) blocks.push({ kind: 'aplus', doc });
       }
 
       if (
         LISTING_IMAGE_TOOL_TYPES.has(part.type) &&
         part.state === 'output-available'
       ) {
-        for (const image of extractListingToolImages(part.output)) {
-          if (seenImageUrls.has(image.url)) continue;
+        // Deduped across the whole message: two tools reporting the same image
+        // should not show it twice, even from different steps.
+        const images = extractListingToolImages(part.output).filter((image) => {
+          if (seenImageUrls.has(image.url)) return false;
           seenImageUrls.add(image.url);
-          listingImages.push(image);
-        }
+          return true;
+        });
+        if (images.length) blocks.push({ kind: 'images', images });
       }
     }
   }
+
+  const hasAPlusDoc = blocks.some((block) => block.kind === 'aplus');
+  const hasText = blocks.some(
+    (block) => block.kind === 'text' && block.text.trim()
+  );
+  const hasTool = blocks.some((block) => block.kind === 'tool');
 
   return (
     <div
@@ -344,114 +416,118 @@ export function MessageBubble({
       <div
         className={cn(
           'rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3',
-          aplusDocs.length > 0
+          hasAPlusDoc
             ? 'w-full max-w-full sm:max-w-[95%]'
             : 'max-w-[92%] sm:max-w-[80%]',
           isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
         )}
       >
-        {/* Tool call indicators */}
-        {toolCalls.length > 0 && (
-          <div className="mb-2 space-y-1">
-            {toolCalls.map((tc, i) => (
-              <ToolCallDisplay
-                key={i}
-                toolName={tc.toolName}
-                state={tc.state}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* A+ preview docs (rendered before text so user sees the artifact first) */}
-        {aplusDocs.length > 0 && (
-          <div className="mb-3 space-y-4">
-            {aplusDocs.map((doc, i) => (
-              <APlusPreview key={i} doc={doc} />
-            ))}
-          </div>
-        )}
-
-        {/* Live-write approval prompts */}
-        {pendingApprovals.length > 0 && (
-          <div className="mb-3 space-y-2">
-            {pendingApprovals.map((approval) => (
-              <div
-                key={approval.approvalId}
-                className="rounded-lg border border-amber-400/60 bg-amber-50 p-3 dark:bg-amber-950/30"
-              >
-                <p className="text-sm font-medium">Approval required</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {approvalSummary(approval.toolName, approval.input)}
-                </p>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onApprovalResponse?.(approval.approvalId, true)
-                    }
-                    className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
+        {/* Every step in the order it happened (#72). */}
+        {blocks.map((block, index) => {
+          switch (block.kind) {
+            case 'text':
+              return block.text.trim() ? (
+                <div
+                  key={index}
+                  className={cn(
+                    // The block fills the bubble so tables, code and images use
+                    // the width; only paragraphs and list items are held to a
+                    // reading measure. Capping the whole block instead would
+                    // narrow exactly the content that wanted the room (#72).
+                    'prose prose-sm max-w-none prose-p:max-w-[70ch] prose-li:max-w-[70ch]',
+                    // Not the first block means prose that follows a tool,
+                    // which needs air above it or it reads as a caption.
+                    index > 0 && 'mt-3',
+                    isUser ? 'prose-invert' : 'dark:prose-invert'
+                  )}
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkBreaks]}
+                    components={MARKDOWN_COMPONENTS}
                   >
-                    Approve
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onApprovalResponse?.(approval.approvalId, false)
-                    }
-                    className="rounded-md border px-3 py-1.5 text-sm"
-                  >
-                    Reject
-                  </button>
+                    {block.text}
+                  </ReactMarkdown>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ) : null;
 
-        {/* Listing images from tool output */}
-        {listingImages.length > 0 && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {listingImages.map((image) => (
-              <figure key={image.url} className="w-24">
-                <a href={image.url} target="_blank" rel="noreferrer">
-                  <img
-                    src={image.url}
-                    alt={image.label ?? 'Listing image'}
-                    loading="lazy"
-                    decoding="async"
-                    className="h-24 w-24 rounded-md border bg-white object-contain"
+            case 'tool':
+              return (
+                <div key={index} className={cn(index > 0 && 'mt-2')}>
+                  <ToolCallDisplay
+                    toolName={block.toolName}
+                    state={block.state}
                   />
-                </a>
-                {image.label && (
-                  <figcaption className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                    {image.label}
-                  </figcaption>
-                )}
-              </figure>
-            ))}
-          </div>
-        )}
+                </div>
+              );
 
-        {/* Text content with markdown */}
-        {textContent && (
-          <div
-            className={cn(
-              'prose prose-sm max-w-none',
-              isUser ? 'prose-invert' : 'dark:prose-invert'
-            )}
-          >
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={MARKDOWN_COMPONENTS}
-            >
-              {textContent}
-            </ReactMarkdown>
-          </div>
-        )}
+            case 'aplus':
+              return (
+                <div key={index} className="mt-3">
+                  <APlusPreview doc={block.doc} />
+                </div>
+              );
+
+            case 'images':
+              return (
+                <div key={index} className="mt-3 flex flex-wrap gap-2">
+                  {block.images.map((image) => (
+                    <figure key={image.url} className="w-24">
+                      <a href={image.url} target="_blank" rel="noreferrer">
+                        <img
+                          src={image.url}
+                          alt={image.label ?? 'Listing image'}
+                          loading="lazy"
+                          decoding="async"
+                          className="h-24 w-24 rounded-md border bg-white object-contain"
+                        />
+                      </a>
+                      {image.label && (
+                        <figcaption className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                          {image.label}
+                        </figcaption>
+                      )}
+                    </figure>
+                  ))}
+                </div>
+              );
+
+            case 'approval':
+              return (
+                <div
+                  key={index}
+                  className="mt-3 rounded-lg border border-amber-400/60 bg-amber-50 p-3 dark:bg-amber-950/30"
+                >
+                  <p className="text-sm font-medium">Approval required</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {approvalSummary(block.toolName, block.input)}
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onApprovalResponse?.(block.approvalId, true)
+                      }
+                      className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onApprovalResponse?.(block.approvalId, false)
+                      }
+                      className="rounded-md border px-3 py-1.5 text-sm"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              );
+          }
+        })}
 
         {/* Streaming indicator */}
-        {isLast && isStreaming && !textContent && toolCalls.length === 0 && (
+        {isLast && isStreaming && !hasText && !hasTool && (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         )}
       </div>

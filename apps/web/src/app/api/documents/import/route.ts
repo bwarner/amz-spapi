@@ -12,6 +12,11 @@ import {
 } from '../../../../lib/media-assets';
 import { extractPdfText } from '../../../../lib/pdf-text';
 import {
+  previewAsMarkdown,
+  readSpreadsheet,
+  SpreadsheetError,
+} from '../../../../lib/spreadsheet';
+import {
   extractDocument,
   type ExtractionResult,
 } from '../../../../lib/document-extraction';
@@ -21,6 +26,18 @@ export const maxDuration = 60;
 
 /** Artwork can be large; invoices never are. */
 const MAX_BYTES = 64 * 1024 * 1024;
+
+/** Containers that hold a table, whatever the browser calls their mime type. */
+const SPREADSHEET_EXTENSIONS = new Set(['csv', 'tsv', 'xlsx', 'xls', 'xlsm']);
+
+function isSpreadsheetMime(mimeType: string): boolean {
+  return (
+    mimeType === 'text/csv' ||
+    mimeType === 'text/tab-separated-values' ||
+    mimeType.includes('spreadsheet') ||
+    mimeType.includes('ms-excel')
+  );
+}
 
 /**
  * Store a business document or design file.
@@ -87,8 +104,42 @@ export async function POST(request: Request) {
     text = extracted.text;
     pages = extracted.pages;
     noExtractableText = extracted.looksScannedOrArtwork;
-  } else if (mimeType.startsWith('text/') || extension === 'csv') {
+  } else if (
+    mimeType.startsWith('text/') ||
+    SPREADSHEET_EXTENSIONS.has(extension)
+  ) {
+    // CSV and TSV are text as far as recognition is concerned — an Amazon
+    // report is identified by its header row.
     text = bytes.toString('utf8');
+  }
+
+  // Spreadsheets are previewed rather than extracted. `.xlsx` is a zip and has
+  // no text at all, so without this a workbook would upload and be
+  // unreadable — the same silence #72 is about, in a different container.
+  let spreadsheet:
+    | {
+        sheetName: string;
+        totalRows: number;
+        truncated: boolean;
+        markdown: string;
+      }
+    | undefined;
+  let spreadsheetError: string | undefined;
+  if (SPREADSHEET_EXTENSIONS.has(extension) || isSpreadsheetMime(mimeType)) {
+    try {
+      const preview = readSpreadsheet(bytes);
+      spreadsheet = {
+        sheetName: preview.sheetName,
+        totalRows: preview.totalRows,
+        truncated: preview.truncated,
+        markdown: previewAsMarkdown(preview),
+      };
+    } catch (error) {
+      spreadsheetError =
+        error instanceof SpreadsheetError
+          ? error.message
+          : 'Could not read the spreadsheet.';
+    }
   }
 
   const recognition = recognizeDocument({
@@ -262,6 +313,8 @@ export async function POST(request: Request) {
           }
         : undefined,
       extractionError,
+      spreadsheet,
+      spreadsheetError,
       // Present once the extraction is kept, so a caller can refile the role or
       // group it into a purchase without re-uploading.
       documentId,
