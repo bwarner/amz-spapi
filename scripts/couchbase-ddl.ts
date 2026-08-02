@@ -20,7 +20,13 @@
  *   npx tsx scripts/couchbase-ddl.ts --env dev --apply --prune    # also drop undeclared indexes
  *
  * Env: CB_DATA_API_URL, CB_USERNAME, CB_PASSWORD, CB_BUCKET
- *   set -a && . apps/web/.env.local && set +a
+ *   npx tsx --env-file=apps/web/.env.local <script>
+ *
+ * Node reads the file itself (`--env-file`, native since 20.6). Do NOT use
+ * `set -a && . apps/web/.env.local`: the shell re-expands the value, so a
+ * password containing $, ` or ! arrives truncated or altered, and the only
+ * symptom is an authentication failure indistinguishable from a wrong
+ * password. One of ours is 18 characters and the shell delivered 8.
  */
 
 import {
