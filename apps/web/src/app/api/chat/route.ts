@@ -28,6 +28,7 @@ import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
 import { createDocumentOps } from '../../../lib/document-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
+import { recordModelUsage } from '../../../lib/model-usage';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
 import {
@@ -406,6 +407,35 @@ export async function POST(request: Request) {
       writer.merge(result.toUIMessageStream());
     },
     onFinish: async ({ messages: updatedMessages }) => {
+      // Token spend, which nothing recorded before: the gateway bills it and
+      // the ledger never saw it, so a heavy month first showed up as a balance
+      // running out. Awaited here because `totalUsage` only settles once the
+      // whole agent loop has finished, steps included.
+      try {
+        const [usage, response, steps] = await Promise.all([
+          result.totalUsage,
+          result.response,
+          result.steps,
+        ]);
+        await recordModelUsage({
+          userId: chatUserId,
+          feature: 'chat',
+          // The model that actually served the turn, not the tier we asked
+          // for — a gateway fallback would otherwise be billed to the wrong
+          // name and priced with the wrong table.
+          modelId: response?.modelId ?? 'unknown',
+          usage,
+          chatId,
+          steps: steps?.length,
+        });
+      } catch (error) {
+        // Metering must never cost the seller their answer.
+        console.error(
+          '[chat] usage not recorded',
+          error instanceof Error ? error.message : error
+        );
+      }
+
       if (!chatId) return;
       try {
         await saveChatTurn({
