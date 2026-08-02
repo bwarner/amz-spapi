@@ -20,21 +20,18 @@ import {
   Sparkles,
   Loader2,
   ArrowDown,
-  Plus,
   AlertCircle,
   Paperclip,
   X,
-  PanelLeft,
-  Trash2,
   Square,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import { uploadImageAsset } from '@/lib/asset-upload-client';
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from '@/components/ui/sidebar';
+import { ConversationSidebar } from './conversation-sidebar';
 import { MessageBubble, type AppMessage } from './message-bubble';
 
 type PendingPhoto = {
@@ -200,16 +197,6 @@ function newChatId(): string {
   return `chat_${crypto.randomUUID()}`;
 }
 
-function relativeTime(timestamp: number): string {
-  const seconds = Math.round((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-
 export default function ChatPage() {
   const [input, setInput] = useState('');
   const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
@@ -222,7 +209,6 @@ export default function ChatPage() {
   const chatIdRef = useRef<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const transport = useMemo(
     () =>
@@ -319,7 +305,6 @@ export default function ChatPage() {
 
   const selectChat = useCallback(
     async (chatId: string) => {
-      setSidebarOpen(false);
       if (chatId === chatIdRef.current) return;
       try {
         const res = await fetch(`/api/chats/${chatId}`);
@@ -591,109 +576,26 @@ export default function ChatPage() {
     chatList.find((chat) => chat.chatId === activeChatId)?.title ?? 'New chat';
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)]">
-      {/* Mobile sidebar backdrop */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/30 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Conversation sidebar */}
-      <aside
-        className={cn(
-          'z-40 w-72 shrink-0 flex-col border-r bg-background',
-          'fixed bottom-0 left-0 top-14 md:static md:flex',
-          sidebarOpen ? 'flex' : 'hidden'
-        )}
-      >
-        <div className="p-3">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start gap-2"
-            disabled={isStreaming}
-            onClick={() => {
-              handleNewChat();
-              setSidebarOpen(false);
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            New chat
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 pb-3">
-          {chatList.length === 0 ? (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-              No saved conversations yet.
-            </p>
-          ) : (
-            chatList.map((chat) => (
-              <div
-                key={chat.chatId}
-                className={cn(
-                  'group flex items-center gap-1 rounded-md px-2 py-1.5',
-                  chat.chatId === activeChatId
-                    ? 'bg-muted'
-                    : 'hover:bg-muted/60'
-                )}
-              >
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => void selectChat(chat.chatId)}
-                      className="min-w-0 flex-1 text-left"
-                    >
-                      <span className="block truncate text-sm">
-                        {chat.title}
-                      </span>
-                      <span className="block text-xs text-muted-foreground">
-                        {relativeTime(chat.updatedAt)}
-                      </span>
-                    </button>
-                  </TooltipTrigger>
-                  {/*
-                    The sidebar truncates to its width, which for most prompts
-                    hides the part that distinguishes one conversation from
-                    another — several can open with the same few words. This
-                    shows the stored title whole, wrapped rather than clipped.
-                  */}
-                  <TooltipContent
-                    side="right"
-                    className="max-w-xs whitespace-normal break-words"
-                  >
-                    {chat.title}
-                  </TooltipContent>
-                </Tooltip>
-                <button
-                  type="button"
-                  onClick={() => void deleteChatById(chat.chatId)}
-                  className="invisible rounded p-1 text-muted-foreground hover:text-destructive group-hover:visible"
-                  title="Delete conversation"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </aside>
+    <SidebarProvider className="min-h-0 h-[calc(100vh-3.5rem)]">
+      <ConversationSidebar
+        conversations={chatList}
+        activeChatId={activeChatId}
+        isStreaming={isStreaming}
+        onSelect={(chatId) => void selectChat(chatId)}
+        onDelete={(chatId) => void deleteChatById(chatId)}
+        onNewChat={handleNewChat}
+      />
 
       {/* Chat column */}
-      <div className="relative flex min-w-0 flex-1 flex-col">
+      <SidebarInset className="relative flex min-w-0 flex-1 flex-col">
         {/* Conversation header */}
         <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 md:hidden"
-            onClick={() => setSidebarOpen(true)}
-            title="Conversations"
-          >
-            <PanelLeft className="h-4 w-4" />
-          </Button>
+          {/*
+            Replaces the hand-rolled PanelLeft button. Not `md:hidden` any more:
+            the sidebar is now collapsible on desktop too, so the trigger is
+            useful at every width.
+          */}
+          <SidebarTrigger className="h-8 w-8" title="Conversations" />
           <span className="truncate text-sm font-medium">
             {messages.length === 0 ? 'New chat' : activeTitle}
           </span>
@@ -905,7 +807,7 @@ export default function ChatPage() {
             </form>
           </div>
         </div>
-      </div>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

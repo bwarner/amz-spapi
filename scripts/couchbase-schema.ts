@@ -7,7 +7,13 @@
  * running the DDL tool — nothing else.
  *
  * Env: CB_DATA_API_URL, CB_USERNAME, CB_PASSWORD, CB_BUCKET
- *   set -a && . apps/web/.env.local && set +a
+ *   npx tsx --env-file=apps/web/.env.local <script>
+ *
+ * Node reads the file itself (`--env-file`, native since 20.6). Do NOT use
+ * `set -a && . apps/web/.env.local`: the shell re-expands the value, so a
+ * password containing $, ` or ! arrives truncated or altered, and the only
+ * symptom is an authentication failure indistinguishable from a wrong
+ * password. One of ours is 18 characters and the shell delivered 8.
  *
  * Uses the Data API rather than the native SDK. That constraint is really about the
  * Vercel runtime and not about scripts (see #56) — the native SDK would be fine here
@@ -230,7 +236,7 @@ export function requireConfig(): void {
   if (config.url && config.user && config.pass && config.bucket) return;
   console.error(
     'Set CB_DATA_API_URL, CB_USERNAME, CB_PASSWORD, CB_BUCKET.\n' +
-      '  set -a && . apps/web/.env.local && set +a'
+      '  npx tsx --env-file=apps/web/.env.local <script>'
   );
   process.exit(1);
 }
@@ -271,7 +277,14 @@ export async function n1ql<T = unknown>(
     results?: T[];
     errors?: Array<{ msg?: string }>;
   };
-  if (!response.ok || body.status === 'errors') {
+  // Trust the errors array, not the status string. The Data API answers a
+  // failed DDL with HTTP 200 and `status: "fatal"` — so a check for
+  // `status === 'errors'` passes it through and returns an empty result set,
+  // which reads exactly like "nothing to do". A collection hitting the
+  // 100-per-bucket cap was silently dropped this way, and only surfaced three
+  // steps later as "keyspace not found" when the index was built against the
+  // collection that had never been created.
+  if (!response.ok || (body.errors && body.errors.length > 0)) {
     throw new Error(
       body.errors?.map((e) => e.msg).join('; ') || `HTTP ${response.status}`
     );
