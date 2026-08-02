@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { SpApiClient } from '@farvisionllc/sp-client';
 import { getDocument, upsertDocument } from '@amz-spapi/couchbase-utils';
 
@@ -29,6 +30,28 @@ const COLLECTIONS = {
 
 function cacheKey(type: string, marketplace: string, id: string): string {
   return `${type}:${marketplace}:${id}`;
+}
+
+/**
+ * A fixed-length key fragment for a set of query parameters.
+ *
+ * Couchbase caps a document key at 250 bytes. These fragments used to be the
+ * base64 of the parameters, which is fine until one of them is a pagination
+ * token: Amazon's are ~200 characters, base64 inflates them by a third, and the
+ * key silently passed the limit. The result was that page 1 of any paginated
+ * call cached normally and page 2 failed with `InvalidArgument` from the Data
+ * API — so a seller with 71 listings was told 20, and that the rest could not
+ * be fetched "due to a pagination error". The API was never the problem.
+ *
+ * A digest is bounded whatever goes in. Base64 was reversible in principle,
+ * which sounded useful and never was — nothing decodes these, and a key that
+ * can exceed a hard limit is worse than one nobody can read.
+ */
+function paramsDigest(params: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(params))
+    .digest('hex')
+    .slice(0, 32);
 }
 
 /**
@@ -211,7 +234,7 @@ export class SpCache {
     const key = cacheKey(
       'listingSearch',
       this.marketplaceId,
-      Buffer.from(searchKey).toString('base64url')
+      paramsDigest(searchKey)
     );
 
     if (!this.bypassCache) {
@@ -446,11 +469,7 @@ export class SpCache {
       ps: params.pageSize,
       pt: params.pageToken,
     });
-    const key = cacheKey(
-      'search',
-      this.marketplaceId,
-      Buffer.from(searchKey).toString('base64url')
-    );
+    const key = cacheKey('search', this.marketplaceId, paramsDigest(searchKey));
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.CATALOG, key);
@@ -491,11 +510,7 @@ export class SpCache {
       mr: params.maxResultsPerPage,
       nt: params.nextToken,
     });
-    const key = cacheKey(
-      'orders',
-      this.marketplaceId,
-      Buffer.from(orderKey).toString('base64url')
-    );
+    const key = cacheKey('orders', this.marketplaceId, paramsDigest(orderKey));
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.ORDERS, key);
@@ -569,11 +584,7 @@ export class SpCache {
       sk: params.sellerSkus,
       nt: params.nextToken,
     });
-    const key = cacheKey(
-      'inv',
-      this.marketplaceId,
-      Buffer.from(invKey).toString('base64url')
-    );
+    const key = cacheKey('inv', this.marketplaceId, paramsDigest(invKey));
 
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.INVENTORY, key);
