@@ -4,6 +4,7 @@ import { Bot, User, Loader2, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import type { UIMessage } from 'ai';
 import { APlusDocumentSchema, type APlusDocument } from '@farvisionllc/models';
 import { APlusPreview } from '@/components/aplus-preview/aplus-preview';
@@ -29,6 +30,29 @@ function parseAPlusDoc(output: unknown): APlusDocument | null {
 }
 
 const MARKDOWN_COMPONENTS: Components = {
+  /**
+   * Wide tables scroll rather than compress.
+   *
+   * A tracking-number table is a dozen columns of fixed-width identifiers; with
+   * nowhere to go it squeezes every column until the values wrap mid-token and
+   * stop being readable as identifiers at all. Its own scroll container keeps
+   * the page from scrolling sideways with it.
+   */
+  table: ({ children }) => (
+    <div className="my-2 max-w-full overflow-x-auto">
+      <table className="w-max min-w-full text-xs">{children}</table>
+    </div>
+  ),
+  // Identifiers — SKUs, FNSKUs, tracking numbers — read as one token in a
+  // fixed pitch and as noise in a proportional one.
+  td: ({ children }) => (
+    <td className="whitespace-nowrap align-top font-mono text-xs">
+      {children}
+    </td>
+  ),
+  th: ({ children }) => (
+    <th className="whitespace-nowrap text-left align-bottom">{children}</th>
+  ),
   img: ({ src, alt, title }) => {
     if (!src) return null;
     return (
@@ -418,7 +442,7 @@ export function MessageBubble({
                   )}
                 >
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={[remarkGfm, remarkBreaks]}
                     components={MARKDOWN_COMPONENTS}
                   >
                     {block.text}
