@@ -221,7 +221,7 @@ export class SpCache {
     pageSize?: number;
     pageToken?: string;
   }) {
-    const searchKey = JSON.stringify([
+    const searchKey = [
       this.sellerId,
       params.identifiers?.slice().sort(),
       params.identifiersType,
@@ -230,7 +230,7 @@ export class SpCache {
       params.sortBy,
       params.pageSize,
       params.pageToken,
-    ]);
+    ];
     const key = cacheKey(
       'listingSearch',
       this.marketplaceId,
@@ -271,17 +271,17 @@ export class SpCache {
     maxResultsPerPage?: number;
     nextToken?: string;
   }) {
-    const cacheId = JSON.stringify([
+    const cacheId = [
       this.sellerId,
       params?.startedAfter,
       params?.startedBefore,
       params?.maxResultsPerPage,
       params?.nextToken,
-    ]);
+    ];
     const key = cacheKey(
       'finGroups',
       this.marketplaceId,
-      Buffer.from(cacheId).toString('base64url')
+      paramsDigest(cacheId)
     );
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.FINANCES, key);
@@ -309,18 +309,18 @@ export class SpCache {
     maxResultsPerPage?: number;
     nextToken?: string;
   }) {
-    const cacheId = JSON.stringify([
+    const cacheId = [
       this.sellerId,
       params?.postedAfter,
       params?.postedBefore,
       params?.orderId,
       params?.maxResultsPerPage,
       params?.nextToken,
-    ]);
+    ];
     const key = cacheKey(
       'finEvents',
       this.marketplaceId,
-      Buffer.from(cacheId).toString('base64url')
+      paramsDigest(cacheId)
     );
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.FINANCES, key);
@@ -362,18 +362,18 @@ export class SpCache {
     lastUpdatedBefore?: string;
     nextToken?: string;
   }) {
-    const cacheId = JSON.stringify([
+    const cacheId = [
       this.sellerId,
       params.shipmentStatusList?.slice().sort(),
       params.shipmentIdList?.slice().sort(),
       params.lastUpdatedAfter,
       params.lastUpdatedBefore,
       params.nextToken,
-    ]);
+    ];
     const key = cacheKey(
       'inShipments',
       this.marketplaceId,
-      Buffer.from(cacheId).toString('base64url')
+      paramsDigest(cacheId)
     );
     if (!this.bypassCache) {
       const cached = await getDocument<any>(SCOPE, COLLECTIONS.INBOUND, key);
@@ -461,14 +461,14 @@ export class SpCache {
     keywordsLocale?: string;
     locale?: string;
   }) {
-    const searchKey = JSON.stringify({
+    const searchKey = {
       k: params.keywords,
       ids: params.identifiers,
       t: params.identifiersType,
       b: params.brandNames,
       ps: params.pageSize,
       pt: params.pageToken,
-    });
+    };
     const key = cacheKey('search', this.marketplaceId, paramsDigest(searchKey));
 
     if (!this.bypassCache) {
@@ -503,13 +503,13 @@ export class SpCache {
     maxResultsPerPage?: number;
     nextToken?: string;
   }) {
-    const orderKey = JSON.stringify({
+    const orderKey = {
       ca: params.createdAfter,
       cb: params.createdBefore,
       os: params.orderStatuses,
       mr: params.maxResultsPerPage,
       nt: params.nextToken,
-    });
+    };
     const key = cacheKey('orders', this.marketplaceId, paramsDigest(orderKey));
 
     if (!this.bypassCache) {
@@ -578,12 +578,12 @@ export class SpCache {
     marketplaceIds?: string[];
     nextToken?: string;
   }) {
-    const invKey = JSON.stringify({
+    const invKey = {
       gt: params.granularityType,
       gi: params.granularityId,
       sk: params.sellerSkus,
       nt: params.nextToken,
-    });
+    };
     const key = cacheKey('inv', this.marketplaceId, paramsDigest(invKey));
 
     if (!this.bypassCache) {
