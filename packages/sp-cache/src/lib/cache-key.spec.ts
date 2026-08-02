@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -100,5 +102,44 @@ describe('cache key length', () => {
     expect(paramsDigest({ a: 1, b: [2, 3] })).toBe(
       paramsDigest({ a: 1, b: [2, 3] })
     );
+  });
+});
+
+describe('every paginated call', () => {
+  /**
+   * The regression that nearly shipped: the digest was applied to listings,
+   * catalog, orders and inventory, but finance groups, finance events and
+   * inbound shipments kept the base64 fragment — and all three take a
+   * `nextToken`. Finance events is the worst of them, paginating over months
+   * of transactions, so it has more pages than listings ever will.
+   *
+   * Nothing caught it because the fixed sites had tests and the missed ones
+   * had none. This scans the source instead: it does not care which call sites
+   * exist, only that none of them builds a key out of an encoding that grows
+   * with its input.
+   */
+  it('builds keys from a digest, never from base64', () => {
+    const source = readFileSync(join(__dirname, 'sp-cache.ts'), 'utf8');
+
+    // Matches the call, not the word — the comment above `paramsDigest`
+    // explains what base64 did wrong and must stay readable.
+    expect(source).not.toMatch(/toString\(['"]base64/);
+  });
+
+  it('bounds a finance key, which paginates further than listings do', () => {
+    const key = cacheKey(
+      'finEvents',
+      'ATVPDKIKX0DER',
+      paramsDigest([
+        'A2HXBWIE3KMLKV',
+        '2026-01-01T00:00:00Z',
+        '2026-08-01T00:00:00Z',
+        undefined,
+        100,
+        REAL_TOKEN,
+      ])
+    );
+
+    expect(Buffer.byteLength(key)).toBeLessThan(MAX_KEY_BYTES);
   });
 });
