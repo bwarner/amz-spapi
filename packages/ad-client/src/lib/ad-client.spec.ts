@@ -277,3 +277,214 @@ describe('pagination', () => {
     expect(result.truncated).toBeUndefined();
   });
 });
+
+/**
+ * Reporting v3 (#86 stage 2).
+ *
+ * Two things here are wrong in ways nothing throws: an ACOS computed against
+ * the wrong attribution window, and an ACOS of zero standing in for "no sales".
+ * Both produce a confident number that reverses the ranking a seller asked for.
+ */
+function reportingClient(opts: {
+  statuses?: string[];
+  rows?: Array<Record<string, unknown>>;
+}) {
+  const posts: Array<{ path: string; body: any; headers: any }> = [];
+  const client = new AmazonAdsApiClient({
+    clientId: 'c',
+    marketplaceId: 'ATVPDKIKX0DER',
+    profileId: '1',
+    accessToken: 't',
+  });
+  const statuses = opts.statuses ?? ['COMPLETED'];
+  let poll = 0;
+  (client as unknown as { httpClient: unknown }).httpClient = {
+    post: vi.fn(async (path: string, body: any, config: any) => {
+      posts.push({ path, body, headers: config?.headers ?? {} });
+      return { data: { reportId: 'r-1', status: 'PENDING' } };
+    }),
+    get: vi.fn(async () => {
+      const status = statuses[Math.min(poll++, statuses.length - 1)];
+      return {
+        data: {
+          reportId: 'r-1',
+          status,
+          ...(status === 'COMPLETED' ? { url: 'https://s3/report' } : {}),
+          ...(status === 'FAILED' ? { failureReason: 'bad columns' } : {}),
+        },
+      };
+    }),
+  };
+  // The download bypasses the client on purpose (presigned S3), so stub it.
+  (client as any).downloadAdsReport = vi.fn(async () => opts.rows ?? []);
+  return { client, posts };
+}
+
+describe('reporting requests', () => {
+  it('sends the create media type Amazon documents', async () => {
+    const { client, posts } = reportingClient({ rows: [] });
+    await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    expect(posts[0].path).toBe('/reporting/reports');
+    expect(posts[0].headers['Content-Type']).toBe(
+      'application/vnd.createasyncreportrequest.v3+json'
+    );
+  });
+
+  it('asks for the columns matching the requested attribution window', async () => {
+    // Requesting sales14d and then reading sales7d would silently report a
+    // different number than the one asked for.
+    const { client, posts } = reportingClient({ rows: [] });
+    await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+      attribution: '7d',
+    });
+
+    const cols = posts[0].body.configuration.columns;
+    expect(cols).toContain('sales7d');
+    expect(cols).toContain('purchases7d');
+    expect(cols).not.toContain('sales14d');
+  });
+
+  it('defaults to 14d and reports which window it used', async () => {
+    const { client, posts } = reportingClient({ rows: [] });
+    const result = await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    expect(result.attribution).toBe('14d');
+    expect(posts[0].body.configuration.columns).toContain('sales14d');
+  });
+
+  it('requests SUMMARY, not a row per campaign per day', async () => {
+    // 172 campaigns x 30 days is 5,160 rows the model would have to aggregate
+    // itself, badly and at length.
+    const { client, posts } = reportingClient({ rows: [] });
+    await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    expect(posts[0].body.configuration.timeUnit).toBe('SUMMARY');
+    expect(posts[0].body.configuration.format).toBe('GZIP_JSON');
+  });
+
+  it('polls until COMPLETED', async () => {
+    // Fake timers because the real backoff waits 3s then 4.5s. Making the test
+    // sit through that would buy nothing except a slow suite.
+    vi.useFakeTimers();
+    try {
+      const { client } = reportingClient({
+        statuses: ['PENDING', 'PROCESSING', 'COMPLETED'],
+        rows: [{ campaignId: '1', cost: 10, sales14d: 40 }],
+      });
+
+      const pending = client.getCampaignPerformance({
+        startDate: '2026-07-01',
+        endDate: '2026-07-31',
+        timeoutMs: 60_000,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+
+      expect(result.rows).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces the failure reason rather than a generic error', async () => {
+    const { client } = reportingClient({ statuses: ['FAILED'] });
+
+    await expect(
+      client.getCampaignPerformance({
+        startDate: '2026-07-01',
+        endDate: '2026-07-31',
+      })
+    ).rejects.toThrow(/bad columns/);
+  });
+});
+
+describe('performance arithmetic', () => {
+  it('computes acos from the requested window', async () => {
+    const { client } = reportingClient({
+      rows: [{ campaignId: '1', cost: 25, sales14d: 100, sales30d: 400 }],
+    });
+
+    const { rows } = await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    // 25/100 on the 14d window, NOT 25/400 on the 30d column sitting beside it.
+    expect(rows[0].acos).toBeCloseTo(0.25, 6);
+  });
+
+  it('leaves acos UNDEFINED when there are no sales', async () => {
+    // The trap: 0 reads as perfectly efficient for the rows that are pure
+    // waste, so sorting by acos ascending would put the worst campaigns first
+    // and call them the best.
+    const { client } = reportingClient({
+      rows: [{ campaignId: 'waste', cost: 90, sales14d: 0 }],
+    });
+
+    const { rows } = await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    expect(rows[0].acos).toBeUndefined();
+    expect(rows[0].cost).toBe(90);
+    expect(rows[0].sales).toBe(0);
+  });
+
+  it('does not rank a wasteful row above a profitable one', async () => {
+    // The consequence of the above, stated as the behaviour that matters.
+    const { client } = reportingClient({
+      rows: [
+        { campaignId: 'waste', cost: 90, sales14d: 0 },
+        { campaignId: 'good', cost: 10, sales14d: 100 },
+      ],
+    });
+
+    const { rows } = await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    const waste = rows.find((r) => r['campaignId'] === 'waste');
+    const good = rows.find((r) => r['campaignId'] === 'good');
+    expect(waste?.acos).toBeUndefined();
+    expect(good?.acos).toBeCloseTo(0.1, 6);
+  });
+
+  it('coerces string numerics, which the JSON report does emit', async () => {
+    const { client } = reportingClient({
+      rows: [{ campaignId: '1', cost: '12.50', sales14d: '50', clicks: '5' }],
+    });
+
+    const { rows } = await client.getCampaignPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    expect(rows[0].cost).toBe(12.5);
+    expect(rows[0].acos).toBeCloseTo(0.25, 6);
+  });
+
+  it('search term reports group by searchTerm', async () => {
+    const { client, posts } = reportingClient({ rows: [] });
+    await client.getSearchTermPerformance({
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+    });
+
+    expect(posts[0].body.configuration.reportTypeId).toBe('spSearchTerm');
+    expect(posts[0].body.configuration.groupBy).toEqual(['searchTerm']);
+  });
+});

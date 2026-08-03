@@ -1,5 +1,6 @@
 // import * as ManagerAccount_prod_3p from '@farvisionllc/amazon-ads-generated/ManagerAccount_prod_3p.js';
 
+import { gunzipSync } from 'node:zlib';
 import axios, {
   AxiosInstance,
   AxiosError,
@@ -31,6 +32,30 @@ export type AdsBrand = {
 };
 
 export type AdsBrandsResponse = AdsBrand[];
+
+/**
+ * Which purchases count toward a click.
+ *
+ * There is no neutral choice here. Amazon returns `sales1d` through `sales30d`
+ * side by side for the same spend, and ACOS on 30-day attribution can look
+ * several times healthier than the same campaign on 1-day. A performance figure
+ * quoted without its window is not imprecise, it is a different claim — so this
+ * is a required part of every result rather than a hidden default.
+ */
+export type AdsAttributionWindow = '1d' | '7d' | '14d' | '30d';
+
+export type AdsPerformanceRow = {
+  impressions: number;
+  clicks: number;
+  cost: number;
+  sales: number;
+  purchases: number;
+  /** cost / sales. Undefined when sales are zero — NOT zero, and not Infinity. */
+  acos?: number;
+  /** clicks / impressions. */
+  ctr?: number;
+  [key: string]: unknown;
+};
 
 export class AmazonAdsApiClient {
   private httpClient: AxiosInstance;
@@ -471,6 +496,319 @@ export class AmazonAdsApiClient {
         ...(params?.nextToken ? { nextToken: params.nextToken } : {}),
       }
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reporting v3 — the performance half (#86 stage 2)
+  //
+  // Amazon publishes no OpenAPI document for this API, so unlike Sponsored
+  // Products these types are hand-written. The contract comes from Amazon's own
+  // Postman collection (amzn/ads-advanced-tools-docs), which is why the media
+  // type below looks odd but is correct: `createasyncreportrequest` is sent on
+  // the STATUS request too, not only on the create.
+  //
+  // Reports are asynchronous: create, poll, then download a gzipped JSON
+  // document from a presigned URL. Minutes, not milliseconds.
+  // ---------------------------------------------------------------------------
+
+  private static readonly REPORT_MEDIA =
+    'application/vnd.createasyncreportrequest.v3+json';
+
+  /** Request a performance report. Returns the id to poll. */
+  public async createAdsReport(params: {
+    name: string;
+    startDate: string;
+    endDate: string;
+    reportTypeId: string;
+    groupBy: string[];
+    columns: string[];
+    timeUnit?: 'DAILY' | 'SUMMARY';
+    adProduct?: string;
+  }): Promise<{ reportId: string; status?: string }> {
+    const response = await this.httpClient.post(
+      '/reporting/reports',
+      {
+        name: params.name,
+        startDate: params.startDate,
+        endDate: params.endDate,
+        configuration: {
+          adProduct: params.adProduct ?? 'SPONSORED_PRODUCTS',
+          groupBy: params.groupBy,
+          columns: params.columns,
+          reportTypeId: params.reportTypeId,
+          timeUnit: params.timeUnit ?? 'SUMMARY',
+          format: 'GZIP_JSON',
+        },
+      },
+      {
+        headers: {
+          'Content-Type': AmazonAdsApiClient.REPORT_MEDIA,
+          Accept: AmazonAdsApiClient.REPORT_MEDIA,
+        },
+      }
+    );
+    return { reportId: response.data?.reportId, status: response.data?.status };
+  }
+
+  /** Poll a report. `url` appears only once the status is COMPLETED. */
+  public async getAdsReport(reportId: string): Promise<{
+    reportId: string;
+    status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+    url?: string;
+    failureReason?: string;
+  }> {
+    const response = await this.httpClient.get(
+      `/reporting/reports/${encodeURIComponent(reportId)}`,
+      { headers: { 'Content-Type': AmazonAdsApiClient.REPORT_MEDIA } }
+    );
+    return response.data;
+  }
+
+  /**
+   * Download a finished report.
+   *
+   * The presigned URL is S3, not an Ads endpoint — sending Ads auth headers to
+   * it is rejected, so this bypasses the configured client deliberately.
+   * `GZIP_JSON` means gzipped JSON, not the TSV the SP-API reports use.
+   */
+  public async downloadAdsReport<T = Record<string, unknown>>(
+    url: string
+  ): Promise<T[]> {
+    const response = await axios.get<ArrayBuffer>(url, {
+      responseType: 'arraybuffer',
+      timeout: 120_000,
+    });
+    const body = Buffer.from(response.data);
+    // Sniff the gzip magic number rather than trusting the requested format:
+    // the transport may already have decompressed it.
+    const isGzip = body[0] === 0x1f && body[1] === 0x8b;
+    const text = (isGzip ? gunzipSync(body) : body).toString('utf8');
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+
+  /**
+   * Create, poll and download in one call.
+   *
+   * Polls with backoff. Ads reports commonly take one to several minutes, which
+   * is far longer than a chat turn should block — callers that cannot wait
+   * should use the three primitives and persist the report id.
+   */
+  public async runAdsReport<T = Record<string, unknown>>(params: {
+    name: string;
+    startDate: string;
+    endDate: string;
+    reportTypeId: string;
+    groupBy: string[];
+    columns: string[];
+    timeUnit?: 'DAILY' | 'SUMMARY';
+    timeoutMs?: number;
+    onStatus?: (status: string) => void;
+  }): Promise<T[]> {
+    const { reportId } = await this.createAdsReport(params);
+    const deadline = Date.now() + (params.timeoutMs ?? 5 * 60_000);
+    let waitMs = 3_000;
+
+    for (;;) {
+      const report = await this.getAdsReport(reportId);
+      params.onStatus?.(report.status);
+
+      if (report.status === 'COMPLETED' && report.url) {
+        return this.downloadAdsReport<T>(report.url);
+      }
+      if (report.status === 'FAILED') {
+        throw new Error(
+          `Ads report ${params.reportTypeId} FAILED` +
+            (report.failureReason ? `: ${report.failureReason}` : '.')
+        );
+      }
+      if (Date.now() > deadline) {
+        // The id is surfaced so a caller can poll it later rather than paying
+        // for the same report twice.
+        throw new Error(
+          `Ads report ${params.reportTypeId} still ${report.status} after ` +
+            `${Math.round((params.timeoutMs ?? 300_000) / 1000)}s ` +
+            `(reportId ${reportId}).`
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      waitMs = Math.min(waitMs * 1.5, 20_000);
+    }
+  }
+
+  /**
+   * Amazon's own default in Campaign Manager, so the least surprising here.
+   * Always reported alongside the figures it produced.
+   */
+  private static readonly DEFAULT_ATTRIBUTION: AdsAttributionWindow = '14d';
+
+  /**
+   * Normalise a raw report row into comparable numbers.
+   *
+   * ACOS is deliberately `undefined` rather than 0 when there are no sales.
+   * Zero would read as "perfectly efficient" for the exact rows that are pure
+   * waste — spend with nothing to show — which inverts the ranking a seller
+   * asked for. Division by zero as Infinity is no better; it serialises to
+   * `null` through JSON and reappears as a missing value with no explanation.
+   */
+  private static toPerformanceRow(
+    raw: Record<string, unknown>,
+    attribution: AdsAttributionWindow
+  ): AdsPerformanceRow {
+    const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0);
+    const cost = num(raw['cost']);
+    const sales = num(raw[`sales${attribution}`]);
+    const purchases = num(raw[`purchases${attribution}`]);
+    const impressions = num(raw['impressions']);
+    const clicks = num(raw['clicks']);
+
+    return {
+      ...raw,
+      impressions,
+      clicks,
+      cost,
+      sales,
+      purchases,
+      ...(sales > 0 ? { acos: cost / sales } : {}),
+      ...(impressions > 0 ? { ctr: clicks / impressions } : {}),
+    };
+  }
+
+  /**
+   * Spend, sales and ACOS per campaign.
+   *
+   * `SUMMARY` rather than `DAILY` by design: one row per campaign for the whole
+   * window is what "which campaigns are wasting money" needs, and a daily
+   * breakdown of 172 campaigns over 30 days is 5,160 rows the model would have
+   * to aggregate itself — badly, and at length.
+   */
+  public async getCampaignPerformance(params: {
+    startDate: string;
+    endDate: string;
+    attribution?: AdsAttributionWindow;
+    timeoutMs?: number;
+    onStatus?: (status: string) => void;
+  }): Promise<{
+    rows: AdsPerformanceRow[];
+    attribution: AdsAttributionWindow;
+  }> {
+    const attribution =
+      params.attribution ?? AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
+    const raw = await this.runAdsReport({
+      name: `campaigns ${params.startDate}..${params.endDate}`,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      reportTypeId: 'spCampaigns',
+      groupBy: ['campaign'],
+      columns: [
+        'campaignId',
+        'campaignName',
+        'campaignStatus',
+        'impressions',
+        'clicks',
+        'cost',
+        `purchases${attribution}`,
+        `sales${attribution}`,
+      ],
+      timeUnit: 'SUMMARY',
+      timeoutMs: params.timeoutMs,
+      onStatus: params.onStatus,
+    });
+
+    return {
+      rows: raw.map((r) => AmazonAdsApiClient.toPerformanceRow(r, attribution)),
+      attribution,
+    };
+  }
+
+  /** Spend, sales and ACOS per keyword target. */
+  public async getKeywordPerformance(params: {
+    startDate: string;
+    endDate: string;
+    attribution?: AdsAttributionWindow;
+    timeoutMs?: number;
+    onStatus?: (status: string) => void;
+  }): Promise<{
+    rows: AdsPerformanceRow[];
+    attribution: AdsAttributionWindow;
+  }> {
+    const attribution =
+      params.attribution ?? AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
+    const raw = await this.runAdsReport({
+      name: `targeting ${params.startDate}..${params.endDate}`,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      reportTypeId: 'spTargeting',
+      groupBy: ['targeting'],
+      columns: [
+        'keywordId',
+        'keyword',
+        'matchType',
+        'campaignId',
+        'adGroupId',
+        'impressions',
+        'clicks',
+        'cost',
+        `purchases${attribution}`,
+        `sales${attribution}`,
+      ],
+      timeUnit: 'SUMMARY',
+      timeoutMs: params.timeoutMs,
+      onStatus: params.onStatus,
+    });
+
+    return {
+      rows: raw.map((r) => AmazonAdsApiClient.toPerformanceRow(r, attribution)),
+      attribution,
+    };
+  }
+
+  /**
+   * What shoppers actually typed, versus what was targeted.
+   *
+   * The report that finds negative-keyword candidates: search terms with spend
+   * and no sales. Distinct from keyword performance — a broad-match keyword can
+   * look acceptable overall while hiding several terms that only cost money.
+   */
+  public async getSearchTermPerformance(params: {
+    startDate: string;
+    endDate: string;
+    attribution?: AdsAttributionWindow;
+    timeoutMs?: number;
+    onStatus?: (status: string) => void;
+  }): Promise<{
+    rows: AdsPerformanceRow[];
+    attribution: AdsAttributionWindow;
+  }> {
+    const attribution =
+      params.attribution ?? AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
+    const raw = await this.runAdsReport({
+      name: `search terms ${params.startDate}..${params.endDate}`,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      reportTypeId: 'spSearchTerm',
+      groupBy: ['searchTerm'],
+      columns: [
+        'searchTerm',
+        'keyword',
+        'matchType',
+        'campaignId',
+        'adGroupId',
+        'impressions',
+        'clicks',
+        'cost',
+        `purchases${attribution}`,
+        `sales${attribution}`,
+      ],
+      timeUnit: 'SUMMARY',
+      timeoutMs: params.timeoutMs,
+      onStatus: params.onStatus,
+    });
+
+    return {
+      rows: raw.map((r) => AmazonAdsApiClient.toPerformanceRow(r, attribution)),
+      attribution,
+    };
   }
 
   /**

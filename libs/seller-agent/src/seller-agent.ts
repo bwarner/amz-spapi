@@ -324,6 +324,21 @@ export interface SellerAdsOps {
     profileId?: string;
     campaignIds: string[];
   }): Promise<{ usage: unknown[]; errors: unknown[] }>;
+  /**
+   * Spend, sales and ACOS. Asynchronous on Amazon's side and slow — minutes,
+   * not milliseconds — so this is the one Ads call worth warning a user about
+   * before making them wait.
+   */
+  getPerformance(params: {
+    profileId?: string;
+    level: 'campaign' | 'keyword' | 'searchTerm';
+    startDate: string;
+    endDate: string;
+    attribution?: '1d' | '7d' | '14d' | '30d';
+  }): Promise<{
+    rows: Array<Record<string, unknown>>;
+    attribution: string;
+  }>;
 }
 
 /** What reading a document tells the agent, before anything is filed. */
@@ -2431,6 +2446,61 @@ function getAdsTools(adsOps: SellerAdsOps) {
         campaignIdFilter?: string[];
         maxResults?: number;
       }) => run(() => adsOps.listProductAds(input)),
+    },
+
+    'get-ad-performance': {
+      description:
+        'Spend, sales, ACOS, clicks and impressions from the Amazon Ads ' +
+        'Reporting API. THIS is the tool for "which campaigns are wasting ' +
+        'money", "what is my ACOS", "which keywords should I cut" — the ' +
+        'structure tools cannot answer any of those. ' +
+        'SLOW: Amazon generates these asynchronously and it commonly takes one ' +
+        'to several minutes, so tell the user it is running before you call it, ' +
+        'and call it ONCE — do not retry a timeout, the report is still being ' +
+        'built and a second request pays for the same work again. ' +
+        'Pick the level: campaign for "where is my money going", keyword for ' +
+        '"which targets are inefficient", searchTerm for what shoppers actually ' +
+        'typed (the report that finds negative-keyword candidates: spend with ' +
+        'no sales). ' +
+        'ALWAYS state the attribution window with any figure you quote — the ' +
+        'same spend looks several times better at 30d than at 1d, so an ACOS ' +
+        'without its window is a different claim, not a rounder one.',
+      inputSchema: z.object({
+        profileId,
+        level: z
+          .enum(['campaign', 'keyword', 'searchTerm'])
+          .describe(
+            'campaign = spend by campaign; searchTerm = what was typed'
+          ),
+        startDate: z.string().describe('YYYY-MM-DD'),
+        endDate: z.string().describe('YYYY-MM-DD'),
+        attribution: z
+          .enum(['1d', '7d', '14d', '30d'])
+          .optional()
+          .describe(
+            'Purchase attribution window. Defaults to 14d, matching Campaign ' +
+              'Manager. Report whichever was used.'
+          ),
+      }),
+      execute: async (input: {
+        profileId?: string;
+        level: 'campaign' | 'keyword' | 'searchTerm';
+        startDate: string;
+        endDate: string;
+        attribution?: '1d' | '7d' | '14d' | '30d';
+      }) =>
+        run(async () => {
+          const result = await adsOps.getPerformance(input);
+          return {
+            ...result,
+            rowCount: result.rows.length,
+            note:
+              `Figures use a ${result.attribution} attribution window — say so ` +
+              'when quoting them. Rows with spend and NO sales have no acos ' +
+              'field at all: that is not an efficient row, it is pure waste, ' +
+              'and it must not be sorted or described as though acos were 0.',
+          };
+        }),
     },
 
     'get-ad-budget-usage': {
