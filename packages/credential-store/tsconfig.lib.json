@@ -2,8 +2,8 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist",
-    "tsBuildInfoFile": "dist/tsconfig.lib.tsbuildinfo",
+    "outDir": "../../dist/out-tsc/packages/credential-store",
+    "tsBuildInfoFile": "../../dist/out-tsc/packages/credential-store/tsconfig.lib.tsbuildinfo",
     "emitDeclarationOnly": false,
     "types": ["node"],
     "moduleResolution": "NodeNext",

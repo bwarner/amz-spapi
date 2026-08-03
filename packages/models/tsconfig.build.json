@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "outDir": "../../dist/packages/models",
+    "tsBuildInfoFile": "../../dist/packages/models/tsconfig.build.tsbuildinfo",
+    "composite": false,
+    "declarationMap": false
+  }
+}
