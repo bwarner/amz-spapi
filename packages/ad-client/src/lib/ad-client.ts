@@ -265,27 +265,77 @@ export class AmazonAdsApiClient {
   } as const;
 
   /**
-   * One POST list call.
+   * How many pages a single list call will follow before giving up.
    *
-   * `nextToken` continues a previous page. Amazon returns it inside the response
-   * body under a key that varies by resource (`campaigns`, `adGroups`, …), which
-   * is why the collection key is passed in rather than guessed.
+   * A bound rather than "until exhausted", because the loop is driven by a token
+   * the server chooses: a server that keeps returning one would otherwise spin
+   * forever inside one tool call. At Amazon's 500-item ceiling this is 10,000
+   * records, comfortably past any real advertiser and short of a runaway.
+   */
+  private static readonly MAX_PAGES = 20;
+
+  /**
+   * List a resource, following `nextToken` to the end.
+   *
+   * Pagination is followed rather than surfaced because the alternative is worse
+   * than it looks. Amazon returns `totalResults` for the whole result set while
+   * `items` holds one page, so a caller that ignores the token gets a partial
+   * list beside an accurate total — and a per-item breakdown that silently
+   * disagrees with its own headline number. Nothing errors. An account with 172
+   * campaigns fits in one page and never shows the problem; one with 600 does.
+   *
+   * `truncated` is set when the page bound is hit, so a caller can say the list
+   * is incomplete instead of implying it is whole.
    */
   private async listResource<T>(
     endpoint: { path: string; media: string },
     collectionKey: string,
     body: Record<string, unknown>
-  ): Promise<{ items: T[]; nextToken?: string; totalResults?: number }> {
-    const response = await this.httpClient.post(endpoint.path, body, {
-      headers: {
-        Accept: `application/vnd.${endpoint.media}+json`,
-        'Content-Type': `application/vnd.${endpoint.media}+json`,
-      },
-    });
+  ): Promise<{
+    items: T[];
+    totalResults?: number;
+    truncated?: boolean;
+    pages: number;
+  }> {
+    const headers = {
+      Accept: `application/vnd.${endpoint.media}+json`,
+      'Content-Type': `application/vnd.${endpoint.media}+json`,
+    };
+
+    const items: T[] = [];
+    let totalResults: number | undefined;
+    let nextToken: string | undefined = body['nextToken'] as string | undefined;
+    let pages = 0;
+
+    do {
+      const response = await this.httpClient.post(
+        endpoint.path,
+        // The filters are resent with each page. Unlike SP-API, where a
+        // continuation token must travel alone, the Ads v3 list endpoints expect
+        // the original request body plus the token — dropping the filters here
+        // would widen the result set partway through the walk.
+        nextToken ? { ...body, nextToken } : body,
+        { headers }
+      );
+
+      const page = (response.data?.[collectionKey] ?? []) as T[];
+      items.push(...page);
+      totalResults = response.data?.totalResults ?? totalResults;
+      nextToken = response.data?.nextToken;
+      pages += 1;
+
+      // A server that returns a token but no rows would otherwise loop without
+      // making progress.
+      if (page.length === 0) break;
+    } while (nextToken && pages < AmazonAdsApiClient.MAX_PAGES);
+
     return {
-      items: response.data?.[collectionKey] ?? [],
-      nextToken: response.data?.nextToken,
-      totalResults: response.data?.totalResults,
+      items,
+      totalResults,
+      ...(nextToken && pages >= AmazonAdsApiClient.MAX_PAGES
+        ? { truncated: true }
+        : {}),
+      pages,
     };
   }
 

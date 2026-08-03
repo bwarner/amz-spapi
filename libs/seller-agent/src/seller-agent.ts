@@ -267,6 +267,24 @@ export interface SellerReportOps {
  * campaigns are wasting money", and the tools say so rather than implying an
  * answer from a campaign list.
  */
+/**
+ * One page-walked Ads list.
+ *
+ * `items` is the COMPLETE set unless `truncated` is set — the client follows
+ * Amazon's `nextToken` to the end rather than handing a caller one page. That
+ * matters because Amazon reports `totalResults` for the whole result set while
+ * a single page holds a fraction of it, so a partial list arrives next to an
+ * accurate total and any breakdown built from it quietly disagrees with its own
+ * headline number.
+ */
+export type AdsListResult = {
+  items: Array<Record<string, unknown>>;
+  /** Amazon's count for the whole set. Equals `items.length` unless truncated. */
+  totalResults?: number;
+  /** Set when the page bound was hit: the list is incomplete, and says so. */
+  truncated?: boolean;
+};
+
 export interface SellerAdsOps {
   listProfiles(): Promise<
     Array<{
@@ -280,28 +298,28 @@ export interface SellerAdsOps {
     profileId?: string;
     stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listAdGroups(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listKeywords(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     adGroupIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listNegativeKeywords(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listProductAds(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   getCampaignBudgetUsage(params: {
     profileId?: string;
     campaignIds: string[];
@@ -2279,9 +2297,30 @@ function getAdsTools(adsOps: SellerAdsOps) {
     );
   const maxResults = z.number().int().min(1).max(500).optional();
 
-  async function run<T>(work: () => Promise<T>) {
+  async function run<T extends object>(work: () => Promise<T>) {
     try {
-      return { success: true as const, ...(await work()) };
+      const result = (await work()) as T & {
+        items?: unknown[];
+        truncated?: boolean;
+        totalResults?: number;
+      };
+      return {
+        success: true as const,
+        ...result,
+        // A truncated list is the dangerous case: it looks like a complete
+        // answer and is not, and `totalResults` beside it is accurate for the
+        // whole set — so any count derived from `items` disagrees with the
+        // number printed next to it. Force the model to say so.
+        ...(result.truncated
+          ? {
+              note:
+                `INCOMPLETE: only the first ${result.items?.length ?? 0} of ` +
+                `${result.totalResults ?? 'many'} records were fetched. Say ` +
+                'the list is partial and do not present counts from it as ' +
+                'totals. Narrow with a campaign or ad group filter.',
+            }
+          : {}),
+      };
     } catch (error) {
       return {
         success: false as const,

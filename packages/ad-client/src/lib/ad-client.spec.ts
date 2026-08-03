@@ -134,16 +134,17 @@ describe('filters', () => {
 });
 
 describe('responses', () => {
-  it('reads the collection under its own key and surfaces nextToken', async () => {
+  it('reads the collection under its own key', async () => {
+    // `nextToken` is no longer returned to callers — it is followed. See the
+    // pagination block below for that contract.
     const { client } = clientWithCapture({
       campaigns: [{ campaignId: '1' }, { campaignId: '2' }],
-      nextToken: 'abc',
       totalResults: 2,
     });
     const result = await client.listCampaigns();
 
     expect(result.items).toHaveLength(2);
-    expect(result.nextToken).toBe('abc');
+    expect(result.totalResults).toBe(2);
   });
 
   it('returns an empty list rather than undefined when the key is absent', async () => {
@@ -167,5 +168,112 @@ describe('responses', () => {
 
     expect(result.usage).toHaveLength(1);
     expect(result.errors).toHaveLength(1);
+  });
+});
+
+/**
+ * Pagination. The client follows `nextToken` to the end rather than handing the
+ * caller one page, because Amazon reports `totalResults` for the WHOLE set — so
+ * a single page arrives beside an accurate total, and any breakdown built from
+ * it disagrees with its own headline figure while nothing errors.
+ *
+ * The live account has 172 campaigns and fits in one page, which is exactly why
+ * this needs tests: the bug is invisible until an account outgrows a page.
+ */
+function pagingClient(pages: Array<Record<string, unknown>>) {
+  const calls: Array<Record<string, unknown>> = [];
+  const client = new AmazonAdsApiClient({
+    clientId: 'c',
+    marketplaceId: 'ATVPDKIKX0DER',
+    profileId: '1',
+    accessToken: 't',
+  });
+  let index = 0;
+  (client as unknown as { httpClient: unknown }).httpClient = {
+    post: vi.fn(async (_p: string, body: Record<string, unknown>) => {
+      calls.push(body);
+      return { data: pages[Math.min(index++, pages.length - 1)] };
+    }),
+    get: vi.fn(),
+  };
+  return { client, calls };
+}
+
+describe('pagination', () => {
+  it('follows nextToken and returns every page', async () => {
+    const { client } = pagingClient([
+      { campaigns: [{ campaignId: '1' }], nextToken: 'p2', totalResults: 3 },
+      { campaigns: [{ campaignId: '2' }], nextToken: 'p3', totalResults: 3 },
+      { campaigns: [{ campaignId: '3' }], totalResults: 3 },
+    ]);
+
+    const result = await client.listCampaigns();
+
+    expect(result.items).toHaveLength(3);
+    expect(result.truncated).toBeUndefined();
+  });
+
+  it('resends the filters with each page', async () => {
+    // Ads v3 expects the original body PLUS the token, unlike SP-API where a
+    // continuation token travels alone. Dropping the filters partway through
+    // would widen the result set mid-walk.
+    const { client, calls } = pagingClient([
+      { adGroups: [{ adGroupId: '1' }], nextToken: 'p2' },
+      { adGroups: [{ adGroupId: '2' }] },
+    ]);
+
+    await client.listAdGroups({ campaignIdFilter: ['123'] });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]['campaignIdFilter']).toEqual({ include: ['123'] });
+    expect(calls[1]['nextToken']).toBe('p2');
+  });
+
+  it('stops at the page bound and flags the result as truncated', async () => {
+    // Never silently: a partial list that does not say so is the failure this
+    // whole change exists to prevent.
+    const { client, calls } = pagingClient([
+      {
+        campaigns: [{ campaignId: 'x' }],
+        nextToken: 'always',
+        totalResults: 99999,
+      },
+    ]);
+
+    const result = await client.listCampaigns();
+
+    expect(result.truncated).toBe(true);
+    expect(calls.length).toBeLessThanOrEqual(20);
+    expect(result.totalResults).toBe(99999);
+  });
+
+  it('stops when a page comes back empty even with a token', async () => {
+    // A token with no rows makes no progress; looping on it burns the bound.
+    const { client, calls } = pagingClient([
+      { campaigns: [], nextToken: 'still-here' },
+    ]);
+
+    const result = await client.listCampaigns();
+
+    expect(result.items).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('single page still reports totalResults', async () => {
+    // The 172-campaign case: one page, complete, not truncated.
+    const { client } = pagingClient([
+      {
+        campaigns: Array.from({ length: 172 }, (_, i) => ({
+          campaignId: `${i}`,
+        })),
+        totalResults: 172,
+      },
+    ]);
+
+    const result = await client.listCampaigns();
+
+    expect(result.items).toHaveLength(172);
+    expect(result.totalResults).toBe(172);
+    expect(result.truncated).toBeUndefined();
   });
 });
