@@ -351,6 +351,12 @@ export function detectReportKind(text: string): {
 
   // Distinguishing marks that separate otherwise similar FBA reports.
   const decisive: Partial<Record<ReportKind, string[]>> = {
+    // FIRST deliberately: `decisiveHit` takes the first match in declaration
+    // order, and `removal-order` below claims the weak marker `orderid`, which
+    // a settlement file legitimately carries — so without this a settlement
+    // report is confidently identified as a removal order and its fees are
+    // parsed into removal columns. `settlementid` appears in no other report.
+    settlement: ['settlementid'],
     reimbursement: ['reimbursementid'],
     'removal-shipment': ['trackingnumber'],
     'removal-order': ['removalorderid', 'orderid'],

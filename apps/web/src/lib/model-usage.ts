@@ -21,9 +21,19 @@ const MODEL_PRICES_PER_MTOK: Record<
   string,
   { input: number; output: number; cachedInput: number }
 > = {
-  'claude-sonnet-4-5': { input: 3, output: 15, cachedInput: 0.3 },
-  'claude-opus-4-5': { input: 5, output: 25, cachedInput: 0.5 },
-  'claude-haiku-4-5': { input: 1, output: 5, cachedInput: 0.1 },
+  // Keyed on the ids the app actually selects. The first version of this table
+  // used hyphenated version numbers (`claude-sonnet-4-5`) while the provider
+  // ids use dots (`claude-sonnet-4.6`), so NOTHING matched and every turn was
+  // priced at the default with `priceKnown: false`. The table was self
+  // consistent and disagreed with reality — see `pricesEveryModel` in the spec,
+  // which now derives its cases from the model registry instead of restating
+  // the keys here.
+  'claude-sonnet-4.6': { input: 3, output: 15, cachedInput: 0.3 },
+  'claude-haiku-4.5': { input: 1, output: 5, cachedInput: 0.1 },
+  'claude-opus-4.8': { input: 5, output: 25, cachedInput: 0.5 },
+  'gpt-5.5': { input: 1.25, output: 10, cachedInput: 0.125 },
+  'gpt-5.4': { input: 1.25, output: 10, cachedInput: 0.125 },
+  'gpt-5.4-mini': { input: 0.25, output: 2, cachedInput: 0.025 },
   'gpt-5.2': { input: 1.25, output: 10, cachedInput: 0.125 },
   'gpt-5.2-mini': { input: 0.25, output: 2, cachedInput: 0.025 },
 };
