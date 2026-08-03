@@ -12,12 +12,45 @@ import { costOfUsage, pricesFor } from './model-usage';
 
 describe('pricesFor', () => {
   it('matches a gateway-prefixed, version-suffixed model id', () => {
-    // Ids arrive as `anthropic/claude-sonnet-4-5-20250929`, never bare.
-    const prices = pricesFor('anthropic/claude-sonnet-4-5-20250929');
+    // Ids arrive as `anthropic/claude-sonnet-4.6`, never bare.
+    const prices = pricesFor('anthropic/claude-sonnet-4.6');
 
     expect(prices.known).toBe(true);
     expect(prices.input).toBe(3);
     expect(prices.output).toBe(15);
+  });
+
+  /**
+   * The models the app can actually select.
+   *
+   * The bug this exists to prevent: the first table keyed on hyphenated version
+   * numbers (`claude-sonnet-4-5`) while the provider ids use dots
+   * (`claude-sonnet-4.6`). Nothing matched, every turn priced at the default
+   * with `priceKnown: false`, and the ledger under-reported for as long as it
+   * took someone to notice. The original test asserted a model id that appears
+   * nowhere in the app — it checked the table against itself.
+   *
+   * Image models are excluded: they are billed per image by `cost-ledger`, not
+   * per token.
+   */
+  const SELECTABLE_TEXT_MODELS = [
+    'anthropic/claude-sonnet-4.6',
+    'anthropic/claude-haiku-4.5',
+    'anthropic/claude-opus-4.8',
+    'openai/gpt-5.5',
+    'openai/gpt-5.4',
+    'openai/gpt-5.4-mini',
+  ];
+
+  it.each(SELECTABLE_TEXT_MODELS)('prices %s as a known model', (modelId) => {
+    expect(pricesFor(modelId).known).toBe(true);
+  });
+
+  it('does not silently price a dotted id as unknown', () => {
+    // The exact failure mode: a dot/hyphen mismatch does not throw, it just
+    // quietly bills at the fallback rate.
+    expect(pricesFor('anthropic/claude-sonnet-4.6').known).toBe(true);
+    expect(pricesFor('anthropic/claude-sonnet-4-6').known).toBe(false);
   });
 
   it('prefers the longest match, so a mini is not priced as its parent', () => {
