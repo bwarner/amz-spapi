@@ -956,6 +956,66 @@ export class SpApiClient {
     return response.data;
   }
 
+  /**
+   * List reports Amazon already generated, newest first.
+   *
+   * Needed because some report types cannot be requested at all. Settlement
+   * reports are produced by Amazon on its own settlement cycle and
+   * `createReport` rejects them — the only way to obtain one is to find the ones
+   * that already exist and download those. Amazon keeps roughly 90 days of them,
+   * so anything not captured inside that window is gone, which is the entire
+   * reason for archiving them.
+   *
+   * `processingStatuses` defaults to DONE: a report still IN_QUEUE has no
+   * document to fetch, and returning it would push that check onto every caller.
+   */
+  async listReports(params: {
+    reportTypes: string[];
+    marketplaceIds?: string[];
+    /** Filters on when Amazon PRODUCED the report, not the data it covers. */
+    createdSince?: string;
+    createdUntil?: string;
+    processingStatuses?: Array<
+      'IN_QUEUE' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED' | 'FATAL'
+    >;
+    pageSize?: number;
+    nextToken?: string;
+  }): Promise<{
+    reports: Array<{
+      reportId: string;
+      reportType: string;
+      processingStatus: string;
+      reportDocumentId?: string;
+      dataStartTime?: string;
+      dataEndTime?: string;
+      createdTime?: string;
+    }>;
+    nextToken?: string;
+  }> {
+    // nextToken must travel ALONE — Amazon rejects it alongside the filters that
+    // produced it, which is a 400 that reads like the token is malformed.
+    const query = params.nextToken
+      ? { nextToken: params.nextToken }
+      : {
+          reportTypes: params.reportTypes.join(','),
+          marketplaceIds: (
+            params.marketplaceIds ?? [this.config.marketplaceId]
+          ).join(','),
+          processingStatuses: (params.processingStatuses ?? ['DONE']).join(','),
+          ...(params.createdSince ? { createdSince: params.createdSince } : {}),
+          ...(params.createdUntil ? { createdUntil: params.createdUntil } : {}),
+          ...(params.pageSize ? { pageSize: String(params.pageSize) } : {}),
+        };
+
+    const response = await this.httpClient.get('/reports/2021-06-30/reports', {
+      params: query,
+    });
+    return {
+      reports: response.data?.reports ?? [],
+      nextToken: response.data?.nextToken,
+    };
+  }
+
   /** Poll a report's processing status. */
   async getReport(reportId: string): Promise<{
     reportId: string;

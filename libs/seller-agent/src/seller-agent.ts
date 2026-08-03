@@ -240,6 +240,18 @@ export interface SellerReportOps {
     from?: string;
     to?: string;
   }): Promise<ReportCoverage>;
+  /**
+   * Read already-ingested ledger rows. Never calls Amazon — if a window was
+   * never synced this returns nothing, which is why callers have to check
+   * coverage to tell "no movements" from "no data".
+   */
+  queryLedgerRows(params: {
+    view: 'ledger-detail' | 'ledger-summary';
+    from?: string;
+    to?: string;
+    fnsku?: string;
+    granularity?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  }): Promise<Array<{ fields: Record<string, unknown> }>>;
 }
 
 /** What reading a document tells the agent, before anything is filed. */
@@ -2204,6 +2216,68 @@ function getReportTools(reportOps: SellerReportOps) {
   ]);
 
   return {
+    'get-inventory-ledger': {
+      description:
+        'Read ALREADY-INGESTED FBA inventory ledger rows — what moved, when, ' +
+        'and why. Use for lost, damaged, found, disposed, receipts and customer ' +
+        'returns over a date range, and for per-SKU movement history. This reads ' +
+        'stored rows and never calls Amazon, so it is free and instant, and an ' +
+        'empty result means NOTHING WAS SYNCED rather than nothing happened — ' +
+        'call check-report-coverage before concluding anything from zero rows. ' +
+        'Choose the view deliberately: ledger-detail is one row per event and is ' +
+        'what you want for "what happened to this SKU"; ledger-summary is ' +
+        'aggregated balances per SKU/date/location and is what you want for ' +
+        'totals. Never add the two together — they describe the same movements ' +
+        'twice.',
+      inputSchema: z.object({
+        view: z
+          .enum(['ledger-detail', 'ledger-summary'])
+          .describe('detail = per event; summary = aggregated balances'),
+        from: z.string().optional().describe('YYYY-MM-DD'),
+        to: z.string().optional().describe('YYYY-MM-DD'),
+        fnsku: z
+          .string()
+          .optional()
+          .describe('Restrict to one FNSKU. Note: FNSKU, not seller SKU.'),
+        granularity: z
+          .enum(['DAILY', 'WEEKLY', 'MONTHLY'])
+          .optional()
+          .describe(
+            'Summary view only. Pin it — DAILY and MONTHLY rows cover the ' +
+              'same movements, so a query spanning both double counts.'
+          ),
+      }),
+      execute: async (input: {
+        view: 'ledger-detail' | 'ledger-summary';
+        from?: string;
+        to?: string;
+        fnsku?: string;
+        granularity?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+      }) => {
+        try {
+          const rows = await reportOps.queryLedgerRows(input);
+          return {
+            success: true as const,
+            view: input.view,
+            rowCount: rows.length,
+            rows: rows.map((row) => row.fields),
+            note: rows.length
+              ? undefined
+              : 'No stored rows for that window. This does NOT mean no inventory ' +
+                'moved — it means nothing has been ingested. Check coverage with ' +
+                'check-report-coverage, then offer to sync that window.',
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Failed to read ledger rows.',
+          };
+        }
+      },
+    },
     'check-report-coverage': {
       description:
         'What FBA report data has actually been ingested for a window, and where ' +

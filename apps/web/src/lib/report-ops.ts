@@ -1,6 +1,7 @@
 import { SpApiClient } from '@farvisionllc/sp-client';
 import {
   getCoverage,
+  queryLedgerRows,
   syncReport,
   isIngestError,
   type ReportKind,
@@ -45,6 +46,19 @@ export function createReportOps(params: {
         sellerId: params.sellerId,
         from,
         to,
+      }),
+    // Reads stored rows only — never reaches Amazon. An unsynced window looks
+    // exactly like a window with no movements, which is why the tool insists on
+    // a coverage check rather than reporting an empty result as "nothing
+    // happened".
+    queryLedgerRows: ({ view, from, to, fnsku, granularity }) =>
+      queryLedgerRows({
+        sellerId: params.sellerId,
+        view,
+        from,
+        to,
+        fnsku,
+        granularity,
       }),
   };
 }
