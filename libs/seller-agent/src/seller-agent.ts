@@ -254,6 +254,60 @@ export interface SellerReportOps {
   }): Promise<Array<{ fields: Record<string, unknown> }>>;
 }
 
+/**
+ * Host-provided READ-ONLY Amazon Ads access (#86).
+ *
+ * Every call carries a `profileId` because an advertiser profile is the unit of
+ * an Ads account and users routinely hold several — one per marketplace. There
+ * is no "their Ads account" to default to, and defaulting to the first would
+ * report one marketplace as though it were all of them.
+ *
+ * Structure only. Spend, sales and ACOS come from the Ads Reporting API, which
+ * is a separate service and not wired up — so nothing here can answer "which
+ * campaigns are wasting money", and the tools say so rather than implying an
+ * answer from a campaign list.
+ */
+export interface SellerAdsOps {
+  listProfiles(): Promise<
+    Array<{
+      profileId: string;
+      marketplaceId: string;
+      profileName: string;
+      region?: string;
+    }>
+  >;
+  listCampaigns(params: {
+    profileId?: string;
+    stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
+    maxResults?: number;
+  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  listAdGroups(params: {
+    profileId?: string;
+    campaignIdFilter?: string[];
+    maxResults?: number;
+  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  listKeywords(params: {
+    profileId?: string;
+    campaignIdFilter?: string[];
+    adGroupIdFilter?: string[];
+    maxResults?: number;
+  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  listNegativeKeywords(params: {
+    profileId?: string;
+    campaignIdFilter?: string[];
+    maxResults?: number;
+  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  listProductAds(params: {
+    profileId?: string;
+    campaignIdFilter?: string[];
+    maxResults?: number;
+  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  getCampaignBudgetUsage(params: {
+    profileId?: string;
+    campaignIds: string[];
+  }): Promise<{ usage: unknown[]; errors: unknown[] }>;
+}
+
 /** What reading a document tells the agent, before anything is filed. */
 export type DocumentReading = {
   assetId: string;
@@ -446,6 +500,7 @@ export interface SellerAgentConfig {
   sourcingOps?: SellerSourcingOps;
   complianceOps?: SellerComplianceOps;
   reportOps?: SellerReportOps;
+  adsOps?: SellerAdsOps;
   documentOps?: SellerDocumentOps;
   listingWrites?: SellerListingWrites;
   modelTier?: ModelTier;
@@ -2204,6 +2259,159 @@ function getWebTools(webOps: SellerWebOps) {
   };
 }
 
+/**
+ * Read-only Amazon Ads tools (#86).
+ *
+ * The prompt discipline that matters here: these read STRUCTURE. None of them
+ * returns spend, sales, clicks or ACOS, because the Ads Reporting API is a
+ * separate service that is not wired up. A campaign list plus a daily budget
+ * looks enough like performance data to invite an answer about wasted spend,
+ * and every description below says plainly that it is not.
+ */
+function getAdsTools(adsOps: SellerAdsOps) {
+  const profileId = z
+    .string()
+    .optional()
+    .describe(
+      'Advertiser profile to query. REQUIRED when the account has more than ' +
+        'one — call list-ad-profiles first and ask the user which marketplace ' +
+        'they mean rather than picking one.'
+    );
+  const maxResults = z.number().int().min(1).max(500).optional();
+
+  async function run<T>(work: () => Promise<T>) {
+    try {
+      return { success: true as const, ...(await work()) };
+    } catch (error) {
+      return {
+        success: false as const,
+        error: error instanceof Error ? error.message : 'Ads request failed.',
+      };
+    }
+  }
+
+  return {
+    'list-ad-profiles': {
+      description:
+        'The connected Amazon Ads advertiser profiles, one per marketplace. ' +
+        'CALL THIS FIRST for any advertising question: every other ads tool ' +
+        'needs a profileId, and an account with several profiles has no correct ' +
+        'default — campaigns in one marketplace say nothing about another. Free ' +
+        'and instant.',
+      inputSchema: z.object({}),
+      execute: async () =>
+        run(async () => ({ profiles: await adsOps.listProfiles() })),
+    },
+
+    'get-ad-campaigns': {
+      description:
+        'Sponsored Products campaigns: name, state, daily budget, bidding ' +
+        'strategy, start and end dates. Excludes ARCHIVED unless asked. ' +
+        'STRUCTURE ONLY — this returns NO spend, sales, clicks, impressions or ' +
+        'ACOS, so it CANNOT answer which campaigns are performing or wasting ' +
+        'money. Say that plainly if asked; do not infer performance from budget.',
+      inputSchema: z.object({
+        profileId,
+        stateFilter: z
+          .array(z.enum(['ENABLED', 'PAUSED', 'ARCHIVED']))
+          .optional(),
+        maxResults,
+      }),
+      execute: async (input: {
+        profileId?: string;
+        stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
+        maxResults?: number;
+      }) => run(() => adsOps.listCampaigns(input)),
+    },
+
+    'get-ad-groups': {
+      description:
+        'Ad groups within campaigns, with their default bids. Structure only — ' +
+        'no performance metrics. Filter by campaign id to keep the result small.',
+      inputSchema: z.object({
+        profileId,
+        campaignIdFilter: z.array(z.string()).optional(),
+        maxResults,
+      }),
+      execute: async (input: {
+        profileId?: string;
+        campaignIdFilter?: string[];
+        maxResults?: number;
+      }) => run(() => adsOps.listAdGroups(input)),
+    },
+
+    'get-ad-keywords': {
+      description:
+        'Targeted keywords with match type and bid. Structure only — a bid is ' +
+        'what you are WILLING to pay, not what anything cost. Questions about ' +
+        'which keywords are expensive or converting need the Ads Reporting API, ' +
+        'which is not connected yet; say so rather than answering from bids.',
+      inputSchema: z.object({
+        profileId,
+        campaignIdFilter: z.array(z.string()).optional(),
+        adGroupIdFilter: z.array(z.string()).optional(),
+        maxResults,
+      }),
+      execute: async (input: {
+        profileId?: string;
+        campaignIdFilter?: string[];
+        adGroupIdFilter?: string[];
+        maxResults?: number;
+      }) => run(() => adsOps.listKeywords(input)),
+    },
+
+    'get-ad-negative-keywords': {
+      description:
+        'Negative keywords at AD GROUP level. Note this is only half the ' +
+        'picture: campaign-level negatives are a separate list this does not ' +
+        'read, so an absent term here does NOT prove it is unblocked. Say which ' +
+        'level you checked.',
+      inputSchema: z.object({
+        profileId,
+        campaignIdFilter: z.array(z.string()).optional(),
+        maxResults,
+      }),
+      execute: async (input: {
+        profileId?: string;
+        campaignIdFilter?: string[];
+        maxResults?: number;
+      }) => run(() => adsOps.listNegativeKeywords(input)),
+    },
+
+    'get-ad-product-ads': {
+      description:
+        'The ASINs and SKUs actually being advertised, per ad group. Useful for ' +
+        '"is this product being advertised at all". Structure only.',
+      inputSchema: z.object({
+        profileId,
+        campaignIdFilter: z.array(z.string()).optional(),
+        maxResults,
+      }),
+      execute: async (input: {
+        profileId?: string;
+        campaignIdFilter?: string[];
+        maxResults?: number;
+      }) => run(() => adsOps.listProductAds(input)),
+    },
+
+    'get-ad-budget-usage': {
+      description:
+        "How much of each campaign's budget is consumed TODAY. The only spend " +
+        'signal available without the Reporting API, and it is today only: it ' +
+        'answers "am I capped right now", never "what did this cost me". ' +
+        'Amazon requires an EDIT permission for this call, so a 403 here while ' +
+        'other ads tools work means the connection lacks that scope, not that ' +
+        'it is broken.',
+      inputSchema: z.object({
+        profileId,
+        campaignIds: z.array(z.string()).min(1),
+      }),
+      execute: async (input: { profileId?: string; campaignIds: string[] }) =>
+        run(() => adsOps.getCampaignBudgetUsage(input)),
+    },
+  };
+}
+
 function getReportTools(reportOps: SellerReportOps) {
   const kindSchema = z.enum([
     'ledger-detail',
@@ -2841,6 +3049,7 @@ export function createSellerAgent({
   sourcingOps,
   complianceOps,
   reportOps,
+  adsOps,
   documentOps,
   listingWrites,
   modelTier,
@@ -2866,6 +3075,7 @@ export function createSellerAgent({
     ? getComplianceTools(complianceOps)
     : {};
   const reportTools = reportOps ? getReportTools(reportOps) : {};
+  const adsTools = adsOps ? getAdsTools(adsOps) : {};
   const documentTools = documentOps ? getDocumentTools(documentOps) : {};
   const listingWriteTools = listingWrites
     ? getListingWriteTools(listingWrites)
@@ -2881,6 +3091,7 @@ export function createSellerAgent({
     ...sourcingTools,
     ...complianceTools,
     ...reportTools,
+    ...adsTools,
     ...documentTools,
     ...listingWriteTools,
   };

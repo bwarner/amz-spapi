@@ -28,6 +28,7 @@ import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
 import { createDocumentOps } from '../../../lib/document-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
+import { createAdsOps } from '../../../lib/ads-ops';
 import { recordModelUsage } from '../../../lib/model-usage';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
@@ -187,6 +188,13 @@ export async function POST(request: Request) {
   let spCache: SpCache | undefined;
   let listingWrites: SellerListingWrites | undefined;
   let reportOps: ReturnType<typeof createReportOps> | undefined;
+
+  // Ads is deliberately OUTSIDE the SP-API block below. The two are separate
+  // Amazon applications with separate consent, and an advertiser can connect
+  // Ads without ever connecting a Seller account — gating ads tools on SP
+  // credentials would hide them from exactly that user. It resolves its own
+  // connections per call, so constructing it is free.
+  const adsOps = createAdsOps({ userId: session.user.sub });
 
   if (clientId && refreshToken) {
     const spClient = new SpApiClient({
@@ -367,6 +375,7 @@ export async function POST(request: Request) {
     complianceOps: createComplianceOps(chatUserId),
     documentOps: createDocumentOps({ userId: chatUserId }),
     reportOps,
+    adsOps,
     listingWrites,
     marketplaceId: userMarketplaceId,
     additionalInstructions,
