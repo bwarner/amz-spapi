@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "outDir": "../../dist/packages/oauth",
+    "tsBuildInfoFile": "../../dist/packages/oauth/tsconfig.build.tsbuildinfo",
+    "composite": false,
+    "declarationMap": false
+  }
+}

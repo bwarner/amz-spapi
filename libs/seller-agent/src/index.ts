@@ -8,6 +8,7 @@ export type {
   SellerSourcingOps,
   SellerComplianceOps,
   SellerReportOps,
+  SellerAdsOps,
   SellerDocumentOps,
   DocumentReading,
   ReportIngestResult,

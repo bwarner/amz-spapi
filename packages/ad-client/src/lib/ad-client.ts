@@ -232,4 +232,227 @@ export class AmazonAdsApiClient {
     );
     return response.data;
   }
+
+  // ---------------------------------------------------------------------------
+  // Sponsored Products, read-only (#86)
+  //
+  // Every v3 list endpoint is a POST — the filters go in a body, not a query
+  // string — and each one demands its own vendored media type in BOTH Accept and
+  // Content-Type. Send plain `application/json` and Amazon answers 415 with no
+  // hint as to which of the two headers it disliked, so the media type travels
+  // with the endpoint in ENDPOINTS below rather than being passed by callers.
+  //
+  // These read structure, not performance. Spend, sales and ACOS come from the
+  // Ads Reporting API, which is a different service and is not vendored here —
+  // see #86 stage 2. A caller asking "which campaigns waste money" cannot be
+  // answered by anything on this class yet, and it is better for that to be
+  // obvious than for a campaign list to be mistaken for an answer.
+  // ---------------------------------------------------------------------------
+
+  private static readonly ENDPOINTS = {
+    campaigns: { path: '/sp/campaigns/list', media: 'spCampaign.v3' },
+    adGroups: { path: '/sp/adGroups/list', media: 'spAdGroup.v3' },
+    keywords: { path: '/sp/keywords/list', media: 'spKeyword.v3' },
+    productAds: { path: '/sp/productAds/list', media: 'spProductAd.v3' },
+    negativeKeywords: {
+      path: '/sp/negativeKeywords/list',
+      media: 'spNegativeKeyword.v3',
+    },
+    targets: {
+      path: '/sp/targets/list',
+      media: 'spTargetingClause.v3',
+    },
+  } as const;
+
+  /**
+   * One POST list call.
+   *
+   * `nextToken` continues a previous page. Amazon returns it inside the response
+   * body under a key that varies by resource (`campaigns`, `adGroups`, …), which
+   * is why the collection key is passed in rather than guessed.
+   */
+  private async listResource<T>(
+    endpoint: { path: string; media: string },
+    collectionKey: string,
+    body: Record<string, unknown>
+  ): Promise<{ items: T[]; nextToken?: string; totalResults?: number }> {
+    const response = await this.httpClient.post(endpoint.path, body, {
+      headers: {
+        Accept: `application/vnd.${endpoint.media}+json`,
+        'Content-Type': `application/vnd.${endpoint.media}+json`,
+      },
+    });
+    return {
+      items: response.data?.[collectionKey] ?? [],
+      nextToken: response.data?.nextToken,
+      totalResults: response.data?.totalResults,
+    };
+  }
+
+  /**
+   * Campaigns for the current advertiser profile.
+   *
+   * `stateFilter` defaults to excluding ARCHIVED. An archived campaign is not a
+   * campaign anyone is managing, and including them by default makes every list
+   * longer and every total wrong for the question usually being asked.
+   */
+  public async listCampaigns(params?: {
+    campaignIdFilter?: string[];
+    stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
+    maxResults?: number;
+    nextToken?: string;
+  }) {
+    return this.listResource<Record<string, unknown>>(
+      AmazonAdsApiClient.ENDPOINTS.campaigns,
+      'campaigns',
+      {
+        stateFilter: {
+          include: params?.stateFilter ?? ['ENABLED', 'PAUSED'],
+        },
+        ...(params?.campaignIdFilter
+          ? { campaignIdFilter: { include: params.campaignIdFilter } }
+          : {}),
+        ...(params?.maxResults ? { maxResults: params.maxResults } : {}),
+        ...(params?.nextToken ? { nextToken: params.nextToken } : {}),
+      }
+    );
+  }
+
+  public async listAdGroups(params?: {
+    campaignIdFilter?: string[];
+    adGroupIdFilter?: string[];
+    stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
+    maxResults?: number;
+    nextToken?: string;
+  }) {
+    return this.listResource<Record<string, unknown>>(
+      AmazonAdsApiClient.ENDPOINTS.adGroups,
+      'adGroups',
+      {
+        stateFilter: { include: params?.stateFilter ?? ['ENABLED', 'PAUSED'] },
+        ...(params?.campaignIdFilter
+          ? { campaignIdFilter: { include: params.campaignIdFilter } }
+          : {}),
+        ...(params?.adGroupIdFilter
+          ? { adGroupIdFilter: { include: params.adGroupIdFilter } }
+          : {}),
+        ...(params?.maxResults ? { maxResults: params.maxResults } : {}),
+        ...(params?.nextToken ? { nextToken: params.nextToken } : {}),
+      }
+    );
+  }
+
+  /** Keyword targets, with their bids. Match type lives on each keyword. */
+  public async listKeywords(params?: {
+    campaignIdFilter?: string[];
+    adGroupIdFilter?: string[];
+    stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
+    maxResults?: number;
+    nextToken?: string;
+  }) {
+    return this.listResource<Record<string, unknown>>(
+      AmazonAdsApiClient.ENDPOINTS.keywords,
+      'keywords',
+      {
+        stateFilter: { include: params?.stateFilter ?? ['ENABLED', 'PAUSED'] },
+        ...(params?.campaignIdFilter
+          ? { campaignIdFilter: { include: params.campaignIdFilter } }
+          : {}),
+        ...(params?.adGroupIdFilter
+          ? { adGroupIdFilter: { include: params.adGroupIdFilter } }
+          : {}),
+        ...(params?.maxResults ? { maxResults: params.maxResults } : {}),
+        ...(params?.nextToken ? { nextToken: params.nextToken } : {}),
+      }
+    );
+  }
+
+  /**
+   * Negative keywords at ad-group level.
+   *
+   * Campaign-level negatives are a DIFFERENT endpoint
+   * (`/sp/campaignNegativeKeywords/list`); a seller asking "why is this search
+   * term still spending" may be blocked at either level, so reading one and
+   * reporting it as the whole answer is misleading.
+   */
+  public async listNegativeKeywords(params?: {
+    campaignIdFilter?: string[];
+    adGroupIdFilter?: string[];
+    maxResults?: number;
+    nextToken?: string;
+  }) {
+    return this.listResource<Record<string, unknown>>(
+      AmazonAdsApiClient.ENDPOINTS.negativeKeywords,
+      'negativeKeywords',
+      {
+        stateFilter: { include: ['ENABLED', 'PAUSED'] },
+        ...(params?.campaignIdFilter
+          ? { campaignIdFilter: { include: params.campaignIdFilter } }
+          : {}),
+        ...(params?.adGroupIdFilter
+          ? { adGroupIdFilter: { include: params.adGroupIdFilter } }
+          : {}),
+        ...(params?.maxResults ? { maxResults: params.maxResults } : {}),
+        ...(params?.nextToken ? { nextToken: params.nextToken } : {}),
+      }
+    );
+  }
+
+  /** The advertised ASINs/SKUs themselves. */
+  public async listProductAds(params?: {
+    campaignIdFilter?: string[];
+    adGroupIdFilter?: string[];
+    stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
+    maxResults?: number;
+    nextToken?: string;
+  }) {
+    return this.listResource<Record<string, unknown>>(
+      AmazonAdsApiClient.ENDPOINTS.productAds,
+      'productAds',
+      {
+        stateFilter: { include: params?.stateFilter ?? ['ENABLED', 'PAUSED'] },
+        ...(params?.campaignIdFilter
+          ? { campaignIdFilter: { include: params.campaignIdFilter } }
+          : {}),
+        ...(params?.adGroupIdFilter
+          ? { adGroupIdFilter: { include: params.adGroupIdFilter } }
+          : {}),
+        ...(params?.maxResults ? { maxResults: params.maxResults } : {}),
+        ...(params?.nextToken ? { nextToken: params.nextToken } : {}),
+      }
+    );
+  }
+
+  /**
+   * How much of each campaign's budget today has been consumed.
+   *
+   * The one genuinely useful spend signal reachable without the Reporting API,
+   * and it is TODAY only — it answers "am I capped right now", not "what did
+   * this cost me".
+   *
+   * Amazon documents this as requiring `advertiser_campaign_edit`, an EDIT
+   * permission on a read-only call. A token granted read scope alone gets a 403
+   * here while every list endpoint above succeeds, so a failure on this one
+   * specifically is a scope problem and not a broken connection — which is not
+   * what a 403 next to six working calls looks like at first glance.
+   *
+   * Responses are partial by design: `success` and `error` arrive together, one
+   * entry per campaign id, so a bad id degrades that row rather than the call.
+   */
+  public async getCampaignBudgetUsage(campaignIds: string[]) {
+    const response = await this.httpClient.post(
+      '/sp/campaigns/budget/usage',
+      { campaignIds },
+      {
+        headers: {
+          Accept: 'application/vnd.spcampaignbudgetusage.v1+json',
+          'Content-Type': 'application/vnd.spcampaignbudgetusage.v1+json',
+        },
+      }
+    );
+    return {
+      usage: response.data?.success ?? [],
+      errors: response.data?.error ?? [],
+    };
+  }
 }

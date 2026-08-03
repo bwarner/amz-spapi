@@ -18,7 +18,7 @@
       "options": {
         "outputPath": "dist/packages/oauth",
         "main": "packages/oauth/src/index.ts",
-        "tsConfig": "packages/oauth/tsconfig.lib.json",
+        "tsConfig": "packages/oauth/tsconfig.build.json",
         "assets": ["packages/oauth/*.md", "packages/oauth/package.json"],
         "updateBuildableProjectDepsInPackageJson": true
       }

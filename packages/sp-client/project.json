@@ -11,7 +11,7 @@
       "options": {
         "outputPath": "dist/packages/sp-client",
         "main": "packages/sp-client/src/index.ts",
-        "tsConfig": "packages/sp-client/tsconfig.lib.json",
+        "tsConfig": "packages/sp-client/tsconfig.build.json",
         "assets": ["packages/sp-client/*.md"]
       }
     }

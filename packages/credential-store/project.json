@@ -7,13 +7,11 @@
   "targets": {
     "build": {
       "executor": "@nx/js:tsc",
-      "outputs": [
-        "{options.outputPath}"
-      ],
+      "outputs": ["{options.outputPath}"],
       "options": {
         "outputPath": "dist/packages/credential-store",
         "main": "packages/credential-store/src/index.ts",
-        "tsConfig": "packages/credential-store/tsconfig.lib.json",
+        "tsConfig": "packages/credential-store/tsconfig.build.json",
         "assets": [
           "packages/credential-store/*.md",
           "packages/credential-store/package.json"
@@ -23,9 +21,7 @@
     },
     "test": {
       "executor": "@nx/jest:jest",
-      "outputs": [
-        "{workspaceRoot}/coverage/{projectRoot}"
-      ],
+      "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
       "options": {
         "jestConfig": "packages/credential-store/jest.config.ts"
       }
