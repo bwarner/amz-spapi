@@ -78,8 +78,8 @@ export const SOURCES: Source[] = [
   { domain: 'purchases', collection: 'purchase-orders' },
   // See vendor-store.ts: `purchases_vendors` is stuck at the Data API.
   { domain: 'purchases', collection: 'vendor-records' },
-  { domain: 'purchases', collection: 'buyer-profiles' },
-  { domain: 'purchases', collection: 'amazon-fcs' },
+  { domain: 'purchases', collection: 'buyer-records' },
+  { domain: 'purchases', collection: 'fc-records' },
   // Scheduled sync (#34). `cursors` is the high-water mark per user x seller x
   // domain and is the only record of what has been fetched — a gap behind it is
   // indistinguishable from a quiet period, which is why it is stored rather
@@ -245,7 +245,7 @@ export const INDEXES: IndexSpec[] = [
     keys: ['`userId`', '(`vendor`.`name`)'],
   },
   {
-    collection: 'purchases_amazon-fcs',
+    collection: 'purchases_fc-records',
     name: 'idx_amazon_fcs_user_code',
     keys: ['`userId`', '(`fc`.`fcCode`)'],
   },
