@@ -28,6 +28,12 @@ export type FbaBoxLabel = {
   createdAt?: string;
   shipToName?: string;
   /**
+   * The printed street address of the destination FC, line by line. The label
+   * is the one document a seller always has that states an FC's address, so
+   * this is what seeds the FC address book without anyone typing.
+   */
+  shipToAddressLines?: string[];
+  /**
    * Amazon prints "Single SKU" when a box holds one SKU. A mixed box lists its
    * contents in a form this parser does not attempt, so quantity is left unset
    * rather than guessed.
@@ -106,6 +112,28 @@ export function parseFbaBoxLabel(text: string): FbaBoxLabel {
 
   const shipToName = shipTo.match(/(FBA:\s*[^0-9]+?)(?=\s+[A-Z]{3}\d\b|\s+\d)/);
   if (shipToName) label.shipToName = shipToName[1].trim();
+
+  // The street address, from the UN-flattened text so line structure survives.
+  // Everything in the ship-to block that is not the "FBA: ..." name and not
+  // the bare FC code is address. Falls back to one joined line when the
+  // extractor returned no line breaks.
+  const rawShipTo =
+    text.match(/SHIP TO:?([\s\S]*?)(?:Created:|FBA Box|$)/i)?.[1] ?? '';
+  const addressLines = rawShipTo
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^FBA:/i.test(line))
+    .filter((line) => !/^[A-Z]{3}\d$/.test(line));
+  if (addressLines.length > 1) {
+    label.shipToAddressLines = addressLines;
+  } else {
+    const flatAddress = shipTo
+      .replace(/FBA:\s*[^0-9]+?(?=\s+[A-Z]{3}\d\b|\s+\d)/, '')
+      .replace(FC_CODE, '')
+      .trim();
+    if (flatAddress) label.shipToAddressLines = [flatAddress];
+  }
 
   if (label.singleSku) {
     const sku = flat.match(/Single SKU\s+([A-Za-z0-9][A-Za-z0-9._-]{2,})/i);

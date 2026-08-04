@@ -22,7 +22,12 @@ const recognizeDocument = vi.fn();
 
 // The recogniser has its own tests; mocking it keeps these about what
 // document-ops does with a verdict rather than about how one is reached.
-vi.mock('@farvisionllc/models', () => ({ recognizeDocument }));
+vi.mock('@farvisionllc/models', async (importOriginal) => ({
+  // The box-label parser is pure text-in/data-out — the real one is what a
+  // box-label reading should be tested against, so only recognition is faked.
+  ...(await importOriginal<Record<string, unknown>>()),
+  recognizeDocument,
+}));
 vi.mock('./media-assets', () => ({ loadAssetBytes, getAsset }));
 vi.mock('./document-extraction', () => ({ extractDocument }));
 vi.mock('./pdf-text', () => ({ extractPdfText }));

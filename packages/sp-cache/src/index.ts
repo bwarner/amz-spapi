@@ -76,3 +76,43 @@ export type {
   StoredDocument,
   StoredRecognition,
 } from './lib/document-store.js';
+export {
+  saveVendor,
+  getVendor,
+  listVendors,
+  vendorStorage,
+  VendorStoreError,
+} from './lib/vendor-store.js';
+export type { SaveVendorParams, StoredVendor } from './lib/vendor-store.js';
+export {
+  saveFcAddress,
+  getFcAddress,
+  listFcAddresses,
+  fcStorage,
+  FcStoreError,
+} from './lib/fc-store.js';
+export type { StoredFcAddress } from './lib/fc-store.js';
+export {
+  saveBuyerProfile,
+  getBuyerProfile,
+  buyerProfileStorage,
+  BuyerProfileError,
+} from './lib/buyer-profile-store.js';
+export type { StoredBuyerProfile } from './lib/buyer-profile-store.js';
+export {
+  nextPoNumber,
+  storePurchaseOrder,
+  revisePurchaseOrder,
+  cancelPurchaseOrder,
+  getPurchaseOrder,
+  recordRenderedPo,
+  listPurchaseOrders,
+  poStorage,
+  PoStoreError,
+} from './lib/po-store.js';
+export type {
+  ListPurchaseOrdersFilters,
+  PurchaseOrderChanges,
+  RenderedPo,
+  StoredPurchaseOrder,
+} from './lib/po-store.js';

@@ -396,6 +396,23 @@ export type DocumentReading = {
   note?: string;
   /** True when this asset is already filed, so saving again is a no-op. */
   alreadySaved: boolean;
+  /**
+   * Present when the document is an FBA box label sheet: what Amazon printed —
+   * shipment id, destination FC and its street address, per-box SKU/quantity.
+   * The address is label evidence, fit for save-fc-address once confirmed.
+   */
+  boxLabels?: {
+    shipmentId?: string;
+    destinationFc?: string;
+    shipToName?: string;
+    shipToAddressLines?: string[];
+    boxes: Array<{
+      boxNumber?: number;
+      sku?: string;
+      quantity?: number;
+      warnings: string[];
+    }>;
+  };
 };
 
 /**
@@ -433,6 +450,145 @@ export interface SellerDocumentOps {
     documentId: string;
     role: string;
   }): Promise<{ documentId: string; role: string }>;
+}
+
+/** A vendor as the agent supplies or receives it; id is host-derived. */
+export type VendorInput = {
+  name: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  wechat?: string;
+  whatsapp?: string;
+  addressLines?: string[];
+  country?: string;
+  platform?: 'alibaba' | '1688' | 'direct' | 'other';
+  profileUrl?: string;
+  leadTimeDays?: number;
+  paymentTerms?: string;
+  incoterms?: string;
+  notes?: string;
+};
+
+export type VendorRecord = VendorInput & { vendorId: string };
+
+/** An Amazon FC address, learned from the seller's own shipment plans. */
+export type FcAddressInput = {
+  fcCode: string;
+  addressLines: string[];
+};
+
+/** The seller's own identity on a PO; stored as a per-user profile. */
+export type BuyerInput = {
+  name: string;
+  addressLines?: string[];
+  email?: string;
+  phone?: string;
+  /** Dun & Bradstreet number, nine digits. */
+  duns?: string;
+};
+
+/** A purchase order as the agent drafts it; number and date are host-assigned. */
+export type PurchaseOrderDraftInput = {
+  /**
+   * Given inline and upserted into the vendor directory as a side effect —
+   * identity is the slugged name, so a known vendor is enriched, not
+   * duplicated, and an unknown one is created by its first order.
+   */
+  vendor: VendorInput;
+  currency: string;
+  lines: Array<{
+    sku?: string;
+    description: string;
+    quantity: number;
+    unit?: string;
+    unitPrice: number;
+  }>;
+  freightAmount?: number;
+  otherFees?: Array<{ description: string; amount: number }>;
+  incoterms?: string;
+  paymentTerms?: string;
+  expectedShipDate?: string;
+  buyer?: BuyerInput;
+  shipTo?: { name: string; addressLines: string[] };
+  notes?: string;
+};
+
+export type PurchaseOrderTotalsView = {
+  goodsSubtotal: number;
+  freight: number;
+  fees: number;
+  total: number;
+  totalUnits: number;
+};
+
+/** A revision replaces the order's content; identity fields cannot change. */
+export type PurchaseOrderRevisionInput = Omit<
+  PurchaseOrderDraftInput,
+  'vendor'
+> & {
+  poNumber: string;
+  revisionNote?: string;
+};
+
+export type PurchaseOrderSummary = {
+  poNumber: string;
+  issueDate: string;
+  vendorId: string;
+  vendorName?: string;
+  currency: string;
+  total: number;
+  revision: number;
+  status: string;
+  /** Whether a rendered file already exists for download. */
+  rendered: boolean;
+};
+
+/**
+ * Host-provided vendor directory and purchase order issuance. The host owns
+ * PO numbering, persistence, and file rendering; the agent only ever passes
+ * structured orders, never bytes.
+ */
+export interface SellerProcurementOps {
+  saveVendor(vendor: VendorInput): Promise<VendorRecord>;
+  listVendors(): Promise<VendorRecord[]>;
+  /** Merge-save the per-user buyer profile printed on every PO. */
+  setBuyerProfile(buyer: BuyerInput): Promise<BuyerInput>;
+  getBuyerProfile(): Promise<BuyerInput | null>;
+  saveFcAddress(fc: FcAddressInput): Promise<FcAddressInput>;
+  getFcAddress(params: { fcCode: string }): Promise<FcAddressInput | null>;
+  listFcAddresses(): Promise<FcAddressInput[]>;
+  createPurchaseOrder(draft: PurchaseOrderDraftInput): Promise<{
+    poNumber: string;
+    issueDate: string;
+    vendorName: string;
+    totals: PurchaseOrderTotalsView;
+  }>;
+  revisePurchaseOrder(input: PurchaseOrderRevisionInput): Promise<{
+    poNumber: string;
+    revision: number;
+    vendorName: string;
+    totals: PurchaseOrderTotalsView;
+  }>;
+  cancelPurchaseOrder(params: {
+    poNumber: string;
+    reason?: string;
+  }): Promise<{ poNumber: string; status: string }>;
+  renderPurchaseOrder(params: {
+    poNumber: string;
+    format: 'pdf' | 'xlsx';
+  }): Promise<{ downloadUrl: string; fileName: string; sizeBytes: number }>;
+  listPurchaseOrders(params: {
+    vendorId?: string;
+    from?: string;
+    to?: string;
+  }): Promise<PurchaseOrderSummary[]>;
+  getPurchaseOrder(params: { poNumber: string }): Promise<{
+    order: Record<string, unknown>;
+    vendorName?: string;
+    totals: PurchaseOrderTotalsView;
+    downloads?: Array<{ format: string; downloadUrl: string }>;
+  } | null>;
 }
 
 /**
@@ -552,6 +708,7 @@ export interface SellerAgentConfig {
   reportOps?: SellerReportOps;
   adsOps?: SellerAdsOps;
   documentOps?: SellerDocumentOps;
+  procurementOps?: SellerProcurementOps;
   listingWrites?: SellerListingWrites;
   modelTier?: ModelTier;
   marketplaceId: string;
@@ -3198,6 +3355,530 @@ function getDocumentTools(documentOps: SellerDocumentOps) {
   };
 }
 
+function getProcurementTools(procurementOps: SellerProcurementOps) {
+  const vendorFields = {
+    name: z.string().min(1).describe('The vendor company name as they use it'),
+    contactName: z.string().optional(),
+    email: z.string().optional(),
+    phone: z.string().optional(),
+    wechat: z.string().optional(),
+    whatsapp: z.string().optional(),
+    addressLines: z.array(z.string()).optional(),
+    country: z
+      .string()
+      .optional()
+      .describe('ISO code or plain name, e.g. "CN"'),
+    platform: z.enum(['alibaba', '1688', 'direct', 'other']).optional(),
+    profileUrl: z
+      .string()
+      .optional()
+      .describe('Storefront/profile page, e.g. the Alibaba vendor profile'),
+    leadTimeDays: z.number().int().positive().optional(),
+    paymentTerms: z
+      .string()
+      .optional()
+      .describe(
+        'Default terms used to prefill POs, e.g. "30% deposit, 70% before shipment"'
+      ),
+    incoterms: z
+      .string()
+      .optional()
+      .describe('Default incoterms, e.g. "FOB Shenzhen"'),
+    notes: z.string().optional(),
+  };
+
+  const poLineSchema = z.object({
+    sku: z
+      .string()
+      .optional()
+      .describe("The seller's own SKU when the goods map to one"),
+    description: z.string().min(1),
+    quantity: z.number().int().positive(),
+    unit: z
+      .string()
+      .optional()
+      .describe('"pcs", "sets", "cartons" — printed next to the quantity'),
+    unitPrice: z
+      .number()
+      .nonnegative()
+      .describe("Per-unit price in the PO's currency"),
+  });
+
+  // The content of an order — shared between create and revise so the two
+  // schemas cannot drift. Identity (vendor, number, dates) is deliberately
+  // NOT here: create names the vendor, revise names the order.
+  const orderContentFields = {
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .describe(
+        'ISO 4217, uppercase — every amount on the PO is in this currency'
+      ),
+    lines: z.array(poLineSchema).min(1),
+    freightAmount: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe('Freight the vendor quoted on this order, when known'),
+    otherFees: z
+      .array(
+        z.object({
+          description: z.string().min(1),
+          amount: z.number().nonnegative(),
+        })
+      )
+      .optional()
+      .describe(
+        'Mold fees, sample fees, inspection — anything besides goods and freight'
+      ),
+    incoterms: z.string().optional().describe('e.g. "FOB Shenzhen", "DDP"'),
+    paymentTerms: z.string().optional(),
+    expectedShipDate: z.string().optional().describe('YYYY-MM-DD'),
+    buyer: z
+      .object({
+        name: z.string().min(1),
+        addressLines: z.array(z.string()).optional(),
+        email: z.string().optional(),
+        phone: z.string().optional(),
+        duns: z
+          .string()
+          .regex(/^\d{9}$/)
+          .optional()
+          .describe('Dun & Bradstreet number, nine digits'),
+      })
+      .optional()
+      .describe(
+        'OMIT to use the stored buyer profile (set-buyer-profile). Providing ' +
+          'it prints these details on THIS order and updates the profile.'
+      ),
+    shipTo: z
+      .object({
+        name: z.string().min(1),
+        addressLines: z.array(z.string()).min(1),
+      })
+      .optional()
+      .describe('Where the goods go — a 3PL, prep center, or Amazon FC'),
+    notes: z.string().optional(),
+  };
+
+  return {
+    'save-vendor': {
+      description:
+        "Save or update a vendor in the seller's vendor directory. Identity is " +
+        'the NAME (case and punctuation ignored), so re-saving the same vendor ' +
+        'updates it — fields you omit keep their stored values. Use it to capture a ' +
+        'vendor from a sourcing search result, a vendor page the user shared, or ' +
+        'details they typed. create-purchase-order also saves its vendor ' +
+        'automatically — this tool exists for building the directory without ' +
+        'an order.',
+      inputSchema: z.object(vendorFields),
+      execute: async (input: VendorInput) => {
+        try {
+          return {
+            success: true as const,
+            vendor: await procurementOps.saveVendor(input),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error ? error.message : 'Could not save vendor.',
+          };
+        }
+      },
+    },
+
+    'list-vendors': {
+      description:
+        "The seller's saved vendors, alphabetical. Check it before creating a " +
+        'purchase order so an existing vendor is matched by its exact saved ' +
+        'name, or to answer "who do I buy from". Free and instant; no model ' +
+        'call.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        try {
+          return {
+            success: true as const,
+            vendors: await procurementOps.listVendors(),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not list vendors.',
+          };
+        }
+      },
+    },
+
+    'set-buyer-profile': {
+      description:
+        "Store the seller's business identity — name, address, email, phone, " +
+        'DUNS — printed as the "From (Buyer)" block on every purchase order. ' +
+        'Set once, merged on update (omitted fields keep their stored value). ' +
+        'Ask for it the first time a PO is created without one.',
+      inputSchema: z.object({
+        name: z.string().min(1),
+        addressLines: z.array(z.string()).optional(),
+        email: z.string().optional(),
+        phone: z.string().optional(),
+        duns: z
+          .string()
+          .regex(/^\d{9}$/)
+          .optional()
+          .describe('Dun & Bradstreet number, nine digits'),
+      }),
+      execute: async (input: BuyerInput) => {
+        try {
+          return {
+            success: true as const,
+            buyer: await procurementOps.setBuyerProfile(input),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not save the buyer profile.',
+          };
+        }
+      },
+    },
+
+    'get-buyer-profile': {
+      description:
+        'The stored buyer identity that prints on POs, or null if none is ' +
+        'set yet. Free and instant; no model call.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        try {
+          return {
+            success: true as const,
+            buyer: await procurementOps.getBuyerProfile(),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not read the buyer profile.',
+          };
+        }
+      },
+    },
+
+    'get-fc-address': {
+      description:
+        "Look up an Amazon fulfillment center's street address in the " +
+        'seller\'s learned FC address book (codes like "ONT8"). Returns null ' +
+        'when this FC has not been seen before — then ask the user for the ' +
+        'address as their shipment plan shows it and store it with ' +
+        'save-fc-address. NEVER guess or recall an Amazon address yourself: ' +
+        'the address book and the plan are the only valid sources. Free and ' +
+        'instant; no model call.',
+      inputSchema: z.object({
+        fcCode: z.string().min(3).describe('FC code, e.g. "ONT8"'),
+      }),
+      execute: async (input: { fcCode: string }) => {
+        try {
+          const fc = await procurementOps.getFcAddress(input);
+          return {
+            success: true as const,
+            fc,
+            note: fc
+              ? undefined
+              : 'Unknown FC. Ask the user for the address from their ' +
+                'shipment plan, then save it with save-fc-address.',
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not look up the FC.',
+          };
+        }
+      },
+    },
+
+    'save-fc-address': {
+      description:
+        'Store an Amazon FC address the USER supplied (from their shipment ' +
+        'plan in Seller Central) so the code resolves automatically on every ' +
+        'later order. Replaces any previous address for the code — Amazon ' +
+        'occasionally relocates FCs. Only store what the user or their plan ' +
+        'stated; never an address you produced yourself.',
+      inputSchema: z.object({
+        fcCode: z.string().min(3).describe('FC code, e.g. "ONT8"'),
+        addressLines: z
+          .array(z.string())
+          .min(1)
+          .describe('Street address exactly as the shipment plan shows it'),
+      }),
+      execute: async (input: FcAddressInput) => {
+        try {
+          return {
+            success: true as const,
+            fc: await procurementOps.saveFcAddress(input),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not save the FC address.',
+          };
+        }
+      },
+    },
+
+    'list-fc-addresses': {
+      description:
+        "Every Amazon FC in the seller's learned address book, by code. " +
+        'Free and instant; no model call.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        try {
+          return {
+            success: true as const,
+            fcs: await procurementOps.listFcAddresses(),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not list FC addresses.',
+          };
+        }
+      },
+    },
+
+    'create-purchase-order': {
+      description:
+        'Create a purchase order. The vendor is given inline — a known name ' +
+        'reuses (and enriches) the saved vendor record, an unknown one is ' +
+        'created as a side effect, so no separate save-vendor call is needed. ' +
+        'Check list-vendors first to reuse the exact saved name. The PO number ' +
+        'and issue date are assigned by the system. ' +
+        'Requires explicit user approval: before calling, show the user the full ' +
+        'order — vendor, every line with quantity × unit price, freight and fees, ' +
+        'terms, ship-to, and the computed total — and never present the PO as ' +
+        'created until this tool returns. Prices come from the user or a vendor ' +
+        'quote covering THIS order quantity; never invent or assume a price. ' +
+        'After it returns, call render-purchase-order to produce the file.',
+      inputSchema: z.object({
+        vendor: z
+          .object(vendorFields)
+          .describe(
+            'The vendor by name, plus any details known. Use the exact saved ' +
+              'name from list-vendors when the vendor exists; a new name ' +
+              'creates a new vendor record.'
+          ),
+        ...orderContentFields,
+      }),
+      needsApproval: true,
+      execute: async (input: PurchaseOrderDraftInput) => {
+        try {
+          const created = await procurementOps.createPurchaseOrder(input);
+          return {
+            success: true as const,
+            ...created,
+            note:
+              'Created. Now call render-purchase-order and give the user the ' +
+              'download link.',
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not create the purchase order.',
+          };
+        }
+      },
+    },
+
+    'revise-purchase-order': {
+      description:
+        'Correct or renegotiate an EXISTING purchase order in place: the PO ' +
+        'number stays (that is what both sides quote), the revision increments, ' +
+        'and stale files are invalidated — the next render prints "Rev N". Use ' +
+        'this when the vendor finds a mistake or counters (a price, a carton ' +
+        'multiple, a ship date). Pass the COMPLETE corrected order, not a delta ' +
+        '— call get-purchase-order first and carry over everything unchanged. ' +
+        'The vendor cannot change; that is a new order. Requires explicit ' +
+        'user approval: show exactly what changed (old → new, with the total ' +
+        'difference) before calling. After it returns, re-render and give the ' +
+        'user the fresh file.',
+      inputSchema: z.object({
+        poNumber: z.string().min(1),
+        ...orderContentFields,
+        revisionNote: z
+          .string()
+          .optional()
+          .describe(
+            'Why this revision exists — printed on the document, e.g. ' +
+              '"Quantity to a multiple of 16 per vendor carton size"'
+          ),
+      }),
+      needsApproval: true,
+      execute: async (input: PurchaseOrderRevisionInput) => {
+        try {
+          const revised = await procurementOps.revisePurchaseOrder(input);
+          return {
+            success: true as const,
+            ...revised,
+            note:
+              'Revised. Now call render-purchase-order and give the user the ' +
+              'updated file — old downloads are invalidated.',
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not revise the purchase order.',
+          };
+        }
+      },
+    },
+
+    'cancel-purchase-order': {
+      description:
+        'Mark a purchase order cancelled. It stays on the record (numbers are ' +
+        'never reused or deleted) but can no longer be revised or rendered. ' +
+        'Requires explicit user approval. Use when the order is dead — vendor ' +
+        'cannot deliver, terms fell through, or it is being replaced by a new ' +
+        'order.',
+      inputSchema: z.object({
+        poNumber: z.string().min(1),
+        reason: z.string().optional().describe('Kept on the record'),
+      }),
+      needsApproval: true,
+      execute: async (input: { poNumber: string; reason?: string }) => {
+        try {
+          return {
+            success: true as const,
+            ...(await procurementOps.cancelPurchaseOrder(input)),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not cancel the purchase order.',
+          };
+        }
+      },
+    },
+
+    'render-purchase-order': {
+      description:
+        'Render a created purchase order to a downloadable file. PDF is the ' +
+        'formal document to issue; XLSX is for vendors who work orders in ' +
+        'Excel — its amount cells are live formulas, so edited quantities move ' +
+        'the totals. Returns a download link — present it to the user as a ' +
+        'markdown link named after the PO number. Safe to repeat: re-rendering ' +
+        'an unchanged order returns the same file.',
+      inputSchema: z.object({
+        poNumber: z.string().min(1),
+        format: z
+          .enum(['pdf', 'xlsx'])
+          .optional()
+          .describe('Omit for pdf. Both formats can exist side by side.'),
+      }),
+      execute: async (input: { poNumber: string; format?: 'pdf' | 'xlsx' }) => {
+        try {
+          return {
+            success: true as const,
+            ...(await procurementOps.renderPurchaseOrder({
+              poNumber: input.poNumber,
+              format: input.format ?? 'pdf',
+            })),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not render the purchase order.',
+          };
+        }
+      },
+    },
+
+    'list-purchase-orders': {
+      description:
+        "The seller's purchase orders, newest first by issue date. Filter by " +
+        'vendor or date range. Free and instant; no model call.',
+      inputSchema: z.object({
+        vendorId: z.string().optional(),
+        from: z.string().optional().describe('YYYY-MM-DD, on the issue date'),
+        to: z.string().optional().describe('YYYY-MM-DD'),
+      }),
+      execute: async (input: {
+        vendorId?: string;
+        from?: string;
+        to?: string;
+      }) => {
+        try {
+          return {
+            success: true as const,
+            purchaseOrders: await procurementOps.listPurchaseOrders(input),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not list purchase orders.',
+          };
+        }
+      },
+    },
+
+    'get-purchase-order': {
+      description:
+        'One purchase order in full — every line, terms, computed totals, and the ' +
+        'download link if it has been rendered.',
+      inputSchema: z.object({ poNumber: z.string().min(1) }),
+      execute: async (input: { poNumber: string }) => {
+        try {
+          const found = await procurementOps.getPurchaseOrder(input);
+          if (!found) {
+            return {
+              success: false as const,
+              error: `No purchase order ${input.poNumber}.`,
+            };
+          }
+          return { success: true as const, ...found };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not read the purchase order.',
+          };
+        }
+      },
+    },
+  };
+}
+
 export function createSellerAgent({
   spCache,
   provider,
@@ -3210,6 +3891,7 @@ export function createSellerAgent({
   reportOps,
   adsOps,
   documentOps,
+  procurementOps,
   listingWrites,
   modelTier,
   marketplaceId,
@@ -3236,6 +3918,9 @@ export function createSellerAgent({
   const reportTools = reportOps ? getReportTools(reportOps) : {};
   const adsTools = adsOps ? getAdsTools(adsOps) : {};
   const documentTools = documentOps ? getDocumentTools(documentOps) : {};
+  const procurementTools = procurementOps
+    ? getProcurementTools(procurementOps)
+    : {};
   const listingWriteTools = listingWrites
     ? getListingWriteTools(listingWrites)
     : {};
@@ -3252,6 +3937,7 @@ export function createSellerAgent({
     ...reportTools,
     ...adsTools,
     ...documentTools,
+    ...procurementTools,
     ...listingWriteTools,
   };
 
@@ -3480,6 +4166,83 @@ SOURCING ANSWERS:
   language (materials + form factor + capacity), not a series of guesses.`
     : '';
 
+  const procurementInstructions = procurementOps
+    ? `
+- save-vendor / list-vendors: the seller's durable vendor directory.
+- create-purchase-order / render-purchase-order / list-purchase-orders /
+  get-purchase-order: issue purchase orders to saved vendors and produce a
+  downloadable PDF.
+
+PURCHASE ORDERS & VENDORS:
+- Save vendors as you learn about them — from a sourcing search the user
+  liked, a vendor page they shared, or details they typed. Saving by the same
+  name UPDATES the record, so enrich freely. create-purchase-order takes its
+  vendor inline and saves it as a side effect — check list-vendors first and
+  use the exact saved name, so an existing vendor is enriched rather than a
+  near-duplicate created.
+- Drafting a PO: unit prices come from the user or from a vendor quote that
+  covers THIS order quantity (the cheapest tier is not the price unless the
+  quantity is in that tier's band). Never invent a price, MOQ, or lead time.
+- create-purchase-order pauses for the user's explicit approval. BEFORE calling
+  it, show the complete order in the chat — vendor, every line as
+  quantity × unit price, freight and fees, terms, ship-to, and the total — and
+  never present the PO as created until the tool returns.
+- The PO number and issue date are assigned by the system; never promise a
+  number before the tool returns one.
+- After creating, call render-purchase-order and present the returned
+  downloadUrl as a markdown link named after the PO number
+  ("[PO-2026-0007 (PDF)](...)"). PDF is the formal document; offer the xlsx
+  format when the vendor works orders in Excel — its totals are live
+  formulas.
+- When the vendor finds a mistake or counters (a price, a carton multiple, a
+  ship date), use revise-purchase-order: the number stays, the revision
+  increments, old downloads are invalidated, and the next render prints
+  "Rev N". Read the order with get-purchase-order first and pass the COMPLETE
+  corrected content. Show the user old → new and the total difference before
+  the approval, and re-render afterwards.
+- Do the arithmetic for packing constraints yourself: "multiples of 16"
+  against a target of 1,000 means proposing 992 and 1,008 with the cost
+  difference of each, letting the user pick — never round silently.
+- cancel-purchase-order marks a dead order cancelled; it stays on the record
+  but cannot be revised or rendered. A cancelled order's replacement is a NEW
+  purchase order.
+- The "From (Buyer)" block comes from the stored buyer profile
+  (set-buyer-profile) — name, address, email, phone, and optionally a DUNS
+  number. The first time a PO is created with no profile, ask for at least the
+  business name and offer to store the rest; never invent buyer details.
+- Ship-to is usually a third party — a 3PL, a prep center, or an Amazon FC.
+  Reuse the ship-to from the seller's previous order (get-purchase-order) when
+  they say "same place as last time". For FBA inbound the destination FC and
+  address come from the shipment plan in Seller Central — use the exact
+  address the user gives or the plan states, never a guessed Amazon address.
+- PO FROM A SHIPMENT PLAN: when asked to order what a shipment plan needs,
+  call get-inbound-shipments with includeItems for that shipment and build the
+  lines from its SKUs and expected quantities. The plan does NOT carry the
+  vendor or prices — ask for both. It names the destination FC only by CODE
+  (e.g. "ONT8"): resolve the code with get-fc-address. Known FC → use the
+  stored address as the ship-to. Unknown FC → ask the user for the address as
+  their plan in Seller Central shows it, save it with save-fc-address, and it
+  resolves itself from then on. NEVER supply an Amazon address from your own
+  knowledge — the address book and the seller's plan are the only sources.
+  Quote which shipment id the quantities came from when showing the order.
+- An uploaded FBA box label sheet is the best FC-address source: read-document
+  returns boxLabels with the destination FC code AND the street address as
+  Amazon printed it. Confirm what you read with the user, save it with
+  save-fc-address, and the code resolves on every later order. The same
+  boxLabels carry per-box SKUs and quantities — usable to seed reorder lines
+  the same way a shipment plan is.
+- The shipment's ShipFromAddress is a vendor HINT, not an identity: goods
+  shipped direct from the factory carry the vendor's name and address there,
+  but goods routed through a prep center or 3PL carry the prep center's. If
+  the ship-from name matches a saved vendor, propose that vendor; otherwise
+  ask "it shipped from <name> — is that the vendor or your prep/3PL?" and use
+  a confirmed factory ship-from to enrich the vendor's address. Never silently
+  create a vendor from a ship-from address.
+- A purchase order states what was ORDERED. It is never the cost of goods —
+  the vendor's commercial invoice remains authoritative for cost — but it is
+  what that invoice should be checked against when it arrives.`
+    : '';
+
   const hasListingsTools = Boolean(spCache?.hasSellerId());
   const listingsInstructions = hasListingsTools
     ? `
@@ -3509,7 +4272,7 @@ AVAILABLE TOOLS:
 - get-settlements: payout periods with totals and processing status ("what did
   Amazon pay me").
 - get-financial-events: itemized fees/charges/refunds for a date window or one
-  order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}
+  order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}
 
 FBA INVENTORY RECONCILIATION (where did my units go):
 - check-report-coverage FIRST, every time, before saying anything about lost, damaged,
@@ -3644,7 +4407,7 @@ NOTE: Your Amazon account is not yet connected. You can still:
 - Discuss listing optimization strategies
 - Explain how to improve titles, bullet points, and descriptions
 - Provide guidance on inventory management and order fulfillment
-- Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}
+- Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}
 
 Connecting an Amazon Seller account in Settings adds exactly these, and nothing
 else: catalog and listing lookup, orders and order details, FBA inventory,

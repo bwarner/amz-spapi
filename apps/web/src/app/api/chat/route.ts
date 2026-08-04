@@ -26,6 +26,7 @@ import {
 import { createImageOps } from '../../../lib/image-ops';
 import { createSourcingOps, createWebOps } from '../../../lib/web-ops';
 import { createDocumentOps } from '../../../lib/document-ops';
+import { createProcurementOps } from '../../../lib/procurement-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
 import { createAdsOps } from '../../../lib/ads-ops';
@@ -374,6 +375,7 @@ export async function POST(request: Request) {
     sourcingOps: createSourcingOps(chatUserId, chatId),
     complianceOps: createComplianceOps(chatUserId),
     documentOps: createDocumentOps({ userId: chatUserId }),
+    procurementOps: createProcurementOps({ userId: chatUserId }),
     reportOps,
     adsOps,
     listingWrites,
