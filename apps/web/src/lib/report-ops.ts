@@ -1,4 +1,4 @@
-import { SpApiClient } from '@farvisionllc/sp-client';
+import { SpApiClient, REPORT_TIMEOUT_MS } from '@farvisionllc/sp-client';
 import {
   getCoverage,
   queryLedgerRows,
@@ -28,6 +28,11 @@ export function createReportOps(params: {
         from,
         to,
         marketplaceIds: [params.marketplaceId],
+        // Explicit, because this runs inside a chat turn that has 300s in
+        // total for the model, every other tool, and streaming. Inheriting a
+        // library default is how this came to wait ten minutes in a five
+        // minute request.
+        timeoutMs: REPORT_TIMEOUT_MS.requestSafe,
       });
       if (isIngestError(result)) {
         return {
