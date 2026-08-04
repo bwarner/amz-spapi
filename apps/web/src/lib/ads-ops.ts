@@ -144,7 +144,7 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
       return client.getCampaignBudgetUsage(campaignIds);
     },
 
-    async getPerformance({
+    async requestPerformanceReport({
       profileId,
       level,
       startDate,
@@ -152,16 +152,17 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
       attribution,
     }) {
       const client = await resolve(profileId);
-      const run =
-        level === 'keyword'
-          ? client.getKeywordPerformance.bind(client)
-          : level === 'searchTerm'
-          ? client.getSearchTermPerformance.bind(client)
-          : client.getCampaignPerformance.bind(client);
-      // Reports take minutes. The cap is below the route's own limit so a slow
-      // report surfaces as a report timeout naming the level, rather than as a
-      // dead request the seller cannot interpret.
-      return run({ startDate, endDate, attribution, timeoutMs: 4 * 60_000 });
+      return client.requestPerformanceReport({
+        level,
+        startDate,
+        endDate,
+        attribution,
+      });
+    },
+
+    async fetchPerformanceReport({ profileId, reportId }) {
+      const client = await resolve(profileId);
+      return client.fetchPerformanceReport(reportId);
     },
   };
 }

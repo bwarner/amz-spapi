@@ -325,20 +325,37 @@ export interface SellerAdsOps {
     campaignIds: string[];
   }): Promise<{ usage: unknown[]; errors: unknown[] }>;
   /**
-   * Spend, sales and ACOS. Asynchronous on Amazon's side and slow — minutes,
-   * not milliseconds — so this is the one Ads call worth warning a user about
-   * before making them wait.
+   * Ask Amazon to build a performance report. Returns an id in about a second.
+   *
+   * Split from the fetch because generation takes MINUTES and the chat route
+   * has 300 seconds for an entire turn. Waiting inside one tool spent the whole
+   * budget and still often lost — and losing discarded the report id, which is
+   * the only handle on work Amazon has already started billing for.
    */
-  getPerformance(params: {
+  requestPerformanceReport(params: {
     profileId?: string;
     level: 'campaign' | 'keyword' | 'searchTerm';
     startDate: string;
     endDate: string;
     attribution?: '1d' | '7d' | '14d' | '30d';
   }): Promise<{
-    rows: Array<Record<string, unknown>>;
+    reportId: string;
+    level: string;
     attribution: string;
+    status?: string;
   }>;
+  /** Check once. Not-ready is a normal answer, not a failure. */
+  fetchPerformanceReport(params: {
+    profileId?: string;
+    reportId: string;
+  }): Promise<
+    | { ready: false; status: string; failureReason?: string }
+    | {
+        ready: true;
+        rows: Array<Record<string, unknown>>;
+        attribution: string;
+      }
+  >;
 }
 
 /** What reading a document tells the agent, before anything is filed. */
@@ -2448,30 +2465,24 @@ function getAdsTools(adsOps: SellerAdsOps) {
       }) => run(() => adsOps.listProductAds(input)),
     },
 
-    'get-ad-performance': {
+    'request-ad-report': {
       description:
-        'Spend, sales, ACOS, clicks and impressions from the Amazon Ads ' +
-        'Reporting API. THIS is the tool for "which campaigns are wasting ' +
-        'money", "what is my ACOS", "which keywords should I cut" — the ' +
-        'structure tools cannot answer any of those. ' +
-        'SLOW: Amazon generates these asynchronously and it commonly takes one ' +
-        'to several minutes, so tell the user it is running before you call it, ' +
-        'and call it ONCE — do not retry a timeout, the report is still being ' +
-        'built and a second request pays for the same work again. ' +
-        'Pick the level: campaign for "where is my money going", keyword for ' +
-        '"which targets are inefficient", searchTerm for what shoppers actually ' +
-        'typed (the report that finds negative-keyword candidates: spend with ' +
-        'no sales). ' +
-        'ALWAYS state the attribution window with any figure you quote — the ' +
-        'same spend looks several times better at 30d than at 1d, so an ACOS ' +
-        'without its window is a different claim, not a rounder one.',
+        'START a spend/sales/ACOS report. Returns a reportId in about a second ' +
+        'and does NOT wait — Amazon builds these asynchronously and it commonly ' +
+        'takes one to several minutes. ' +
+        'Use this for "which campaigns are wasting money", "what is my ACOS", ' +
+        '"which keywords should I cut" — the structure tools cannot answer any ' +
+        'of those. ' +
+        'After calling: tell the user it is running, give them the reportId, and ' +
+        'END YOUR TURN. Do not loop on get-ad-report waiting for it. When they ' +
+        'come back, or after a minute or two of other work, fetch it. ' +
+        'Levels: campaign for where the money goes, keyword for which targets ' +
+        'are inefficient, searchTerm for what shoppers actually typed — that ' +
+        'last one finds negative-keyword candidates, since a broad-match ' +
+        'keyword can look fine overall while hiding terms that only cost money.',
       inputSchema: z.object({
         profileId,
-        level: z
-          .enum(['campaign', 'keyword', 'searchTerm'])
-          .describe(
-            'campaign = spend by campaign; searchTerm = what was typed'
-          ),
+        level: z.enum(['campaign', 'keyword', 'searchTerm']),
         startDate: z.string().describe('YYYY-MM-DD'),
         endDate: z.string().describe('YYYY-MM-DD'),
         attribution: z
@@ -2479,7 +2490,7 @@ function getAdsTools(adsOps: SellerAdsOps) {
           .optional()
           .describe(
             'Purchase attribution window. Defaults to 14d, matching Campaign ' +
-              'Manager. Report whichever was used.'
+              'Manager. Whatever is used must be quoted with the numbers.'
           ),
       }),
       execute: async (input: {
@@ -2490,7 +2501,46 @@ function getAdsTools(adsOps: SellerAdsOps) {
         attribution?: '1d' | '7d' | '14d' | '30d';
       }) =>
         run(async () => {
-          const result = await adsOps.getPerformance(input);
+          const started = await adsOps.requestPerformanceReport(input);
+          return {
+            ...started,
+            note:
+              `Report ${started.reportId} is building and usually takes one to ` +
+              'several minutes. Tell the user, hand them the reportId, and end ' +
+              'your turn — then call get-ad-report with that id. Do NOT request ' +
+              'the same report again while it is building: Amazon charges for ' +
+              'the work either way and a second request does not make it faster.',
+          };
+        }),
+    },
+
+    'get-ad-report': {
+      description:
+        'Fetch a report started by request-ad-report, using its reportId. ' +
+        'Checks ONCE and returns immediately: if it is still building you get a ' +
+        'status, which is a normal answer and not an error — say so and offer ' +
+        'to check again shortly rather than retrying in a loop. ' +
+        'ALWAYS state the attribution window with any figure you quote: the ' +
+        'same spend looks several times better at 30d than at 1d, so an ACOS ' +
+        'without its window is a different claim, not a rounder one.',
+      inputSchema: z.object({
+        profileId,
+        reportId: z.string().describe('From request-ad-report'),
+      }),
+      execute: async (input: { profileId?: string; reportId: string }) =>
+        run(async () => {
+          const result = await adsOps.fetchPerformanceReport(input);
+          if (!result.ready) {
+            return {
+              ...result,
+              note:
+                result.status === 'FAILED'
+                  ? 'The report failed. Do not retry the same request blindly — ' +
+                    'report the reason to the user.'
+                  : 'Still building. This is expected. Tell the user and offer ' +
+                    'to check again in a minute; do not poll in a loop.',
+            };
+          }
           return {
             ...result,
             rowCount: result.rows.length,

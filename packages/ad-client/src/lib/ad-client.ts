@@ -44,6 +44,8 @@ export type AdsBrandsResponse = AdsBrand[];
  */
 export type AdsAttributionWindow = '1d' | '7d' | '14d' | '30d';
 
+export type AdsPerformanceLevel = 'campaign' | 'keyword' | 'searchTerm';
+
 export type AdsPerformanceRow = {
   impressions: number;
   clicks: number;
@@ -590,9 +592,16 @@ export class AmazonAdsApiClient {
   /**
    * Create, poll and download in one call.
    *
-   * Polls with backoff. Ads reports commonly take one to several minutes, which
-   * is far longer than a chat turn should block — callers that cannot wait
-   * should use the three primitives and persist the report id.
+   * NOT for a request path, and deliberately not used by one. Ads reports take
+   * one to several minutes; the chat route has 300 seconds for an entire turn,
+   * so blocking here spends the whole budget on a single tool and still often
+   * loses — and losing throws away the report id, the only handle on work
+   * Amazon has already begun billing for. Chat uses
+   * `requestPerformanceReport` / `fetchPerformanceReport` instead.
+   *
+   * This exists for a background worker with its own timeout — the sync path in
+   * #36, per ADR-0009 — where blocking is the whole point and there is nobody
+   * waiting on the other end.
    */
   public async runAdsReport<T = Record<string, unknown>>(params: {
     name: string;
@@ -675,140 +684,147 @@ export class AmazonAdsApiClient {
   }
 
   /**
-   * Spend, sales and ACOS per campaign.
+   * Which report and columns each level needs.
    *
-   * `SUMMARY` rather than `DAILY` by design: one row per campaign for the whole
-   * window is what "which campaigns are wasting money" needs, and a daily
-   * breakdown of 172 campaigns over 30 days is 5,160 rows the model would have
-   * to aggregate itself — badly, and at length.
+   * One place so the request and the fetch cannot disagree about what was
+   * asked for.
    */
-  public async getCampaignPerformance(params: {
-    startDate: string;
-    endDate: string;
-    attribution?: AdsAttributionWindow;
-    timeoutMs?: number;
-    onStatus?: (status: string) => void;
-  }): Promise<{
-    rows: AdsPerformanceRow[];
-    attribution: AdsAttributionWindow;
-  }> {
-    const attribution =
-      params.attribution ?? AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
-    const raw = await this.runAdsReport({
-      name: `campaigns ${params.startDate}..${params.endDate}`,
-      startDate: params.startDate,
-      endDate: params.endDate,
+  private static performanceConfig(
+    level: AdsPerformanceLevel,
+    attribution: AdsAttributionWindow
+  ): { reportTypeId: string; groupBy: string[]; columns: string[] } {
+    const metrics = [
+      'impressions',
+      'clicks',
+      'cost',
+      `purchases${attribution}`,
+      `sales${attribution}`,
+    ];
+    if (level === 'keyword') {
+      return {
+        reportTypeId: 'spTargeting',
+        groupBy: ['targeting'],
+        columns: [
+          'keywordId',
+          'keyword',
+          'matchType',
+          'campaignId',
+          'adGroupId',
+          ...metrics,
+        ],
+      };
+    }
+    if (level === 'searchTerm') {
+      // What shoppers actually typed. Finds negative-keyword candidates: a
+      // broad-match keyword can look acceptable overall while hiding several
+      // terms that only cost money.
+      return {
+        reportTypeId: 'spSearchTerm',
+        groupBy: ['searchTerm'],
+        columns: [
+          'searchTerm',
+          'keyword',
+          'matchType',
+          'campaignId',
+          'adGroupId',
+          ...metrics,
+        ],
+      };
+    }
+    return {
       reportTypeId: 'spCampaigns',
       groupBy: ['campaign'],
-      columns: [
-        'campaignId',
-        'campaignName',
-        'campaignStatus',
-        'impressions',
-        'clicks',
-        'cost',
-        `purchases${attribution}`,
-        `sales${attribution}`,
-      ],
-      timeUnit: 'SUMMARY',
-      timeoutMs: params.timeoutMs,
-      onStatus: params.onStatus,
-    });
-
-    return {
-      rows: raw.map((r) => AmazonAdsApiClient.toPerformanceRow(r, attribution)),
-      attribution,
-    };
-  }
-
-  /** Spend, sales and ACOS per keyword target. */
-  public async getKeywordPerformance(params: {
-    startDate: string;
-    endDate: string;
-    attribution?: AdsAttributionWindow;
-    timeoutMs?: number;
-    onStatus?: (status: string) => void;
-  }): Promise<{
-    rows: AdsPerformanceRow[];
-    attribution: AdsAttributionWindow;
-  }> {
-    const attribution =
-      params.attribution ?? AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
-    const raw = await this.runAdsReport({
-      name: `targeting ${params.startDate}..${params.endDate}`,
-      startDate: params.startDate,
-      endDate: params.endDate,
-      reportTypeId: 'spTargeting',
-      groupBy: ['targeting'],
-      columns: [
-        'keywordId',
-        'keyword',
-        'matchType',
-        'campaignId',
-        'adGroupId',
-        'impressions',
-        'clicks',
-        'cost',
-        `purchases${attribution}`,
-        `sales${attribution}`,
-      ],
-      timeUnit: 'SUMMARY',
-      timeoutMs: params.timeoutMs,
-      onStatus: params.onStatus,
-    });
-
-    return {
-      rows: raw.map((r) => AmazonAdsApiClient.toPerformanceRow(r, attribution)),
-      attribution,
+      columns: ['campaignId', 'campaignName', 'campaignStatus', ...metrics],
     };
   }
 
   /**
-   * What shoppers actually typed, versus what was targeted.
+   * Ask Amazon to build a performance report. Returns in about a second.
    *
-   * The report that finds negative-keyword candidates: search terms with spend
-   * and no sales. Distinct from keyword performance — a broad-match keyword can
-   * look acceptable overall while hiding several terms that only cost money.
+   * Deliberately does NOT wait. Generation takes minutes, and the chat route
+   * has 300 seconds for an entire turn — model included — so waiting here
+   * spends the whole budget on one tool and still often loses. Worse, a caller
+   * that gives up has no way to reclaim the work: the report id is the only
+   * handle on something Amazon is already billing for, so it is returned rather
+   * than buried in a timeout.
    */
-  public async getSearchTermPerformance(params: {
+  public async requestPerformanceReport(params: {
+    level: AdsPerformanceLevel;
     startDate: string;
     endDate: string;
     attribution?: AdsAttributionWindow;
-    timeoutMs?: number;
-    onStatus?: (status: string) => void;
   }): Promise<{
-    rows: AdsPerformanceRow[];
+    reportId: string;
+    level: AdsPerformanceLevel;
     attribution: AdsAttributionWindow;
+    status?: string;
   }> {
     const attribution =
       params.attribution ?? AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
-    const raw = await this.runAdsReport({
-      name: `search terms ${params.startDate}..${params.endDate}`,
+    const config = AmazonAdsApiClient.performanceConfig(
+      params.level,
+      attribution
+    );
+    const { reportId, status } = await this.createAdsReport({
+      name: `${params.level} ${params.startDate}..${params.endDate}`,
       startDate: params.startDate,
       endDate: params.endDate,
-      reportTypeId: 'spSearchTerm',
-      groupBy: ['searchTerm'],
-      columns: [
-        'searchTerm',
-        'keyword',
-        'matchType',
-        'campaignId',
-        'adGroupId',
-        'impressions',
-        'clicks',
-        'cost',
-        `purchases${attribution}`,
-        `sales${attribution}`,
-      ],
       timeUnit: 'SUMMARY',
-      timeoutMs: params.timeoutMs,
-      onStatus: params.onStatus,
+      ...config,
     });
+    return { reportId, level: params.level, attribution, status };
+  }
 
+  /**
+   * Check a report once and return its rows if they are ready.
+   *
+   * One poll, no waiting. "Not ready" is a normal answer, not a failure.
+   *
+   * The attribution window is recovered from the payload's own column names
+   * rather than threaded back through the caller. Requiring the caller to
+   * resupply it would mean a caller that forgot — or a model that guessed —
+   * silently normalised the numbers against a window Amazon never reported,
+   * and the result would look entirely reasonable.
+   */
+  public async fetchPerformanceReport(reportId: string): Promise<
+    | { ready: false; status: string; failureReason?: string }
+    | {
+        ready: true;
+        rows: AdsPerformanceRow[];
+        attribution: AdsAttributionWindow;
+      }
+  > {
+    const report = await this.getAdsReport(reportId);
+
+    if (report.status === 'FAILED') {
+      return {
+        ready: false,
+        status: 'FAILED',
+        failureReason: report.failureReason,
+      };
+    }
+    if (report.status !== 'COMPLETED' || !report.url) {
+      return { ready: false, status: report.status };
+    }
+
+    const raw = await this.downloadAdsReport(report.url);
+    const attribution =
+      AmazonAdsApiClient.detectAttribution(raw[0]) ??
+      AmazonAdsApiClient.DEFAULT_ATTRIBUTION;
     return {
+      ready: true,
       rows: raw.map((r) => AmazonAdsApiClient.toPerformanceRow(r, attribution)),
       attribution,
     };
+  }
+
+  /** Read the window back off the payload: exactly one `sales<window>` is requested. */
+  private static detectAttribution(
+    row: Record<string, unknown> | undefined
+  ): AdsAttributionWindow | undefined {
+    if (!row) return undefined;
+    const windows: AdsAttributionWindow[] = ['1d', '7d', '14d', '30d'];
+    return windows.find((w) => `sales${w}` in row);
   }
 
   /**
