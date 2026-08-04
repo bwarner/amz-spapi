@@ -312,6 +312,14 @@ export const DocumentRoleSchema = z.enum([
    */
   'proof-of-delivery',
   'packing-list',
+  /**
+   * The seller's OWN statement of what they ordered — the one purchase
+   * document that originates here rather than arriving from outside. Bills
+   * nothing: the commercial invoice remains the cost authority. Its value is
+   * the comparison — an invoice that differs from the order it answers has
+   * something concrete to differ from.
+   */
+  'purchase-order',
   'other',
 ]);
 export type DocumentRole = z.infer<typeof DocumentRoleSchema>;
@@ -342,6 +350,8 @@ export const PURCHASE_AUTHORITY = {
   delivery: 'proof-of-delivery',
   /** What was declared to customs, which duty is charged on. */
   declaredValue: 'customs-declaration',
+  /** What the seller ordered — what the invoice is checked against. */
+  ordered: 'purchase-order',
 } as const;
 
 /** How two documents came to be treated as one purchase. */

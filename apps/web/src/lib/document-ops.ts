@@ -11,10 +11,12 @@ import type {
   SellerDocumentOps,
 } from '@amz-spapi/seller-agent';
 import {
+  parseFbaBoxLabels,
   recognizeDocument,
   type DocumentRole,
   type ExtractedDocument,
   type ExtractionIssue,
+  type FbaBoxLabel,
 } from '@farvisionllc/models';
 import { extractDocument } from './document-extraction';
 import { getAsset, loadAssetBytes } from './media-assets';
@@ -89,6 +91,7 @@ async function readAndExtract(
   needsReview: boolean;
   modelId?: string;
   note?: string;
+  boxLabels?: BoxLabelSummary;
 }> {
   const loaded = await loadAssetBytes({ userId, assetId });
   if (!loaded) {
@@ -104,10 +107,12 @@ async function readAndExtract(
 
   const bytes = Buffer.from(loaded.bytes);
   let text = '';
+  let pages: string[] = [];
   let noExtractableText = false;
   if (loaded.mimeType === 'application/pdf') {
     const pdf = await extractPdfText(bytes);
     text = pdf.text;
+    pages = pdf.pages;
     noExtractableText = pdf.looksScannedOrArtwork;
   } else if (loaded.mimeType.startsWith('text/')) {
     text = bytes.toString('utf8');
@@ -128,6 +133,14 @@ async function readAndExtract(
     signals: verdict.signals.map((signal) => signal.reason),
   };
 
+  // A box label is not cost-bearing, but it IS data: what Amazon printed —
+  // shipment id, destination FC and its street address, per-box quantities.
+  // Parsed locally, no model call.
+  const boxLabels =
+    verdict.kind === 'fba-box-label'
+      ? summariseParsedLabels(parseFbaBoxLabels(pages.length ? pages : [text]))
+      : undefined;
+
   // Extraction is metered, so it runs only where there is cost to read. A box
   // label, a design file or a scan with no text must never trigger it.
   const COST_BEARING = new Set(['commercial-invoice', 'receipt']);
@@ -135,6 +148,7 @@ async function readAndExtract(
     return {
       fileName,
       recognition,
+      boxLabels,
       issues: [],
       needsReview: false,
       note: noExtractableText
@@ -157,6 +171,41 @@ async function readAndExtract(
     issues: extraction.issues,
     needsReview: extraction.needsReview,
     modelId: extraction.modelId,
+  };
+}
+
+type BoxLabelSummary = {
+  shipmentId?: string;
+  destinationFc?: string;
+  shipToName?: string;
+  shipToAddressLines?: string[];
+  boxes: Array<{
+    boxNumber?: number;
+    sku?: string;
+    quantity?: number;
+    warnings: string[];
+  }>;
+};
+
+/** One sheet, many labels — collapse what every box repeats, keep what varies. */
+function summariseParsedLabels(
+  labels: FbaBoxLabel[]
+): BoxLabelSummary | undefined {
+  if (!labels.length) return undefined;
+  const first = (pick: (label: FbaBoxLabel) => string | undefined) =>
+    labels.map(pick).find(Boolean);
+  return {
+    shipmentId: first((l) => l.shipmentId),
+    destinationFc: first((l) => l.destinationFc),
+    shipToName: first((l) => l.shipToName),
+    shipToAddressLines: labels.find((l) => l.shipToAddressLines?.length)
+      ?.shipToAddressLines,
+    boxes: labels.map((label) => ({
+      boxNumber: label.boxNumber,
+      sku: label.sku,
+      quantity: label.quantity,
+      warnings: label.warnings,
+    })),
   };
 }
 
@@ -199,6 +248,7 @@ export function createDocumentOps(params: {
       return {
         assetId,
         fileName: result.fileName,
+        boxLabels: result.boxLabels,
         kind: result.recognition.kind,
         confidence: result.recognition.confidence,
         needsUserChoice: result.recognition.needsUserChoice,

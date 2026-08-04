@@ -51,6 +51,36 @@ describe('parseFbaBoxLabel', () => {
     expect(parseFbaBoxLabel(label()).destinationFc).toBe('LBE1');
   });
 
+  it('reads the FC street address line by line from page text', () => {
+    const multiline = [
+      'FBA Box 1 of 1 - 20lb',
+      'SHIP FROM: Sender Name Street Address City Country',
+      'SHIP TO:',
+      'FBA: Example LLC',
+      '100 EXAMPLE RD',
+      'SOMETOWN, PA 15672-9703',
+      'United States',
+      'LBE1',
+      'Created: 2026/06/12 14:11 EDT (-04)',
+      'FBA19G33WPZ3U000001',
+      'Single SKU FB-COF-GEI-75 Qty 100',
+    ].join('\n');
+    const parsed = parseFbaBoxLabel(multiline);
+    expect(parsed.destinationFc).toBe('LBE1');
+    // The name line and the bare FC-code line are not address.
+    expect(parsed.shipToAddressLines).toEqual([
+      '100 EXAMPLE RD',
+      'SOMETOWN, PA 15672-9703',
+      'United States',
+    ]);
+  });
+
+  it('still yields an address as one line when the text has no line breaks', () => {
+    const parsed = parseFbaBoxLabel(label());
+    expect(parsed.shipToAddressLines?.length).toBe(1);
+    expect(parsed.shipToAddressLines?.[0]).toContain('100 EXAMPLE RD');
+  });
+
   it('refuses to guess a quantity for a mixed-SKU box', () => {
     const mixed = label().replace(
       'Single SKU FB-COF-GEI-75 Qty 100',

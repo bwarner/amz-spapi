@@ -126,6 +126,37 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Checking listing health...',
     'Listing status retrieved',
   ],
+  'save-vendor': ['Saving vendor...', 'Vendor saved'],
+  'set-buyer-profile': ['Saving buyer profile...', 'Buyer profile saved'],
+  'get-fc-address': ['Looking up Amazon FC...', 'FC lookup complete'],
+  'save-fc-address': ['Saving FC address...', 'FC address saved'],
+  'list-fc-addresses': ['Loading FC address book...', 'FC address book loaded'],
+  'get-buyer-profile': ['Loading buyer profile...', 'Buyer profile retrieved'],
+  'list-vendors': ['Loading vendors...', 'Vendors retrieved'],
+  'create-purchase-order': [
+    'Creating purchase order...',
+    'Purchase order created',
+  ],
+  'revise-purchase-order': [
+    'Revising purchase order...',
+    'Purchase order revised',
+  ],
+  'cancel-purchase-order': [
+    'Cancelling purchase order...',
+    'Purchase order cancelled',
+  ],
+  'render-purchase-order': [
+    'Rendering purchase order PDF...',
+    'Purchase order ready to download',
+  ],
+  'list-purchase-orders': [
+    'Loading purchase orders...',
+    'Purchase orders retrieved',
+  ],
+  'get-purchase-order': [
+    'Loading purchase order...',
+    'Purchase order retrieved',
+  ],
 };
 
 /** Human-readable descriptions for approval-gated (live write) tools. */
@@ -134,6 +165,12 @@ const APPROVAL_TOOL_SUMMARIES: Record<string, string> = {
     'Write these images to the LIVE Amazon listing (a snapshot is saved first)',
   'revert-listing-images':
     'Restore this listing’s images from the stored snapshot',
+  'create-purchase-order':
+    'Create this purchase order (a PO number is assigned and it becomes a business record)',
+  'revise-purchase-order':
+    'Revise this purchase order in place (revision increments; old downloads are invalidated)',
+  'cancel-purchase-order':
+    'Cancel this purchase order (it stays on the record but can no longer be revised or rendered)',
 };
 
 function approvalSummary(toolName: string, input: unknown): string {

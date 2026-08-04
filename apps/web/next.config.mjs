@@ -28,6 +28,9 @@ const nextConfig = {
     // to the package dir — bundling breaks both. Must load from node_modules.
     '@imgly/background-removal-node',
     'onnxruntime-node',
+    // PDF rendering: resolves font metrics and other data files relative to
+    // the package dir at runtime — load from node_modules, don't bundle.
+    '@react-pdf/renderer',
   ],
   webpack: (config) => {
     config.resolve.extensionAlias = {
