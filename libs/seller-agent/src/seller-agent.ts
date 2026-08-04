@@ -3668,11 +3668,14 @@ function getProcurementTools(procurementOps: SellerProcurementOps) {
         'created as a side effect, so no separate save-vendor call is needed. ' +
         'Check list-vendors first to reuse the exact saved name. The PO number ' +
         'and issue date are assigned by the system. ' +
-        'Requires explicit user approval: before calling, show the user the full ' +
-        'order — vendor, every line with quantity × unit price, freight and fees, ' +
-        'terms, ship-to, and the computed total — and never present the PO as ' +
-        'created until this tool returns. Prices come from the user or a vendor ' +
-        'quote covering THIS order quantity; never invent or assume a price. ' +
+        'YOU are the only gate on this — there is no confirmation dialog behind it. ' +
+        'Before calling, show the user the full order (vendor, every line with ' +
+        'quantity × unit price, freight and fees, terms, ship-to, and the ' +
+        'computed total) and WAIT for them to say yes in their own words. A ' +
+        'draft you have merely displayed is not agreement. Never present the PO ' +
+        'as created until this tool returns. Prices come from the user or a ' +
+        'vendor quote covering THIS order quantity; never invent or assume a ' +
+        'price. ' +
         'After it returns, call render-purchase-order to produce the file.',
       inputSchema: z.object({
         vendor: z
@@ -3684,7 +3687,6 @@ function getProcurementTools(procurementOps: SellerProcurementOps) {
           ),
         ...orderContentFields,
       }),
-      needsApproval: true,
       execute: async (input: PurchaseOrderDraftInput) => {
         try {
           const created = await procurementOps.createPurchaseOrder(input);
@@ -3715,10 +3717,10 @@ function getProcurementTools(procurementOps: SellerProcurementOps) {
         'this when the vendor finds a mistake or counters (a price, a carton ' +
         'multiple, a ship date). Pass the COMPLETE corrected order, not a delta ' +
         '— call get-purchase-order first and carry over everything unchanged. ' +
-        'The vendor cannot change; that is a new order. Requires explicit ' +
-        'user approval: show exactly what changed (old → new, with the total ' +
-        'difference) before calling. After it returns, re-render and give the ' +
-        'user the fresh file.',
+        'The vendor cannot change; that is a new order. YOU are the only gate: ' +
+        'show exactly what changed (old → new, with the total difference) and ' +
+        'wait for the user to agree before calling. After it returns, re-render ' +
+        'and give the user the fresh file.',
       inputSchema: z.object({
         poNumber: z.string().min(1),
         ...orderContentFields,
@@ -3730,7 +3732,6 @@ function getProcurementTools(procurementOps: SellerProcurementOps) {
               '"Quantity to a multiple of 16 per vendor carton size"'
           ),
       }),
-      needsApproval: true,
       execute: async (input: PurchaseOrderRevisionInput) => {
         try {
           const revised = await procurementOps.revisePurchaseOrder(input);
@@ -3757,14 +3758,14 @@ function getProcurementTools(procurementOps: SellerProcurementOps) {
       description:
         'Mark a purchase order cancelled. It stays on the record (numbers are ' +
         'never reused or deleted) but can no longer be revised or rendered. ' +
-        'Requires explicit user approval. Use when the order is dead — vendor ' +
+        'YOU are the only gate: name the PO and what it is for, and wait for the ' +
+        'user to confirm before calling. Use when the order is dead — vendor ' +
         'cannot deliver, terms fell through, or it is being replaced by a new ' +
         'order.',
       inputSchema: z.object({
         poNumber: z.string().min(1),
         reason: z.string().optional().describe('Kept on the record'),
       }),
-      needsApproval: true,
       execute: async (input: { poNumber: string; reason?: string }) => {
         try {
           return {
