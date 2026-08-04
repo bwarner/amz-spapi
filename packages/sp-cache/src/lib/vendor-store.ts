@@ -32,7 +32,21 @@ export const vendorStorage = {
 };
 
 const SCOPE = 'purchases';
-const COLLECTION = 'vendors';
+/**
+ * NOT `vendors`, and that is a workaround rather than a preference.
+ *
+ * `purchases_vendors` is stuck at Couchbase's Data API: a document GET against
+ * it never returns — not a 404, no response at all — while every sibling
+ * collection answers in under 300ms and a collection created four seconds
+ * earlier answers immediately. Dropping and recreating it did not clear the
+ * state, and it stayed dead across a minute of retries. The query service can
+ * read the collection; only the KV path is affected.
+ *
+ * Since a hung request is the worst failure available, the code moved off the
+ * poisoned name. Revert to `vendors` once Capella support has cleared it —
+ * there is no data to migrate, the collection has never held a document.
+ */
+const COLLECTION = 'vendor-records';
 
 export class VendorStoreError extends Error {}
 

@@ -113,6 +113,57 @@ function getQueryContext(bucket: string, scopeName: string): string {
   return `default:${escapeIdentifier(bucket)}.${escapeIdentifier(scopeName)}`;
 }
 
+/**
+ * How long a Data API call may take before it is abandoned.
+ *
+ * Every call here used to run with no timeout and no abort signal, so a stalled
+ * Data API did not fail — it hung. Locally that is forever; on Vercel the
+ * platform kills the request at 300 seconds and the user sees a spinner until
+ * then, with nothing in the logs to say what was waited on.
+ *
+ * A hang is the worst failure available: no error, no retry, no signal. These
+ * bounds turn it into an ordinary error that names the operation, which callers
+ * already know how to report.
+ *
+ * Key-value operations are single-document lookups against a hosted service —
+ * they are sub-second in practice, so ten seconds is already pathological.
+ * Queries get longer because a scan legitimately can be, and because failing a
+ * slow-but-working query is worse than waiting for it.
+ */
+const DATA_API_TIMEOUT_MS = {
+  document: 10_000,
+  query: 30_000,
+} as const;
+
+/**
+ * Turn an abort into a message that says what timed out.
+ *
+ * `fetch` rejects an aborted request with a bare "This operation was aborted",
+ * which tells a reader nothing about which call stalled or for how long.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  description: string
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error(
+        `Couchbase Data API timed out after ${
+          timeoutMs / 1000
+        }s: ${description}`
+      );
+    }
+    throw error;
+  }
+}
+
 async function executeDataApiQuery<T>(params: {
   statement: string;
   options?: QueryOptions;
@@ -130,15 +181,20 @@ async function executeDataApiQuery<T>(params: {
     body[`$${key}`] = value;
   }
 
-  const response = await fetch(`${config.baseUrl}/_p/query/query/service`, {
-    method: 'POST',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
+  const response = await fetchWithTimeout(
+    `${config.baseUrl}/_p/query/query/service`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+    DATA_API_TIMEOUT_MS.query,
+    'query'
+  );
 
   const payload = (await response.json()) as DataApiQueryResponse<T>;
 
@@ -228,12 +284,17 @@ export async function getDocument<T>(
   key: string
 ): Promise<T | null> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      Accept: 'application/json',
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        Accept: 'application/json',
+      },
     },
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `get ${collectionName(domain, collection)}/${key}`
+  );
 
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(await failureMessage(response));
@@ -248,15 +309,20 @@ export async function upsertDocument<T>(
   expirySeconds?: number
 ): Promise<void> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    method: 'PUT',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      'Content-Type': 'application/json',
-      ...expiresHeader(expirySeconds),
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
+      },
+      body: JSON.stringify(document),
     },
-    body: JSON.stringify(document),
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `upsert ${collectionName(domain, collection)}/${key}`
+  );
   if (!response.ok) throw new Error(await failureMessage(response));
 }
 
@@ -274,15 +340,20 @@ export async function insertDocument<T>(
   expirySeconds?: number
 ): Promise<boolean> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    method: 'POST',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      'Content-Type': 'application/json',
-      ...expiresHeader(expirySeconds),
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
+      },
+      body: JSON.stringify(document),
     },
-    body: JSON.stringify(document),
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `insert ${collectionName(domain, collection)}/${key}`
+  );
   if (response.status === 409) return false;
   if (!response.ok) throw new Error(await failureMessage(response));
   return true;
@@ -294,12 +365,17 @@ export async function deleteDocument(
   key: string
 ): Promise<boolean> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    method: 'DELETE',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+      },
     },
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `delete ${collectionName(domain, collection)}/${key}`
+  );
   if (response.status === 404) return false;
   if (!response.ok) throw new Error(await failureMessage(response));
   return true;
@@ -325,7 +401,7 @@ export async function incrementCounter(
   }
   const amount = Math.round(delta);
   const config = getDataApiConfig();
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${documentUrl(config, domain, collection, key)}/increment`,
     {
       method: 'POST',
@@ -335,7 +411,9 @@ export async function incrementCounter(
         ...expiresHeader(expirySeconds),
       },
       body: JSON.stringify({ initial: amount, delta: amount }),
-    }
+    },
+    DATA_API_TIMEOUT_MS.document,
+    `increment ${collectionName(domain, collection)}/${key}`
   );
   if (!response.ok) throw new Error(await failureMessage(response));
   return Number(await response.text());

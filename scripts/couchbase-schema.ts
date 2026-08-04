@@ -76,7 +76,8 @@ export const SOURCES: Source[] = [
   // consistency wart rather than a hazard, and renaming a collection the code
   // already writes to would be a migration for cosmetics.
   { domain: 'purchases', collection: 'purchase-orders' },
-  { domain: 'purchases', collection: 'vendors' },
+  // See vendor-store.ts: `purchases_vendors` is stuck at the Data API.
+  { domain: 'purchases', collection: 'vendor-records' },
   { domain: 'purchases', collection: 'buyer-profiles' },
   { domain: 'purchases', collection: 'amazon-fcs' },
   // Scheduled sync (#34). `cursors` is the high-water mark per user x seller x
@@ -239,7 +240,7 @@ export const INDEXES: IndexSpec[] = [
     keys: ['`userId`', '(`order`.`issueDate`)'],
   },
   {
-    collection: 'purchases_vendors',
+    collection: 'purchases_vendor-records',
     name: 'idx_vendors_user_name',
     keys: ['`userId`', '(`vendor`.`name`)'],
   },
