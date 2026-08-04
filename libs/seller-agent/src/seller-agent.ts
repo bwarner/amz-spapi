@@ -267,6 +267,24 @@ export interface SellerReportOps {
  * campaigns are wasting money", and the tools say so rather than implying an
  * answer from a campaign list.
  */
+/**
+ * One page-walked Ads list.
+ *
+ * `items` is the COMPLETE set unless `truncated` is set — the client follows
+ * Amazon's `nextToken` to the end rather than handing a caller one page. That
+ * matters because Amazon reports `totalResults` for the whole result set while
+ * a single page holds a fraction of it, so a partial list arrives next to an
+ * accurate total and any breakdown built from it quietly disagrees with its own
+ * headline number.
+ */
+export type AdsListResult = {
+  items: Array<Record<string, unknown>>;
+  /** Amazon's count for the whole set. Equals `items.length` unless truncated. */
+  totalResults?: number;
+  /** Set when the page bound was hit: the list is incomplete, and says so. */
+  truncated?: boolean;
+};
+
 export interface SellerAdsOps {
   listProfiles(): Promise<
     Array<{
@@ -280,32 +298,64 @@ export interface SellerAdsOps {
     profileId?: string;
     stateFilter?: Array<'ENABLED' | 'PAUSED' | 'ARCHIVED'>;
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listAdGroups(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listKeywords(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     adGroupIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listNegativeKeywords(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   listProductAds(params: {
     profileId?: string;
     campaignIdFilter?: string[];
     maxResults?: number;
-  }): Promise<{ items: Array<Record<string, unknown>>; nextToken?: string }>;
+  }): Promise<AdsListResult>;
   getCampaignBudgetUsage(params: {
     profileId?: string;
     campaignIds: string[];
   }): Promise<{ usage: unknown[]; errors: unknown[] }>;
+  /**
+   * Ask Amazon to build a performance report. Returns an id in about a second.
+   *
+   * Split from the fetch because generation takes MINUTES and the chat route
+   * has 300 seconds for an entire turn. Waiting inside one tool spent the whole
+   * budget and still often lost — and losing discarded the report id, which is
+   * the only handle on work Amazon has already started billing for.
+   */
+  requestPerformanceReport(params: {
+    profileId?: string;
+    level: 'campaign' | 'keyword' | 'searchTerm';
+    startDate: string;
+    endDate: string;
+    attribution?: '1d' | '7d' | '14d' | '30d';
+  }): Promise<{
+    reportId: string;
+    level: string;
+    attribution: string;
+    status?: string;
+  }>;
+  /** Check once. Not-ready is a normal answer, not a failure. */
+  fetchPerformanceReport(params: {
+    profileId?: string;
+    reportId: string;
+  }): Promise<
+    | { ready: false; status: string; failureReason?: string }
+    | {
+        ready: true;
+        rows: Array<Record<string, unknown>>;
+        attribution: string;
+      }
+  >;
 }
 
 /** What reading a document tells the agent, before anything is filed. */
@@ -2279,9 +2329,30 @@ function getAdsTools(adsOps: SellerAdsOps) {
     );
   const maxResults = z.number().int().min(1).max(500).optional();
 
-  async function run<T>(work: () => Promise<T>) {
+  async function run<T extends object>(work: () => Promise<T>) {
     try {
-      return { success: true as const, ...(await work()) };
+      const result = (await work()) as T & {
+        items?: unknown[];
+        truncated?: boolean;
+        totalResults?: number;
+      };
+      return {
+        success: true as const,
+        ...result,
+        // A truncated list is the dangerous case: it looks like a complete
+        // answer and is not, and `totalResults` beside it is accurate for the
+        // whole set — so any count derived from `items` disagrees with the
+        // number printed next to it. Force the model to say so.
+        ...(result.truncated
+          ? {
+              note:
+                `INCOMPLETE: only the first ${result.items?.length ?? 0} of ` +
+                `${result.totalResults ?? 'many'} records were fetched. Say ` +
+                'the list is partial and do not present counts from it as ' +
+                'totals. Narrow with a campaign or ad group filter.',
+            }
+          : {}),
+      };
     } catch (error) {
       return {
         success: false as const,
@@ -2392,6 +2463,94 @@ function getAdsTools(adsOps: SellerAdsOps) {
         campaignIdFilter?: string[];
         maxResults?: number;
       }) => run(() => adsOps.listProductAds(input)),
+    },
+
+    'request-ad-report': {
+      description:
+        'START a spend/sales/ACOS report. Returns a reportId in about a second ' +
+        'and does NOT wait — Amazon builds these asynchronously and it commonly ' +
+        'takes one to several minutes. ' +
+        'Use this for "which campaigns are wasting money", "what is my ACOS", ' +
+        '"which keywords should I cut" — the structure tools cannot answer any ' +
+        'of those. ' +
+        'After calling: tell the user it is running, give them the reportId, and ' +
+        'END YOUR TURN. Do not loop on get-ad-report waiting for it. When they ' +
+        'come back, or after a minute or two of other work, fetch it. ' +
+        'Levels: campaign for where the money goes, keyword for which targets ' +
+        'are inefficient, searchTerm for what shoppers actually typed — that ' +
+        'last one finds negative-keyword candidates, since a broad-match ' +
+        'keyword can look fine overall while hiding terms that only cost money.',
+      inputSchema: z.object({
+        profileId,
+        level: z.enum(['campaign', 'keyword', 'searchTerm']),
+        startDate: z.string().describe('YYYY-MM-DD'),
+        endDate: z.string().describe('YYYY-MM-DD'),
+        attribution: z
+          .enum(['1d', '7d', '14d', '30d'])
+          .optional()
+          .describe(
+            'Purchase attribution window. Defaults to 14d, matching Campaign ' +
+              'Manager. Whatever is used must be quoted with the numbers.'
+          ),
+      }),
+      execute: async (input: {
+        profileId?: string;
+        level: 'campaign' | 'keyword' | 'searchTerm';
+        startDate: string;
+        endDate: string;
+        attribution?: '1d' | '7d' | '14d' | '30d';
+      }) =>
+        run(async () => {
+          const started = await adsOps.requestPerformanceReport(input);
+          return {
+            ...started,
+            note:
+              `Report ${started.reportId} is building and usually takes one to ` +
+              'several minutes. Tell the user, hand them the reportId, and end ' +
+              'your turn — then call get-ad-report with that id. Do NOT request ' +
+              'the same report again while it is building: Amazon charges for ' +
+              'the work either way and a second request does not make it faster.',
+          };
+        }),
+    },
+
+    'get-ad-report': {
+      description:
+        'Fetch a report started by request-ad-report, using its reportId. ' +
+        'Checks ONCE and returns immediately: if it is still building you get a ' +
+        'status, which is a normal answer and not an error — say so and offer ' +
+        'to check again shortly rather than retrying in a loop. ' +
+        'ALWAYS state the attribution window with any figure you quote: the ' +
+        'same spend looks several times better at 30d than at 1d, so an ACOS ' +
+        'without its window is a different claim, not a rounder one.',
+      inputSchema: z.object({
+        profileId,
+        reportId: z.string().describe('From request-ad-report'),
+      }),
+      execute: async (input: { profileId?: string; reportId: string }) =>
+        run(async () => {
+          const result = await adsOps.fetchPerformanceReport(input);
+          if (!result.ready) {
+            return {
+              ...result,
+              note:
+                result.status === 'FAILED'
+                  ? 'The report failed. Do not retry the same request blindly — ' +
+                    'report the reason to the user.'
+                  : 'Still building. This is expected. Tell the user and offer ' +
+                    'to check again in a minute; do not poll in a loop.',
+            };
+          }
+          return {
+            ...result,
+            rowCount: result.rows.length,
+            note:
+              `Figures use a ${result.attribution} attribution window — say so ` +
+              'when quoting them. Rows with spend and NO sales have no acos ' +
+              'field at all: that is not an efficient row, it is pure waste, ' +
+              'and it must not be sorted or described as though acos were 0.',
+          };
+        }),
     },
 
     'get-ad-budget-usage': {

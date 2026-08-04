@@ -143,5 +143,26 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
       const client = await resolve(profileId);
       return client.getCampaignBudgetUsage(campaignIds);
     },
+
+    async requestPerformanceReport({
+      profileId,
+      level,
+      startDate,
+      endDate,
+      attribution,
+    }) {
+      const client = await resolve(profileId);
+      return client.requestPerformanceReport({
+        level,
+        startDate,
+        endDate,
+        attribution,
+      });
+    },
+
+    async fetchPerformanceReport({ profileId, reportId }) {
+      const client = await resolve(profileId);
+      return client.fetchPerformanceReport(reportId);
+    },
   };
 }
