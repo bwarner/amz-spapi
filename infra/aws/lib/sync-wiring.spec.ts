@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { STAGES } from '../config/stages.js';
 import { SyncWiring } from './sync-wiring.js';
@@ -29,6 +30,7 @@ function synth() {
     config: STAGES.dev,
     dispatcher: fn('Dispatcher'),
     worker: fn('Worker'),
+    alarmTopic: new sns.Topic(stack, 'Alarms'),
   });
   return Template.fromStack(stack);
 }
@@ -141,6 +143,29 @@ describe('the dispatcher', () => {
       Environment: Match.objectLike({
         Variables: Match.objectLike({ SYNC_QUEUE_URL: Match.anyValue() }),
       }),
+    });
+  });
+});
+
+describe('the dead letter alarm', () => {
+  it('fires on a single message', () => {
+    // A dead letter survived three receives, and for finances the data behind
+    // it ages out of Amazon inside 180 days. There is no acceptable background
+    // rate of permanently missing windows.
+    synth().hasResourceProperties('AWS::CloudWatch::Alarm', {
+      Threshold: 1,
+      EvaluationPeriods: 1,
+      MetricName: 'ApproximateNumberOfMessagesVisible',
+    });
+  });
+
+  it('does not alarm on an empty queue reporting no data', () => {
+    // SQS reports no data rather than zero when a queue is idle. Treating that
+    // as breaching would alarm through every quiet period, and an alarm that is
+    // always red is one nobody reads.
+    synth().hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'ApproximateNumberOfMessagesVisible',
+      TreatMissingData: 'notBreaching',
     });
   });
 });

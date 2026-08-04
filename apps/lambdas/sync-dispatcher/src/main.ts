@@ -1,4 +1,5 @@
 import { Logger } from '@aws-lambda-powertools/logger';
+import { MetricUnit, Metrics } from '@aws-lambda-powertools/metrics';
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { executeQuery } from '@amz-spapi/couchbase-utils';
 import type { SyncDomain } from '@amz-spapi/sp-sync';
@@ -14,6 +15,10 @@ import type { SyncDomain } from '@amz-spapi/sp-sync';
  */
 
 const logger = new Logger({ serviceName: 'sync-dispatcher' });
+const metrics = new Metrics({
+  namespace: 'SellerOps',
+  serviceName: 'sync-dispatcher',
+});
 
 // The queue URL is not a secret — it is an ARN-shaped identifier, useless
 // without IAM. Unlike a client secret, an env var is the right home for it.
@@ -144,5 +149,23 @@ export async function handler(): Promise<{
   // straight from this, and a run that suddenly sheds everything is visible
   // without reading the queue.
   logger.info('sync fan-out complete', summary);
+
+  /**
+   * `SellersShed` is the one to watch.
+   *
+   * A shed seller x domain is an authorization that has failed ten runs
+   * straight — almost always a revoked or expired connection. Nothing else
+   * surfaces it: the sync stops enqueuing that work, so there are no errors, no
+   * DLQ messages and no failing alarms. The seller simply stops receiving data
+   * and the system reports itself perfectly healthy.
+   *
+   * `EligibleSellers` is here as its denominator. Shed alone cannot distinguish
+   * "one of two hundred" from "all four".
+   */
+  metrics.addMetric('EligibleSellers', MetricUnit.Count, summary.sellers);
+  metrics.addMetric('MessagesEnqueued', MetricUnit.Count, summary.enqueued);
+  metrics.addMetric('SellersShed', MetricUnit.Count, summary.shed);
+  metrics.publishStoredMetrics();
+
   return summary;
 }

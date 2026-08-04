@@ -1,8 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
 import type { StageConfig } from '../config/stages.js';
@@ -30,6 +33,8 @@ export interface SyncWiringProps {
   /** Discovered by LambdasStack, which owns them. */
   dispatcher: lambda.Function;
   worker: lambda.Function;
+  /** Existing alarm topic, so sync alarms land where the others already do. */
+  alarmTopic?: sns.ITopic;
 }
 
 export class SyncWiring extends Construct {
@@ -145,6 +150,38 @@ export class SyncWiring extends Construct {
         },
       },
     });
+
+    /**
+     * Anything in the DLQ is a window that was never synced.
+     *
+     * Alarming on the SQS metric rather than publishing our own: SQS already
+     * emits this, and a second copy would cost money to say the same thing.
+     *
+     * The threshold is ONE. A dead letter here is not a transient blip — it
+     * survived three receives — and for finances the data behind it ages out of
+     * Amazon inside 180 days. There is no "acceptable background rate" of
+     * permanently missing windows.
+     */
+    if (props.alarmTopic) {
+      const dlqAlarm = new cloudwatch.Alarm(this, 'SyncDlqNotEmpty', {
+        alarmName: `${prefix}-dlq-not-empty`,
+        alarmDescription:
+          'A sync window was never fetched. Each message names the seller and ' +
+          'domain; the data behind a finances window is gone in 180 days.',
+        metric: this.deadLetterQueue.metricApproximateNumberOfMessagesVisible({
+          period: cdk.Duration.minutes(5),
+          statistic: 'Maximum',
+        }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        // A queue with nothing in it reports no data rather than zero, and
+        // treating that as a breach would alarm on every quiet period.
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      dlqAlarm.addAlarmAction(new actions.SnsAction(props.alarmTopic));
+    }
 
     new cdk.CfnOutput(this, 'SyncQueueUrl', {
       value: this.queue.queueUrl,
