@@ -1,0 +1,49 @@
+{
+  "name": "lambda-sync-dispatcher",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/lambdas/sync-dispatcher/src",
+  "projectType": "application",
+  "tags": ["scope:lambda", "type:app"],
+  "metadata": {
+    "lambda": {
+      "packaging": "zip",
+      "handler": "main.handler",
+      "description": "Fans scheduled sync work out to SQS: one message per seller x domain.",
+      "timeoutSeconds": 60,
+      "memoryMb": 512
+    }
+  },
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/lambdas/sync-dispatcher",
+        "main": "apps/lambdas/sync-dispatcher/src/main.ts",
+        "tsConfig": "apps/lambdas/sync-dispatcher/tsconfig.app.json",
+        "platform": "node",
+        "format": ["esm"],
+        "bundle": true,
+        "thirdParty": true,
+        "minify": false,
+        "sourcemap": true,
+        "generatePackageJson": false,
+        "esbuildOptions": {
+          "outExtension": {
+            ".js": ".js"
+          }
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../../coverage/apps/lambdas/sync-dispatcher"
+      }
+    }
+  }
+}

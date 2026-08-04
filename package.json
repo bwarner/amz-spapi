@@ -34,6 +34,7 @@
     "@auth0/nextjs-auth0": "^4.10.0",
     "@aws-sdk/client-kms": "^3.939.0",
     "@aws-sdk/client-s3": "^3.1034.0",
+    "@aws-sdk/client-sqs": "^3.1102.0",
     "@aws-sdk/credential-provider-node": "^3.972.27",
     "@aws-sdk/s3-request-presigner": "^3.1034.0",
     "@commander-js/extra-typings": "^14.0.0",

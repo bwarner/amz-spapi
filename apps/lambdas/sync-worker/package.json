@@ -1,0 +1,11 @@
+{
+  "name": "@amz-spapi/lambda-sync-worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@amz-spapi/couchbase-utils": "0.0.1",
+    "@amz-spapi/sp-sync": "0.0.1",
+    "@farvisionllc/sp-client": "0.0.1"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@amz-spapi/lambda-sync-dispatcher",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@amz-spapi/couchbase-utils": "0.0.1",
+    "@amz-spapi/sp-sync": "0.0.1",
+    "@aws-sdk/client-sqs": "^3.0.0"
+  }
+}
