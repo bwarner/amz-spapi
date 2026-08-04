@@ -1,3 +1,4 @@
+import { Logger } from '@aws-lambda-powertools/logger';
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { executeQuery } from '@amz-spapi/couchbase-utils';
 import type { SyncDomain } from '@amz-spapi/sp-sync';
@@ -12,6 +13,10 @@ import type { SyncDomain } from '@amz-spapi/sp-sync';
  * rate limit, and one slow account would starve the rest.
  */
 
+const logger = new Logger({ serviceName: 'sync-dispatcher' });
+
+// The queue URL is not a secret — it is an ARN-shaped identifier, useless
+// without IAM. Unlike a client secret, an env var is the right home for it.
 const QUEUE_URL = process.env['SYNC_QUEUE_URL'];
 const sqs = new SQSClient({});
 
@@ -130,9 +135,14 @@ export async function handler(): Promise<{
     );
   }
 
-  return {
+  const summary = {
     sellers: sellers.length,
     enqueued: messages.length,
     shed: shed.size,
   };
+  // One line per run, structured. Logs Insights can chart `enqueued` over time
+  // straight from this, and a run that suddenly sheds everything is visible
+  // without reading the queue.
+  logger.info('sync fan-out complete', summary);
+  return summary;
 }

@@ -1,3 +1,4 @@
+import { Logger } from '@aws-lambda-powertools/logger';
 import { SpApiClient } from '@farvisionllc/sp-client';
 import {
   SYNC_JOBS,
@@ -12,7 +13,18 @@ import {
  * calls the unit, and translates the outcome into what SQS understands. Every
  * decision about windows, cursors and idempotency lives in `sp-sync`, which is
  * what lets the same logic run from a test or a script unchanged.
+ *
+ * Logging is Powertools (CLAUDE.md §9), not `console`. CloudWatch does not
+ * parse OTLP — it parses JSON, and Logs Insights queries it by field — so the
+ * useful thing is structured output plus the Lambda context that lets a line be
+ * traced back to one invocation. Powertools adds `function_request_id`, cold
+ * start and the service name to every record, and correlates with X-Ray when
+ * tracing is on. Emitting OTLP here would produce something CloudWatch stores
+ * as opaque text; exporting real OTel traces is the ADOT layer, which is a
+ * separate decision and not a logging format.
  */
+
+const logger = new Logger({ serviceName: 'sync-worker' });
 
 export type SqsRecord = {
   messageId: string;
@@ -53,37 +65,41 @@ type SyncMessage = {
  * returns another seller's data.
  */
 async function clientFor(message: SyncMessage): Promise<SpApiClient> {
-  const clientId = process.env['LWA_CLIENT_ID'];
-  const clientSecret = process.env['LWA_CLIENT_SECRET'];
-  const refreshToken = await resolveRefreshToken(message);
-
-  if (!clientId || !clientSecret) {
-    throw new Error('LWA_CLIENT_ID / LWA_CLIENT_SECRET are not configured');
-  }
+  const credentials = await resolveCredentials(message);
   return new SpApiClient({
-    clientId,
-    clientSecret,
-    refreshToken,
+    ...credentials,
     sellerId: message.sellerId,
     marketplaceId: message.marketplaceId,
   });
 }
 
 /**
- * The stored refresh token for this seller.
+ * Everything needed to call SP-API as one seller.
  *
- * Deliberately a seam rather than an inline Couchbase read: the credential
- * slice is moving behind its own service (#55), and decryption needs KMS with
- * the same encryption context the web app uses (#11). Until that lands this
- * throws rather than reading a half-configured store — a worker that silently
- * ran with no credentials would advance cursors over windows it never fetched,
- * which is the one failure the whole cursor design exists to prevent.
+ * A seam, and deliberately NOT environment variables. A Lambda env var is not a
+ * secret: it is written into the CloudFormation template, shown in the console,
+ * and returned by `GetFunctionConfiguration` to anyone with read access on the
+ * function. `LWA_CLIENT_SECRET` mints access tokens from every seller's refresh
+ * token, so putting it there would widen the blast radius of read-only Lambda
+ * access to every connected account.
+ *
+ * It belongs in Secrets Manager, fetched at runtime, with the refresh token
+ * coming from the credential service (#55) — which exists so the plaintext
+ * token never enters a general-purpose runtime at all.
+ *
+ * Until that lands this throws. A worker that silently ran without credentials
+ * would advance cursors over windows it never fetched, which is the single
+ * failure the whole cursor design exists to prevent.
  */
-async function resolveRefreshToken(message: SyncMessage): Promise<string> {
+async function resolveCredentials(message: SyncMessage): Promise<{
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+}> {
   throw new Error(
     `No credential source configured for seller ${message.sellerId}. ` +
-      'The worker needs the credential slice (#55) and KMS decryption (#11) ' +
-      'before it can run against a real account.'
+      'The worker needs the credential service (#55), which reads the LWA ' +
+      'secret from Secrets Manager rather than from the environment.'
   );
 }
 
@@ -114,23 +130,19 @@ export async function handler(event: SqsEvent): Promise<SqsBatchResponse> {
       // and the next scheduled run resumes from where this one stopped.
       // Redelivering instead would repeat the windows just completed.
       if (result.historyLost) {
-        console.warn(
-          JSON.stringify({
-            message: 'sync cursor had fallen outside Amazon retention',
-            sellerId: message.sellerId,
-            domain: message.domain,
-            note: 'the gap is permanent; no future run will fill it',
-          })
-        );
+        logger.warn('sync cursor had fallen outside Amazon retention', {
+          sellerId: message.sellerId,
+          domain: message.domain,
+          note: 'the gap is permanent; no future run will fill it',
+        });
       }
     } catch (error) {
-      console.error(
-        JSON.stringify({
-          message: 'sync job failed',
-          messageId: record.messageId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      );
+      // The message id, because that is what the partial batch response names
+      // and therefore what ties a log line to the record SQS will redeliver.
+      logger.error('sync job failed', {
+        messageId: record.messageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }
   }

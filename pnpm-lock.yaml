@@ -37,6 +37,9 @@ importers:
       '@auth0/nextjs-auth0':
         specifier: ^4.10.0
         version: 4.23.1(next@15.5.19(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-macros@3.1.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(sass@1.101.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@aws-lambda-powertools/logger':
+        specifier: ^2.34.0
+        version: 2.34.0
       '@aws-sdk/client-kms':
         specifier: ^3.939.0
         version: 3.1077.0
@@ -716,6 +719,26 @@ packages:
     bundledDependencies:
       - jsonschema
       - semver
+
+  '@aws-lambda-powertools/commons@2.34.0':
+    resolution:
+      {
+        integrity: sha512-ga89L3UznCwkApsrVAYGywifAh9PpccXZAVE053B6IdKvZrwjv+L+ja1WyzU9sy9UR3wPEdh0LFiUCRZRhTfvQ==,
+      }
+
+  '@aws-lambda-powertools/logger@2.34.0':
+    resolution:
+      {
+        integrity: sha512-FIWQcdX/dqfKE+4H8N9w7y7/3/ANmDpKDgMlMc+yPNx2XDpKK6Ou1zLFYoNt5mV6dOZunFQcKbRWUy6zIDdE0w==,
+      }
+    peerDependencies:
+      '@aws-lambda-powertools/jmespath': 2.34.0
+      '@middy/core': 4.x || 5.x || 6.x || 7.x
+    peerDependenciesMeta:
+      '@aws-lambda-powertools/jmespath':
+        optional: true
+      '@middy/core':
+        optional: true
 
   '@aws-sdk/checksums@3.1000.10':
     resolution:
@@ -18701,6 +18724,15 @@ snapshots:
   '@aws-cdk/asset-node-proxy-agent-v6@2.1.2': {}
 
   '@aws-cdk/cloud-assembly-schema@54.6.0': {}
+
+  '@aws-lambda-powertools/commons@2.34.0':
+    dependencies:
+      '@aws/lambda-invoke-store': 0.3.0
+
+  '@aws-lambda-powertools/logger@2.34.0':
+    dependencies:
+      '@aws-lambda-powertools/commons': 2.34.0
+      '@aws/lambda-invoke-store': 0.3.0
 
   '@aws-sdk/checksums@3.1000.10':
     dependencies:

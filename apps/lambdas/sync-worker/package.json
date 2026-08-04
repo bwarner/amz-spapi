@@ -6,6 +6,7 @@
   "dependencies": {
     "@amz-spapi/couchbase-utils": "0.0.1",
     "@amz-spapi/sp-sync": "0.0.1",
-    "@farvisionllc/sp-client": "0.0.1"
+    "@farvisionllc/sp-client": "0.0.1",
+    "@aws-lambda-powertools/logger": "^2.0.0"
   }
 }
