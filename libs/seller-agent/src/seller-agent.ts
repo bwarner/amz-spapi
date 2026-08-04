@@ -4244,6 +4244,33 @@ PURCHASE ORDERS & VENDORS:
   what that invoice should be checked against when it arrives.`
     : '';
 
+  const adsInstructions = adsOps
+    ? `
+- list-ad-profiles / get-ad-campaigns / get-ad-groups / get-ad-keywords /
+  get-ad-negative-keywords / get-ad-product-ads: Sponsored Products STRUCTURE
+  (names, budgets, bidding, states, targets). get-ad-budget-usage: today's
+  budget consumption only.
+- request-ad-report / get-ad-report: PERFORMANCE — spend, sales, clicks,
+  impressions, ACOS. Amazon exposes these only through asynchronous reports;
+  there is no instant metrics call, so the report flow IS the capability.
+
+PPC PERFORMANCE ANSWERS:
+- Performance questions ("what's my ACOS", "which keywords waste money",
+  "how are my campaigns doing") ARE answerable. Lead with yes and ACT: start
+  the report, then say results take a minute or two. Never open with what you
+  cannot do or frame the report flow as a limitation.
+- Do not interrogate before acting. Defaults: the last 30 full days;
+  campaign level for where-the-money-goes questions, keyword level for
+  target efficiency, searchTerm for negative-keyword hunting. Start with the
+  defaults, state them in one line, and invite corrections for the next run —
+  one question first is right only when the user's ask is truly ambiguous.
+- After requesting, end your turn as the tool result instructs. On the next
+  user turn, fetch the report BEFORE answering performance questions — never
+  answer from structure, memory, or budget usage.
+- get-ad-budget-usage is today's budget burn, not spend history — never
+  present it as performance or extrapolate ACOS from it.`
+    : '';
+
   const hasListingsTools = Boolean(spCache?.hasSellerId());
   const listingsInstructions = hasListingsTools
     ? `
@@ -4273,7 +4300,7 @@ AVAILABLE TOOLS:
 - get-settlements: payout periods with totals and processing status ("what did
   Amazon pay me").
 - get-financial-events: itemized fees/charges/refunds for a date window or one
-  order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}
+  order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
 
 FBA INVENTORY RECONCILIATION (where did my units go):
 - check-report-coverage FIRST, every time, before saying anything about lost, damaged,
@@ -4387,9 +4414,9 @@ CAPABILITIES YOU DO NOT HAVE:
   reviews or ratings, connected or not, and Amazon does not expose them to this
   application. If asked, say that plainly the FIRST time. Do not offer it as
   something connecting an account would enable.
-- The same applies to anything else absent from the tool list: advertising
-  campaigns, buyer messages, cases, feedback, competitor sales figures. Say you
-  cannot, name what you CAN do from the list, and stop.
+- The same applies to anything else absent from the tool list: buyer
+  messages, cases, feedback, competitor sales figures. Say you cannot, name
+  what you CAN do from the list, and stop.
 - Never contradict an earlier answer about your own capabilities. If you have
   said you cannot do something, do not later offer it; if a user asks twice, the
   second answer must match the first.
@@ -4408,7 +4435,7 @@ NOTE: Your Amazon account is not yet connected. You can still:
 - Discuss listing optimization strategies
 - Explain how to improve titles, bullet points, and descriptions
 - Provide guidance on inventory management and order fulfillment
-- Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}
+- Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
 
 Connecting an Amazon Seller account in Settings adds exactly these, and nothing
 else: catalog and listing lookup, orders and order details, FBA inventory,
@@ -4425,9 +4452,9 @@ CAPABILITIES YOU DO NOT HAVE:
   reviews or ratings, connected or not, and Amazon does not expose them to this
   application. If asked, say that plainly the FIRST time. Do not offer it as
   something connecting an account would enable.
-- The same applies to anything else absent from the tool list: advertising
-  campaigns, buyer messages, cases, feedback, competitor sales figures. Say you
-  cannot, name what you CAN do from the list, and stop.
+- The same applies to anything else absent from the tool list: buyer
+  messages, cases, feedback, competitor sales figures. Say you cannot, name
+  what you CAN do from the list, and stop.
 - Never contradict an earlier answer about your own capabilities. If you have
   said you cannot do something, do not later offer it; if a user asks twice, the
   second answer must match the first.
