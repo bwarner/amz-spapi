@@ -1,0 +1,174 @@
+import { describe, expect, it } from 'vitest';
+import type { UIMessage } from 'ai';
+import { trimHistory } from './history.js';
+
+/**
+ * History sanitisation, and the approval states it used to delete.
+ *
+ * The bug this exists to prevent, recorded because every individual step of it
+ * looked reasonable:
+ *
+ * `create-purchase-order` requires approval. The user approved. The tool part
+ * became `approval-responded`, which is neither `output-available` nor
+ * `output-error`, so sanitisation dropped it as an incomplete call. With the
+ * part gone, `convertToModelMessages` emitted no `tool-approval-response`, so
+ * the tool never executed — and the model, now with no record that the call had
+ * ever been made, proposed a new one. Which asked for approval again.
+ *
+ * Seven rounds of that were recorded in a single stored message (4 approved,
+ * 2 rejected, 1 still pending) before anyone noticed, because nothing errored
+ * at any point. The fixtures below use those real states.
+ */
+
+const toolPart = (state: string, id: string, approved?: boolean) => ({
+  type: 'tool-create-purchase-order',
+  toolCallId: id,
+  state,
+  input: { vendor: { name: 'Panama Select' } },
+  ...(approved === undefined
+    ? state === 'approval-requested'
+      ? { approval: { id: `aitxt-${id}` } }
+      : {}
+    : { approval: { id: `aitxt-${id}`, approved } }),
+});
+
+function assistant(parts: unknown[]): UIMessage {
+  return { id: 'a1', role: 'assistant', parts } as unknown as UIMessage;
+}
+
+/**
+ * The assistant message always carries a text part, because the real one did —
+ * seq 157 held 7 tool parts, 1 text and 10 step-start.
+ *
+ * This is not decoration. `sanitizeMessages` returns the message UNCHANGED when
+ * filtering would empty it, so a fixture made only of tool parts survives any
+ * amount of over-stripping and the test proves nothing. The first version of
+ * this file made exactly that mistake: a mutation removing approval states from
+ * the keep-list left every approval test green.
+ */
+function conversation(...parts: unknown[]): UIMessage[] {
+  return [
+    { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'order it' }] },
+    assistant([
+      { type: 'text', text: 'PO draft — review & approve' },
+      ...parts,
+    ]),
+  ] as unknown as UIMessage[];
+}
+
+const statesOf = (messages: UIMessage[]) =>
+  (
+    messages[messages.length - 1].parts as Array<{
+      type: string;
+      state?: string;
+    }>
+  )
+    .filter((p) => p.type.startsWith('tool-'))
+    .map((p) => p.state);
+
+describe('approval states survive sanitisation', () => {
+  it('keeps an approved call, which is what lets the tool actually run', () => {
+    // The whole bug in one assertion. Drop this part and the approval response
+    // never reaches the executor.
+    const kept = trimHistory(
+      conversation(toolPart('approval-responded', 'c1', true)),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesOf(kept)).toEqual(['approval-responded']);
+  });
+
+  it('keeps a rejected call, so the model learns it was refused', () => {
+    // Dropping a rejection is worse than dropping an approval: the model has no
+    // idea the user said no, and proposes the same thing again.
+    const kept = trimHistory(
+      conversation(toolPart('approval-responded', 'c2', false)),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesOf(kept)).toEqual(['approval-responded']);
+  });
+
+  it('keeps a pending request rather than re-asking from scratch', () => {
+    const kept = trimHistory(
+      conversation(toolPart('approval-requested', 'c3')),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesOf(kept)).toEqual(['approval-requested']);
+  });
+
+  it('preserves the real seq-157 shape intact', () => {
+    // 4 approved, 2 rejected, 1 pending — exactly what was stored while the
+    // loop was happening.
+    const parts = [
+      toolPart('approval-responded', 'a', true),
+      toolPart('approval-responded', 'b', true),
+      toolPart('approval-responded', 'c', true),
+      toolPart('approval-responded', 'd', true),
+      toolPart('approval-responded', 'e', false),
+      toolPart('approval-responded', 'f', false),
+      toolPart('approval-requested', 'g'),
+    ];
+
+    const kept = trimHistory(conversation(...parts), {
+      maxMessages: 20,
+      minRecentMessages: 10,
+    });
+
+    expect(statesOf(kept)).toHaveLength(7);
+  });
+});
+
+describe('abandoned calls are still stripped', () => {
+  it('drops a call that never finished streaming', () => {
+    // The guard's original purpose, and still correct: a stream that died
+    // leaves the model looking at a call it can neither resolve nor retry.
+    const kept = trimHistory(
+      conversation(
+        toolPart('output-available', 'ok'),
+        toolPart('input-streaming', 'dead')
+      ),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesOf(kept)).toEqual(['output-available']);
+  });
+
+  it('drops a call stuck at input-available', () => {
+    const kept = trimHistory(
+      conversation(
+        toolPart('output-available', 'ok'),
+        toolPart('input-available', 'stuck')
+      ),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesOf(kept)).toEqual(['output-available']);
+  });
+
+  it('leaves settled calls alone', () => {
+    const kept = trimHistory(
+      conversation(
+        toolPart('output-available', 'a'),
+        toolPart('output-error', 'b')
+      ),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesOf(kept)).toEqual(['output-available', 'output-error']);
+  });
+
+  it('never strips text parts', () => {
+    const kept = trimHistory(
+      conversation(
+        { type: 'text', text: 'here is the draft' },
+        toolPart('input-streaming', 'dead')
+      ),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    const types = (kept[1].parts as Array<{ type: string }>).map((p) => p.type);
+    expect(types).toEqual(['text', 'text']);
+  });
+});
