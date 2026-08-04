@@ -9,6 +9,7 @@
 import * as React from 'react';
 import {
   Document,
+  Font,
   Page,
   StyleSheet,
   Text,
@@ -20,6 +21,82 @@ import {
   type PurchaseOrder,
   type Vendor,
 } from '@farvisionllc/models';
+
+/**
+ * Never let the renderer insert a hyphen of its own.
+ *
+ * react-pdf hyphenates at a break by ADDING a `-`. On a SKU that already ends
+ * a fragment with one, `FB-COF-WASHED-GEISHA-1000-XL` printed as
+ * `FB-COF-WASHED--` / `GEISHA-1000-XL` — a character that is not in the SKU.
+ * On a purchase order the printed identifier has to be the identifier, so
+ * hyphenation is off and break opportunities are marked explicitly instead.
+ *
+ * Global to @react-pdf/renderer rather than scoped to this document. Fine while
+ * the purchase order is the only PDF; a second one needing different behaviour
+ * will have to move this into shared setup.
+ */
+Font.registerHyphenationCallback((word) => [word]);
+
+/**
+ * Mark a long identifier as breakable without changing what it says.
+ *
+ * react-pdf treats a word as one atom and does NOT clip the overflow, so a SKU
+ * wider than its column prints straight over the next one — which is what
+ * `FB-COF-HGE-250` did. Widening the column fixed that SKU but not the general
+ * case: Amazon seller SKUs run past 40 characters and no fixed width is safe
+ * against all of them.
+ *
+ * Two approaches were tried and rejected against a real render, both because
+ * they changed what the page said:
+ *
+ *   - hyphenating at the SKU's own hyphens — the renderer ADDS a `-` at every
+ *     break, printing `FB-COF-WASHED--` / `GEISHA-1000-XL`;
+ *   - zero-width spaces — react-pdf gives U+200B real width and still will not
+ *     break on it, printing `FB- COF- HGE- 250` and overflowing anyway.
+ *
+ * An explicit newline is the one break the renderer honours literally. It adds
+ * no glyph, so the printed identifier is exactly the stored one. Breaks land
+ * after a hyphen where possible, since that is where a reader expects them.
+ *
+ * The column is 22% of the A4 text width (595pt less 80pt of page padding),
+ * less its 8pt gutter — about 105pt. Helvetica capitals and digits average
+ * near 0.55em, so at 9pt that is roughly 21 characters; 18 leaves room for the
+ * wider letters without measuring glyphs at render time.
+ */
+const SKU_CHARS_PER_LINE = 18;
+
+// Exported for test: the wrap rule is a correctness property of the
+// printed document, not a styling detail.
+export function breakable(text: string): string {
+  // Keep each hyphen with the fragment it terminates, so a break after one
+  // reads as a continuation rather than a missing character.
+  const segments = text.split(/(?<=-)/);
+  const lines: string[] = [];
+
+  for (const segment of segments) {
+    const current = lines[lines.length - 1] ?? '';
+
+    if (current && current.length + segment.length <= SKU_CHARS_PER_LINE) {
+      lines[lines.length - 1] = current + segment;
+      continue;
+    }
+
+    // A single run with no hyphen to break at, longer than the column. Split
+    // it hard rather than let it overflow into the description.
+    if (segment.length > SKU_CHARS_PER_LINE) {
+      lines.push(
+        ...(segment.match(new RegExp(`.{1,${SKU_CHARS_PER_LINE}}`, 'g')) ?? [
+          segment,
+        ])
+      );
+      continue;
+    }
+
+    lines.push(segment);
+  }
+
+  return lines.join('\n');
+}
 
 const styles = StyleSheet.create({
   page: {
@@ -71,11 +148,17 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 4,
   },
-  colSku: { width: '14%' },
-  colDescription: { width: '44%', paddingRight: 6 },
-  colQty: { width: '14%', textAlign: 'right' },
-  colUnitPrice: { width: '14%', textAlign: 'right' },
-  colAmount: { width: '14%', textAlign: 'right' },
+  // Every left-aligned column needs a right gutter. Without one on the SKU,
+  // `FB-COF-HGE-250` ran straight into the description with no visible gap —
+  // react-pdf does not clip overflowing text, and a hyphenated SKU is one
+  // unbreakable token, so a column too narrow to hold it spills into its
+  // neighbour rather than wrapping. Widened as well: 14% fits roughly eight
+  // characters at this size, and seller SKUs are routinely longer.
+  colSku: { width: '22%', paddingRight: 8 },
+  colDescription: { width: '35%', paddingRight: 8 },
+  colQty: { width: '13%', textAlign: 'right' },
+  colUnitPrice: { width: '15%', textAlign: 'right' },
+  colAmount: { width: '15%', textAlign: 'right' },
   totals: { alignSelf: 'flex-end', width: '40%', marginBottom: 20 },
   totalRow: {
     flexDirection: 'row',
@@ -233,7 +316,7 @@ function PurchaseOrderDocument({
           </View>
           {order.lines.map((line, i) => (
             <View key={i} style={styles.row} wrap={false}>
-              <Text style={styles.colSku}>{line.sku ?? ''}</Text>
+              <Text style={styles.colSku}>{breakable(line.sku ?? '')}</Text>
               <Text style={styles.colDescription}>{line.description}</Text>
               <Text style={styles.colQty}>
                 {line.quantity.toLocaleString('en-US')}

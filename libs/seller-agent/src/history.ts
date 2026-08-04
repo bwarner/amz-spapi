@@ -63,27 +63,76 @@ function hasUnresolvedToolCalls(message: UIMessage): boolean {
   });
 }
 
+/** Settled calls. These carry a result, so they are always safe to send. */
+const SETTLED_TOOL_STATES = new Set(['output-available', 'output-error']);
+
+/** A live approval handshake. Resolvable only in the LAST assistant message. */
+const APPROVAL_TOOL_STATES = new Set([
+  'approval-requested',
+  'approval-responded',
+]);
+
+/**
+ * Whether a tool part may be sent to the model.
+ *
+ * Two failures pull in opposite directions here, and both have bitten:
+ *
+ * 1. Strip the LIVE approval and the approved call vanishes before
+ *    `convertToModelMessages` runs. No `tool-approval-response` is emitted, the
+ *    tool never executes, and the model — seeing no record the call was made —
+ *    proposes a new one, which asks for approval again. That was the
+ *    `create-purchase-order` loop.
+ *
+ * 2. Keep a STALE approval and it converts to a `tool_use` block with no
+ *    `tool_result` after it, because nothing will ever execute a call from a
+ *    turn that has already ended. Anthropic rejects the whole request:
+ *
+ *      messages.33: `tool_use` ids were found without `tool_result` blocks
+ *      immediately after
+ *
+ *    which breaks every subsequent message in the conversation, not just the
+ *    one that produced it.
+ *
+ * So an approval part is keepable exactly while it can still be resolved: in
+ * the last assistant message, which is the one the next request acts on.
+ * Everywhere else it is an orphan and must go, same as a call abandoned
+ * mid-stream (`input-streaming` / `input-available`), which is never keepable.
+ */
+function isKeepableToolPart(
+  part: { type: string; state?: string },
+  isLastAssistantMessage: boolean
+): boolean {
+  if (!part.type.startsWith('tool-') || part.type === 'tool-result') {
+    return true;
+  }
+  const state = part.state ?? '';
+  if (SETTLED_TOOL_STATES.has(state)) return true;
+  return isLastAssistantMessage && APPROVAL_TOOL_STATES.has(state);
+}
+
 function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
-  return messages.map((msg) => {
+  // Only the final assistant message can still have its approvals resolved, so
+  // it is the only one allowed to carry them.
+  const lastAssistantIndex = messages.reduce(
+    (found, msg, index) => (msg.role === 'assistant' ? index : found),
+    -1
+  );
+
+  return messages.map((msg, index) => {
     if (msg.role !== 'assistant' || !msg.parts) return msg;
+    const isLast = index === lastAssistantIndex;
 
-    const hasIncompleteTools = msg.parts.some((part) => {
-      if (!part.type.startsWith('tool-') || part.type === 'tool-result')
-        return false;
-      const tp = part as { type: string; state?: string };
-      return tp.state !== 'output-available' && tp.state !== 'output-error';
-    });
+    const keepable = (part: unknown) =>
+      isKeepableToolPart(part as { type: string; state?: string }, isLast);
 
-    if (!hasIncompleteTools) return msg;
+    if (msg.parts.every(keepable)) return msg;
 
-    const cleanParts = msg.parts.filter((part) => {
-      if (!part.type.startsWith('tool-') || part.type === 'tool-result')
-        return true;
-      const tp = part as { type: string; state?: string };
-      return tp.state === 'output-available' || tp.state === 'output-error';
-    });
+    const cleanParts = msg.parts.filter(keepable);
 
-    if (cleanParts.length === 0) return msg;
+    // Every part was dropped. Returning the message untouched would put the
+    // orphans straight back, so return it empty-partsed instead: the turn
+    // produced nothing the model can act on, and saying nothing is correct.
+    if (cleanParts.length === 0) return { ...msg, parts: [] };
 
     return { ...msg, parts: cleanParts };
   });

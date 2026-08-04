@@ -140,6 +140,7 @@ export class LambdasStack extends Stack {
         config: props.config,
         dispatcher,
         worker,
+        alarmTopic: this.monitoring.topic,
       });
     }
   }

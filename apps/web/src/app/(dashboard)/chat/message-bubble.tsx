@@ -1,6 +1,13 @@
 'use client';
 
-import { Bot, User, Loader2, ChevronRight } from 'lucide-react';
+import {
+  Bot,
+  User,
+  Loader2,
+  ChevronRight,
+  CircleSlash,
+  CircleDashed,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -309,31 +316,71 @@ function extractListingToolImages(
   return collected;
 }
 
+const SETTLED_TOOL_STATES = new Set([
+  'output-available',
+  'output-error',
+  'output-denied',
+]);
+
+/**
+ * A tool row.
+ *
+ * `state` alone cannot tell "running" from "never finished" — both are simply
+ * "not settled". Before, anything unsettled span, so reopening a conversation
+ * showed spinners for calls that had stopped days earlier and would never
+ * complete. Seven of them, in the case that prompted this.
+ *
+ * `isActive` is the missing half: a call is only in flight if this is the last
+ * message AND the conversation is streaming. Otherwise an unsettled call is
+ * stale — the turn ended without it resolving — and saying so is the honest
+ * thing. A spinner claims work is happening; there is no request.
+ */
 function ToolCallDisplay({
   toolName,
   state,
+  isActive,
 }: {
   toolName: string;
   state: string;
+  /** This message is the last one and the conversation is streaming. */
+  isActive: boolean;
 }) {
-  const isLoading =
-    state !== 'output-available' &&
-    state !== 'output-error' &&
-    state !== 'output-denied';
+  const settled = SETTLED_TOOL_STATES.has(state);
+  const awaitingApproval = state === 'approval-requested';
+  // Unsettled and nothing is running: it stopped, and will not resume on its own.
+  const stalled = !settled && !isActive && !awaitingApproval;
+  const running = !settled && isActive;
+
   const labels = TOOL_LABELS[toolName];
-  const label = labels ? (isLoading ? labels[0] : labels[1]) : toolName;
+  const label = labels ? (settled ? labels[1] : labels[0]) : toolName;
 
   return (
     <div className="flex items-center gap-1.5 text-sm">
-      {isLoading && (
+      {running && (
         <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
       )}
-      {!isLoading && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+      {awaitingApproval && !isActive && (
+        <CircleDashed className="h-3 w-3 text-amber-600" />
+      )}
+      {stalled && <CircleSlash className="h-3 w-3 text-muted-foreground/60" />}
+      {settled && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
       <span
-        className={cn('text-muted-foreground', isLoading && 'animate-pulse')}
+        className={cn(
+          'text-muted-foreground',
+          running && 'animate-pulse',
+          stalled && 'text-muted-foreground/60 line-through'
+        )}
       >
         {label}
       </span>
+      {stalled && (
+        <span className="text-xs text-muted-foreground/60">
+          didn&rsquo;t finish
+        </span>
+      )}
+      {awaitingApproval && !isActive && (
+        <span className="text-xs text-amber-600">awaiting approval</span>
+      )}
     </div>
   );
 }
@@ -493,6 +540,7 @@ export function MessageBubble({
                   <ToolCallDisplay
                     toolName={block.toolName}
                     state={block.state}
+                    isActive={Boolean(isLast && isStreaming)}
                   />
                 </div>
               );

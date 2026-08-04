@@ -113,6 +113,110 @@ function getQueryContext(bucket: string, scopeName: string): string {
   return `default:${escapeIdentifier(bucket)}.${escapeIdentifier(scopeName)}`;
 }
 
+/**
+ * How long a Data API call may take before it is abandoned.
+ *
+ * Every call here used to run with no timeout and no abort signal, so a stalled
+ * Data API did not fail — it hung. Locally that is forever; on Vercel the
+ * platform kills the request at 300 seconds and the user sees a spinner until
+ * then, with nothing in the logs to say what was waited on.
+ *
+ * A hang is the worst failure available: no error, no retry, no signal. These
+ * bounds turn it into an ordinary error that names the operation, which callers
+ * already know how to report.
+ *
+ * Key-value operations are single-document lookups against a hosted service —
+ * they are sub-second in practice, so ten seconds is already pathological.
+ * Queries get longer because a scan legitimately can be, and because failing a
+ * slow-but-working query is worse than waiting for it.
+ */
+const DATA_API_TIMEOUT_MS = {
+  document: 10_000,
+  query: 30_000,
+} as const;
+
+/**
+ * Transient 5xx retries.
+ *
+ * Capella's Data API intermittently answers a perfectly valid KV request with
+ * `500 {"code":"Internal","message":"An unknown memcached error occurred
+ * (status: 56)"}` — the HTTP layer failing to reach the KV engine. Observed
+ * live: writes to one collection failed for roughly a minute, on every key
+ * shape tried, while reads on the same collection kept working; sixty
+ * sequential writes immediately afterwards all succeeded.
+ *
+ * With no retry, one blip inside a multi-write operation fails the whole thing
+ * in front of the user. Three attempts over ~1.2s covers a window of that
+ * length without holding a request open long enough to matter.
+ *
+ * Applied ONLY to calls that are safe to repeat. Deliberately excluded:
+ *   - `incrementCounter` — a repeat that the first attempt actually applied
+ *     burns a PO number.
+ *   - `insertDocument` — a repeat lands as a spurious 409, replacing a real
+ *     error with a misleading one.
+ *   - non-SELECT N1QL — arbitrary statements, some of which mutate.
+ */
+const RETRY_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [200, 1000];
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Turn an abort into a message that says what timed out.
+ *
+ * `fetch` rejects an aborted request with a bare "This operation was aborted",
+ * which tells a reader nothing about which call stalled or for how long.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  description: string,
+  /**
+   * Whether repeating this call is harmless. Off by default: the caller has to
+   * assert it, because getting this wrong is silent duplicate work rather than
+   * a visible error. See `RETRY_ATTEMPTS`.
+   */
+  idempotent = false
+): Promise<Response> {
+  let lastTransient: Response | undefined;
+
+  for (
+    let attempt = 0;
+    attempt < (idempotent ? RETRY_ATTEMPTS : 1);
+    attempt++
+  ) {
+    if (attempt > 0) await delay(RETRY_BACKOFF_MS[attempt - 1]);
+
+    try {
+      const response = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      // 5xx from the Data API is the cluster failing to reach the KV engine,
+      // not a verdict on the request — the identical call succeeds moments
+      // later. 4xx is a verdict, so it is returned as-is.
+      if (response.status < 500) return response;
+      lastTransient = response;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error(
+          `Couchbase Data API timed out after ${
+            timeoutMs / 1000
+          }s: ${description}`
+        );
+      }
+      throw error;
+    }
+  }
+
+  // Out of attempts. Hand back the last response so the caller's normal error
+  // path reports the real status and body rather than a wrapper.
+  return lastTransient as Response;
+}
+
 async function executeDataApiQuery<T>(params: {
   statement: string;
   options?: QueryOptions;
@@ -130,15 +234,24 @@ async function executeDataApiQuery<T>(params: {
     body[`$${key}`] = value;
   }
 
-  const response = await fetch(`${config.baseUrl}/_p/query/query/service`, {
-    method: 'POST',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
+  const response = await fetchWithTimeout(
+    `${config.baseUrl}/_p/query/query/service`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+    DATA_API_TIMEOUT_MS.query,
+    'query',
+    // Reads only. `executeQuery` takes arbitrary N1QL, and repeating an INSERT
+    // or UPDATE that the first attempt already applied is a real mutation, not
+    // a retry — so anything that is not plainly a SELECT is left to fail.
+    /^\s*select\b/i.test(params.statement)
+  );
 
   const payload = (await response.json()) as DataApiQueryResponse<T>;
 
@@ -228,12 +341,18 @@ export async function getDocument<T>(
   key: string
 ): Promise<T | null> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      Accept: 'application/json',
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        Accept: 'application/json',
+      },
     },
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `get ${collectionName(domain, collection)}/${key}`,
+    true
+  );
 
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(await failureMessage(response));
@@ -248,15 +367,23 @@ export async function upsertDocument<T>(
   expirySeconds?: number
 ): Promise<void> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    method: 'PUT',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      'Content-Type': 'application/json',
-      ...expiresHeader(expirySeconds),
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
+      },
+      body: JSON.stringify(document),
     },
-    body: JSON.stringify(document),
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `upsert ${collectionName(domain, collection)}/${key}`,
+    // Upsert writes the same body to the same key — a repeat is the same
+    // end state, which is exactly what makes it safe to repeat.
+    true
+  );
   if (!response.ok) throw new Error(await failureMessage(response));
 }
 
@@ -274,15 +401,20 @@ export async function insertDocument<T>(
   expirySeconds?: number
 ): Promise<boolean> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    method: 'POST',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
-      'Content-Type': 'application/json',
-      ...expiresHeader(expirySeconds),
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        ...expiresHeader(expirySeconds),
+      },
+      body: JSON.stringify(document),
     },
-    body: JSON.stringify(document),
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `insert ${collectionName(domain, collection)}/${key}`
+  );
   if (response.status === 409) return false;
   if (!response.ok) throw new Error(await failureMessage(response));
   return true;
@@ -294,12 +426,20 @@ export async function deleteDocument(
   key: string
 ): Promise<boolean> {
   const config = getDataApiConfig();
-  const response = await fetch(documentUrl(config, domain, collection, key), {
-    method: 'DELETE',
-    headers: {
-      Authorization: getAuthHeader(config.username, config.password),
+  const response = await fetchWithTimeout(
+    documentUrl(config, domain, collection, key),
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+      },
     },
-  });
+    DATA_API_TIMEOUT_MS.document,
+    `delete ${collectionName(domain, collection)}/${key}`,
+    // A repeat of a delete that landed answers 404, which this already maps to
+    // "was not there" — the same result the caller would have got.
+    true
+  );
   if (response.status === 404) return false;
   if (!response.ok) throw new Error(await failureMessage(response));
   return true;
@@ -325,7 +465,7 @@ export async function incrementCounter(
   }
   const amount = Math.round(delta);
   const config = getDataApiConfig();
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${documentUrl(config, domain, collection, key)}/increment`,
     {
       method: 'POST',
@@ -335,7 +475,9 @@ export async function incrementCounter(
         ...expiresHeader(expirySeconds),
       },
       body: JSON.stringify({ initial: amount, delta: amount }),
-    }
+    },
+    DATA_API_TIMEOUT_MS.document,
+    `increment ${collectionName(domain, collection)}/${key}`
   );
   if (!response.ok) throw new Error(await failureMessage(response));
   return Number(await response.text());

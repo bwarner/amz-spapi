@@ -26,7 +26,19 @@ export const fcStorage = {
 };
 
 const SCOPE = 'purchases';
-const COLLECTION = 'amazon-fcs';
+/**
+ * NOT the original name, and that is a workaround.
+ *
+ * Capella's Data API wedges on certain collection names: every request against
+ * them — read or write — hangs with no response, while sibling collections in
+ * the same scope answer in under 300ms. Dropping and recreating does not clear
+ * it; a fresh NAME works immediately. Confirmed on three collections in this
+ * domain.
+ *
+ * Revert once Capella support clears the state. Nothing needs migrating — these
+ * collections never held a document.
+ */
+const COLLECTION = 'fc-records';
 
 export class FcStoreError extends Error {}
 

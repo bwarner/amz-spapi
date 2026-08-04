@@ -71,6 +71,15 @@ export const SOURCES: Source[] = [
   // collection: these are the seller's own evidence — a supplier's invoice, a
   // carrier's waybill — not anything Amazon produced.
   { domain: 'purchases', collection: 'documents' },
+  // Procurement. Hyphenated collection names, matching what the stores in
+  // `sp-cache` already name — every query backticks them, so this is a
+  // consistency wart rather than a hazard, and renaming a collection the code
+  // already writes to would be a migration for cosmetics.
+  { domain: 'purchases', collection: 'purchase-orders' },
+  // See vendor-store.ts: `purchases_vendors` is stuck at the Data API.
+  { domain: 'purchases', collection: 'vendor-records' },
+  { domain: 'purchases', collection: 'buyer-records' },
+  { domain: 'purchases', collection: 'fc-records' },
   // Scheduled sync (#34). `cursors` is the high-water mark per user x seller x
   // domain and is the only record of what has been fetched — a gap behind it is
   // indistinguishable from a quiet period, which is why it is stored rather
@@ -222,6 +231,23 @@ export const INDEXES: IndexSpec[] = [
     collection: 'purchases_documents',
     name: 'idx_purchase_documents_user_vendor',
     keys: ['`userId`', '(`extracted`.`vendorName`)'],
+  },
+  {
+    // Every PO listing starts from the user and orders by issue date; the
+    // vendor filter is optional and narrows from there.
+    collection: 'purchases_purchase-orders',
+    name: 'idx_purchase_orders_user_date',
+    keys: ['`userId`', '(`order`.`issueDate`)'],
+  },
+  {
+    collection: 'purchases_vendor-records',
+    name: 'idx_vendors_user_name',
+    keys: ['`userId`', '(`vendor`.`name`)'],
+  },
+  {
+    collection: 'purchases_fc-records',
+    name: 'idx_amazon_fcs_user_code',
+    keys: ['`userId`', '(`fc`.`fcCode`)'],
   },
   {
     // The dispatcher's read: which sellers are due, and which are failing
