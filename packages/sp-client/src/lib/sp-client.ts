@@ -136,6 +136,27 @@ function describeSpApiError(error: AxiosError): void {
     .join(' — ');
 }
 
+/**
+ * Report polling budgets, named rather than scattered.
+ *
+ * These exist because a timeout is only meaningful relative to the caller's own
+ * budget, and that relationship was invisible when both were bare numbers in
+ * different files. The chat route allows 300s for an ENTIRE turn — model
+ * reasoning, every tool call, and streaming — so a report tool cannot have all
+ * of it, or even most.
+ *
+ * `requestSafe` is what a route should ever wait. `worker` is for a background
+ * job with no one on the other end, and is deliberately not the default: a
+ * default longer than any caller's budget can only be reached by a request that
+ * is already doomed.
+ */
+export const REPORT_TIMEOUT_MS = {
+  /** Fits inside the smallest route that polls a report, with room to spare. */
+  requestSafe: 90_000,
+  /** Background only — see ADR-0009. Blocking is the point there. */
+  worker: 10 * 60_000,
+} as const;
+
 export class SpApiClient {
   private httpClient: AxiosInstance;
   private config: SpApiClientConfig;
@@ -1073,8 +1094,19 @@ export class SpApiClient {
   }
 
   /**
-   * Create → poll → download in one call. Polls with backoff up to
-   * `timeoutMs`; report generation commonly takes 30s-several minutes.
+   * Create → poll → download in one call. Polls with backoff up to `timeoutMs`;
+   * generation commonly takes 30s to several minutes.
+   *
+   * The default is REQUEST-SAFE on purpose. It used to be ten minutes, which is
+   * twice the 300s a Vercel route gets for an entire turn — so the only caller
+   * that reached it, the `sync-report` chat tool, could never have completed
+   * inside its own budget. It could only be killed by the platform, and being
+   * killed loses the report id, so the next attempt asked Amazon to build the
+   * same report again.
+   *
+   * A library default longer than any caller's budget is a trap: it looks
+   * generous and can only ever be reached by a request that is already doomed.
+   * Background workers, which genuinely can wait, pass their own.
    */
   async runReport(params: {
     reportType: string;
@@ -1086,7 +1118,8 @@ export class SpApiClient {
     onStatus?: (status: string) => void;
   }): Promise<{ reportId: string; text: string; dataEndTime?: string }> {
     const { reportId } = await this.createReport(params);
-    const deadline = Date.now() + (params.timeoutMs ?? 10 * 60_000);
+    const deadline =
+      Date.now() + (params.timeoutMs ?? REPORT_TIMEOUT_MS.requestSafe);
     let waitMs = 2_000;
 
     for (;;) {
@@ -1118,8 +1151,9 @@ export class SpApiClient {
         throw new Error(
           `Report ${params.reportType} still ${report.processingStatus} after ` +
             `${Math.round(
-              (params.timeoutMs ?? 600_000) / 1000
-            )}s (reportId ${reportId}).`
+              (params.timeoutMs ?? REPORT_TIMEOUT_MS.requestSafe) / 1000
+            )}s (reportId ${reportId}). The report is still being built — ` +
+            'reuse this id rather than requesting it again.'
         );
       }
       await new Promise((resolve) => setTimeout(resolve, waitMs));

@@ -14,6 +14,14 @@
         "tsConfig": "packages/sp-client/tsconfig.build.json",
         "assets": ["packages/sp-client/*.md"]
       }
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "passWithNoTests": true,
+        "reportsDirectory": "../../coverage/packages/sp-client"
+      }
     }
   }
 }
