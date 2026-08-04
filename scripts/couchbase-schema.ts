@@ -71,6 +71,18 @@ export const SOURCES: Source[] = [
   // collection: these are the seller's own evidence — a supplier's invoice, a
   // carrier's waybill — not anything Amazon produced.
   { domain: 'purchases', collection: 'documents' },
+  // Scheduled sync (#34). `cursors` is the high-water mark per user x seller x
+  // domain and is the only record of what has been fetched — a gap behind it is
+  // indistinguishable from a quiet period, which is why it is stored rather
+  // than derived from the data.
+  { domain: 'sync', collection: 'cursors' },
+  { domain: 'sync', collection: 'finance_events' },
+  { domain: 'sync', collection: 'settlement_groups' },
+  { domain: 'sync', collection: 'inbound_shipments' },
+  // Levels over time exist ONLY because this records them: getInventorySummaries
+  // is a point-in-time reading and Amazon keeps no history, so a missed day is
+  // unrecoverable by any backfill.
+  { domain: 'sync', collection: 'inventory_snapshots' },
 ];
 
 export type IndexSpec = {
@@ -210,6 +222,25 @@ export const INDEXES: IndexSpec[] = [
     collection: 'purchases_documents',
     name: 'idx_purchase_documents_user_vendor',
     keys: ['`userId`', '(`extracted`.`vendorName`)'],
+  },
+  {
+    // The dispatcher's read: which sellers are due, and which are failing
+    // repeatedly enough to shed.
+    collection: 'sync_cursors',
+    name: 'idx_sync_cursors_domain_run',
+    keys: ['`domain`', '`lastRunAt`'],
+  },
+  {
+    // Inventory levels over time for one seller — the series this whole job
+    // exists to make possible.
+    collection: 'sync_inventory_snapshots',
+    name: 'idx_inventory_snapshots_seller_day',
+    keys: ['`sellerId`', '`day`'],
+  },
+  {
+    collection: 'sync_finance_events',
+    name: 'idx_finance_events_seller_window',
+    keys: ['`sellerId`', '`windowFrom`'],
   },
 ];
 

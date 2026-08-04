@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "outDir": "../../dist/out-tsc/packages/sp-sync",
+    "declaration": true,
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../sp-client/tsconfig.lib.json"
+    },
+    {
+      "path": "../sp-cache/tsconfig.lib.json"
+    },
+    {
+      "path": "../../libs/couchbase-utils/tsconfig.lib.json"
+    }
+  ]
+}
