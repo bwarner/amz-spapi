@@ -56,6 +56,24 @@ function conversation(...parts: unknown[]): UIMessage[] {
   ] as unknown as UIMessage[];
 }
 
+/** The same parts, but with a later exchange after them — so they are stale. */
+function historicConversation(...parts: unknown[]): UIMessage[] {
+  return [
+    ...conversation(...parts),
+    {
+      id: 'u2',
+      role: 'user',
+      parts: [{ type: 'text', text: 'show me the PO' }],
+    },
+    assistant([{ type: 'text', text: 'here it is' }]),
+  ] as unknown as UIMessage[];
+}
+
+const statesAt = (messages: UIMessage[], index: number) =>
+  (messages[index].parts as Array<{ type: string; state?: string }>)
+    .filter((p) => p.type.startsWith('tool-'))
+    .map((p) => p.state);
+
 const statesOf = (messages: UIMessage[]) =>
   (
     messages[messages.length - 1].parts as Array<{
@@ -170,5 +188,91 @@ describe('abandoned calls are still stripped', () => {
 
     const types = (kept[1].parts as Array<{ type: string }>).map((p) => p.type);
     expect(types).toEqual(['text', 'text']);
+  });
+});
+
+/**
+ * The opposite failure, and the reason the rule is scoped rather than blanket.
+ *
+ * Keeping every approval everywhere fixed the loop and broke the conversation:
+ * a call approved in a turn that has since ended will never be executed, so it
+ * converts to a `tool_use` block with no `tool_result` after it and Anthropic
+ * rejects the entire request —
+ *
+ *   messages.33: `tool_use` ids were found without `tool_result` blocks
+ *   immediately after: toolu_012kzwftMhUHH5P4PBcVQCoY, ...
+ *
+ * — which breaks every later message, not just the one that caused it.
+ */
+describe('stale approvals are dropped', () => {
+  it('removes an approved call from an older message', () => {
+    // Nothing will ever execute it, so sending it is a guaranteed 400.
+    const kept = trimHistory(
+      historicConversation(toolPart('approval-responded', 'orphan', true)),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesAt(kept, 1)).toEqual([]);
+  });
+
+  it('removes a stale pending request too', () => {
+    const kept = trimHistory(
+      historicConversation(toolPart('approval-requested', 'orphan')),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesAt(kept, 1)).toEqual([]);
+  });
+
+  it('keeps settled calls in older messages, which carry results', () => {
+    const kept = trimHistory(
+      historicConversation(toolPart('output-available', 'done')),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesAt(kept, 1)).toEqual(['output-available']);
+  });
+
+  it('drops the whole seq-157 pile once it is history', () => {
+    // The exact message that produced the 400: 4 approved, 2 rejected, 1
+    // pending, none executed.
+    const kept = trimHistory(
+      historicConversation(
+        toolPart('approval-responded', 'a', true),
+        toolPart('approval-responded', 'b', true),
+        toolPart('approval-responded', 'c', true),
+        toolPart('approval-responded', 'd', true),
+        toolPart('approval-responded', 'e', false),
+        toolPart('approval-responded', 'f', false),
+        toolPart('approval-requested', 'g')
+      ),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+
+    expect(statesAt(kept, 1)).toEqual([]);
+    // The text survives, so the turn is not erased — only the unresolvable calls.
+    const types = (kept[1].parts as Array<{ type: string }>).map((p) => p.type);
+    expect(types).toEqual(['text']);
+  });
+
+  it('still keeps the LIVE approval, which is the whole point', () => {
+    // Both rules at once: a stale approval in message 1 goes, a live one in the
+    // last assistant message stays.
+    const messages = [
+      ...conversation(toolPart('approval-responded', 'orphan', true)),
+      { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'again' }] },
+      assistant([
+        { type: 'text', text: 'approve?' },
+        toolPart('approval-responded', 'live', true),
+      ]),
+    ] as unknown as UIMessage[];
+
+    const kept = trimHistory(messages, {
+      maxMessages: 20,
+      minRecentMessages: 10,
+    });
+
+    expect(statesAt(kept, 1)).toEqual([]);
+    expect(statesAt(kept, 3)).toEqual(['approval-responded']);
   });
 });
