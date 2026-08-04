@@ -10,6 +10,7 @@ import type { StageConfig } from '../config/stages.js';
 import { createAuth0Authorizer } from './auth0-authorizer.js';
 import { discoverLambdaApps, type LambdaApp } from './lambda-apps.js';
 import { LambdaHttpApi } from './lambda-http-api.js';
+import { SyncWiring } from './sync-wiring.js';
 import { ApiMonitoring } from './monitoring.js';
 
 export type LambdasStackProps = cdk.StackProps & {
@@ -123,6 +124,24 @@ export class LambdasStack extends Stack {
       value: String(apps.length),
       description: 'Lambda apps discovered under apps/lambdas.',
     });
+
+    // Scheduled SP-API sync (#36). Lives here rather than in its own stack
+    // because it both reads the functions' ARNs and writes to their roles and
+    // environment — split across stacks that is a CloudFormation dependency
+    // cycle, not a layering choice. See sync-wiring.ts.
+    //
+    // Conditional so a stage that has not deployed the sync apps gets no queue
+    // and no schedule, rather than a schedule firing at a function that is not
+    // there.
+    const dispatcher = this.functions.get('sync-dispatcher');
+    const worker = this.functions.get('sync-worker');
+    if (dispatcher && worker) {
+      new SyncWiring(this, 'Sync', {
+        config: props.config,
+        dispatcher,
+        worker,
+      });
+    }
   }
 
   private common(app: LambdaApp, config: StageConfig) {

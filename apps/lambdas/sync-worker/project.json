@@ -1,0 +1,49 @@
+{
+  "name": "lambda-sync-worker",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/lambdas/sync-worker/src",
+  "projectType": "application",
+  "tags": ["scope:lambda", "type:app"],
+  "metadata": {
+    "lambda": {
+      "packaging": "zip",
+      "handler": "main.handler",
+      "description": "Runs one sp-sync job unit per SQS message, reporting partial batch failures.",
+      "timeoutSeconds": 300,
+      "memoryMb": 1024
+    }
+  },
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/lambdas/sync-worker",
+        "main": "apps/lambdas/sync-worker/src/main.ts",
+        "tsConfig": "apps/lambdas/sync-worker/tsconfig.app.json",
+        "platform": "node",
+        "format": ["esm"],
+        "bundle": true,
+        "thirdParty": true,
+        "minify": false,
+        "sourcemap": true,
+        "generatePackageJson": false,
+        "esbuildOptions": {
+          "outExtension": {
+            ".js": ".js"
+          }
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../../coverage/apps/lambdas/sync-worker"
+      }
+    }
+  }
+}

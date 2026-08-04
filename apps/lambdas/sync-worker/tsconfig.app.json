@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../../dist/out-tsc/apps/lambdas/sync-worker",
+    "declaration": true,
+    "composite": false,
+    "types": ["node"],
+    "noEmit": false,
+    "rootDir": "../../../"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../../libs/couchbase-utils/tsconfig.lib.json"
+    },
+    {
+      "path": "../../../packages/sp-sync/tsconfig.lib.json"
+    },
+    {
+      "path": "../../../packages/sp-client/tsconfig.lib.json"
+    }
+  ]
+}
