@@ -9,4 +9,11 @@ export {
   deleteDocument,
   incrementCounter,
   executeQuery,
+  setConnectionProvider,
+  resetConnectionProvider,
+} from './couchbase-utils.js';
+
+export type {
+  CouchbaseConnection,
+  ConnectionProvider,
 } from './couchbase-utils.js';

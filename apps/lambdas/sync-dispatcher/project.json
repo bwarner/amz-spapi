@@ -10,7 +10,8 @@
       "handler": "main.handler",
       "description": "Fans scheduled sync work out to SQS: one message per seller x domain.",
       "timeoutSeconds": 60,
-      "memoryMb": 512
+      "memoryMb": 512,
+      "couchbase": true
     }
   },
   "targets": {

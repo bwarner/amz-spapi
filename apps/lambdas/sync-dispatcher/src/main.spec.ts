@@ -27,6 +27,8 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 vi.mock('@amz-spapi/couchbase-utils', () => ({
   executeQuery: (domain: string, query: string, options?: unknown) =>
     executeQuery(domain, query, options),
+  // `main.ts` registers a credentials provider at module scope.
+  setConnectionProvider: () => undefined,
 }));
 
 process.env['SYNC_QUEUE_URL'] = 'https://sqs.us-east-1.amazonaws.com/1/q.fifo';

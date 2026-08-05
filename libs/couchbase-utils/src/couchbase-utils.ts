@@ -21,26 +21,100 @@ type DataApiQueryResponse<T> = {
   [key: string]: unknown;
 };
 
-function getDataApiConfig(): DataApiConfig {
-  const baseUrl = process.env['CB_DATA_API_URL'];
-  const username = process.env['CB_USERNAME'];
-  const password = process.env['CB_PASSWORD'];
-  const bucket = process.env['CB_BUCKET'];
-  const environmentScope = process.env['CB_SCOPE'];
+/**
+ * Everything needed to reach one environment's data.
+ *
+ * Deliberately one unit rather than "config plus a secret". All five change
+ * together when a cluster is rebuilt — a new cluster has a new hostname AND new
+ * users — so splitting them across a template and a secret creates a window
+ * where a function holds the new host with the old login, or the reverse.
+ */
+export type CouchbaseConnection = {
+  dataApiUrl: string;
+  bucket: string;
+  /** The environment — `dev`, `staging`, `prod`. One scope holds everything. */
+  scope: string;
+  username: string;
+  password: string;
+};
 
-  if (!baseUrl || !username || !password || !bucket || !environmentScope) {
+/**
+ * Where the connection comes from.
+ *
+ * Async because the AWS implementation calls Secrets Manager. Consulted per
+ * operation, so an implementation is expected to cache.
+ */
+export type ConnectionProvider = () => Promise<CouchbaseConnection>;
+
+const CONNECTION_ENV = [
+  'CB_DATA_API_URL',
+  'CB_BUCKET',
+  'CB_SCOPE',
+  'CB_USERNAME',
+  'CB_PASSWORD',
+] as const;
+
+/**
+ * The environment, which is what Vercel, the CLIs and the scripts use.
+ *
+ * Kept as the default so that registering nothing behaves exactly as this
+ * library always has.
+ */
+const envConnection: ConnectionProvider = async () => {
+  const missing = CONNECTION_ENV.filter((name) => !process.env[name]);
+  if (missing.length) {
     throw new Error(
-      'Couchbase Data API is not configured. Set CB_DATA_API_URL, CB_USERNAME, ' +
-        'CB_PASSWORD, CB_BUCKET, and CB_SCOPE (the environment: dev, staging or prod).'
+      `Couchbase is not configured. Missing ${missing.join(', ')}. Set them, ` +
+        'or register a provider with setConnectionProvider() — on AWS that is ' +
+        'useSecretsManagerConnection() from @amz-spapi/couchbase-secrets, ' +
+        'which reads all five from one Secrets Manager secret.'
     );
   }
 
   return {
-    baseUrl: baseUrl.replace(/\/+$/, ''),
-    username,
-    password,
-    bucket,
-    environmentScope,
+    dataApiUrl: process.env['CB_DATA_API_URL'] as string,
+    bucket: process.env['CB_BUCKET'] as string,
+    scope: process.env['CB_SCOPE'] as string,
+    username: process.env['CB_USERNAME'] as string,
+    password: process.env['CB_PASSWORD'] as string,
+  };
+};
+
+let resolveConnection: ConnectionProvider = envConnection;
+
+/**
+ * Take the connection from somewhere other than the environment.
+ *
+ * The seam exists because a Lambda environment variable is NOT a secret — it is
+ * written into the CloudFormation template and returned by
+ * `GetFunctionConfiguration` to anyone with read access on the function. AWS
+ * therefore fetches the whole connection at runtime, while Vercel keeps reading
+ * it from the environment.
+ *
+ * Injected rather than branched on inside this library: the AWS path needs
+ * `@aws-sdk/client-secrets-manager`, and even a dynamic `import()` of it would
+ * be resolved by Next's bundler whether or not the branch ever runs — pulling
+ * the AWS SDK into the web bundle, which is exactly what must not happen.
+ * See `@amz-spapi/couchbase-secrets`.
+ */
+export function setConnectionProvider(provider: ConnectionProvider): void {
+  resolveConnection = provider;
+}
+
+/** Restore the environment default. For tests. */
+export function resetConnectionProvider(): void {
+  resolveConnection = envConnection;
+}
+
+async function getDataApiConfig(): Promise<DataApiConfig> {
+  const connection = await resolveConnection();
+
+  return {
+    baseUrl: connection.dataApiUrl.replace(/\/+$/, ''),
+    username: connection.username,
+    password: connection.password,
+    bucket: connection.bucket,
+    environmentScope: connection.scope,
   };
 }
 
@@ -221,7 +295,7 @@ async function executeDataApiQuery<T>(params: {
   statement: string;
   options?: QueryOptions;
 }): Promise<{ rows: T[]; meta: DataApiQueryResponse<T> }> {
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   const { parameters, ...restOptions } = params.options ?? {};
 
   const body: Record<string, unknown> = {
@@ -279,7 +353,7 @@ export async function connectToDatabase(): Promise<{
   cluster: null;
   bucket: { name: string };
 }> {
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   return {
     mode: 'data-api',
     cluster: null,
@@ -340,7 +414,7 @@ export async function getDocument<T>(
   collection: string,
   key: string
 ): Promise<T | null> {
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   const response = await fetchWithTimeout(
     documentUrl(config, domain, collection, key),
     {
@@ -366,7 +440,7 @@ export async function upsertDocument<T>(
   document: T,
   expirySeconds?: number
 ): Promise<void> {
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   const response = await fetchWithTimeout(
     documentUrl(config, domain, collection, key),
     {
@@ -400,7 +474,7 @@ export async function insertDocument<T>(
   document: T,
   expirySeconds?: number
 ): Promise<boolean> {
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   const response = await fetchWithTimeout(
     documentUrl(config, domain, collection, key),
     {
@@ -425,7 +499,7 @@ export async function deleteDocument(
   collection: string,
   key: string
 ): Promise<boolean> {
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   const response = await fetchWithTimeout(
     documentUrl(config, domain, collection, key),
     {
@@ -464,7 +538,7 @@ export async function incrementCounter(
     throw new Error('incrementCounter requires a positive delta.');
   }
   const amount = Math.round(delta);
-  const config = getDataApiConfig();
+  const config = await getDataApiConfig();
   const response = await fetchWithTimeout(
     `${documentUrl(config, domain, collection, key)}/increment`,
     {

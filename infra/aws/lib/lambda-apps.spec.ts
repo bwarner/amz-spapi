@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverLambdaApps, parseLambdaMetadata } from './lambda-apps.js';
@@ -204,5 +204,81 @@ describe('discoverLambdaApps', () => {
 
     expect(() => discoverLambdaApps(root)).toThrow(/claimed by both/);
     expect(() => discoverLambdaApps(root)).toThrow(/orders-legacy/);
+  });
+});
+
+/**
+ * The couchbase declaration (#55).
+ *
+ * It governs an IAM grant to a secret whose user has scope-wide permissions
+ * (ADR-0005), so a function holding it can read every collection in the
+ * environment — `credentials_profiles` included.
+ */
+describe('metadata.lambda.couchbase', () => {
+  const appWith = (couchbase: unknown) => ({
+    name: 'lambda-x',
+    metadata: {
+      lambda: { packaging: 'zip', handler: 'main.handler', couchbase },
+    },
+  });
+
+  it('must be a boolean', () => {
+    // Strict rather than truthy: `"false"` and `"no"` are truthy strings, and
+    // either would silently widen access.
+    expect(() => parseLambdaMetadata('x', appWith('true'))).toThrow(
+      /must be a boolean/
+    );
+  });
+
+  it('defaults to false when absent', () => {
+    // The safe default for a grant.
+    const parsed = parseLambdaMetadata('x', {
+      name: 'lambda-x',
+      metadata: { lambda: { packaging: 'zip', handler: 'main.handler' } },
+    });
+
+    expect(parsed?.metadata.couchbase).toBe(false);
+  });
+
+  it('is carried through when declared', () => {
+    expect(parseLambdaMetadata('x', appWith(true))?.metadata.couchbase).toBe(
+      true
+    );
+  });
+
+  /**
+   * Drift guard against the real workspace.
+   *
+   * The declaration and the dependency are two places that have to agree, and
+   * nothing else makes them. A Lambda that adds `couchbase-utils` and forgets
+   * the flag deploys happily and throws on its first request; one that declares
+   * the flag without the dependency holds a credential grant it never uses.
+   *
+   * Checks the DIRECT dependency, which is what every Couchbase Lambda has
+   * today. A future app reaching Couchbase only transitively would slip past
+   * this — the runtime failure is loud and names the fix, and walking the
+   * dependency graph here would be a lot of machinery for a case that has not
+   * happened.
+   */
+  it('matches what each app actually depends on', () => {
+    const root = process.cwd().replace(/\/infra\/aws$/, '');
+
+    for (const app of discoverLambdaApps(root)) {
+      const manifest = JSON.parse(
+        readFileSync(join(root, app.appPath, 'package.json'), 'utf8')
+      ) as { dependencies?: Record<string, string> };
+      const dependsOnCouchbase = Boolean(
+        manifest.dependencies?.['@amz-spapi/couchbase-utils']
+      );
+
+      expect(
+        app.couchbase ?? false,
+        dependsOnCouchbase
+          ? `${app.name} depends on couchbase-utils but does not declare ` +
+              `metadata.lambda.couchbase: true in apps/lambdas/${app.name}/project.json`
+          : `${app.name} declares metadata.lambda.couchbase but does not depend ` +
+              'on @amz-spapi/couchbase-utils — it would hold a credential grant it never uses'
+      ).toBe(dependsOnCouchbase);
+    }
   });
 });

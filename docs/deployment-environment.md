@@ -86,11 +86,83 @@ JWE off, because API Gateway validates RSA only.
 
 ## Couchbase
 
-`CB_DATA_API_URL`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET`, `CB_SCOPE`.
+On **Vercel**: `CB_DATA_API_URL`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET`,
+`CB_SCOPE`.
 
 `CB_SCOPE` is the environment, and collections are flat inside it
 ([ADR-0005](adr/0005-environment-scopes.md)). **There is no `prod` scope yet** —
 whatever production points at today is not a production scope.
+
+### On AWS, nothing about the connection is an environment variable
+
+A Lambda environment variable is **not a secret**: it is written into the
+CloudFormation template, shown in the console, and returned by
+`GetFunctionConfiguration` to anyone with read access on the function.
+
+Lambdas therefore carry **only a pointer**, and fetch the whole connection at
+runtime ([ADR-0010](adr/0010-lambdas-reach-couchbase-over-the-data-api.md)):
+
+| Variable                                                                 | Set by                                 | Holds                            |
+| ------------------------------------------------------------------------ | -------------------------------------- | -------------------------------- |
+| `CB_CREDENTIALS_SECRET_ID`                                               | CDK, from `infra/aws/config/stages.ts` | The **name** of the secret below |
+| `CB_DATA_API_URL`, `CB_BUCKET`, `CB_SCOPE`, `CB_USERNAME`, `CB_PASSWORD` | **never set on AWS**                   | — they live inside the secret    |
+
+The secret holds all five as one unit, because they change together — a rebuilt
+cluster has a new hostname _and_ new users:
+
+```json
+{
+  "dataApiUrl": "https://<id>.data.cloud.couchbase.com",
+  "bucket": "sell-avant",
+  "scope": "dev",
+  "username": "SellAvant",
+  "password": "..."
+}
+```
+
+**Create and rotate it with `scripts/couchbase-secret.sh`**, which picks the AWS
+profile and account per stage (`sellavant-dev` for dev and staging,
+`sellavant-prod` for prod) and never puts the password on a command line:
+
+```bash
+# create, or rotate the password. Every identifier defaults to what the app
+# already uses, so this asks for the password and nothing else.
+./scripts/couchbase-secret.sh dev
+./scripts/couchbase-secret.sh staging
+
+# move the cluster - no code change, no deploy
+./scripts/couchbase-secret.sh dev --url https://<new-id>.data.cloud.couchbase.com
+
+# inspect, password redacted
+./scripts/couchbase-secret.sh dev --show
+
+# check first, writing nothing
+./scripts/couchbase-secret.sh dev --dry-run
+```
+
+Defaults come from what each environment already runs: dev is `SellAvant` on
+scope `dev`, staging is `sellavant-staging` on scope `staging` — separate users,
+so ADR-0005's fail-closed boundary holds. Prod has a different cluster and no
+scope yet, so it requires `--url` and is not needed at all today.
+
+Warm Lambda containers pick up a change within `CB_SECRET_TTL_MS` (10 min
+default); cold ones immediately.
+
+Two things worth knowing:
+
+- **Existence is not checked at synth.** `fromSecretNameV2` resolves by name, so
+  a missing or misnamed secret fails at the first invocation rather than at
+  deploy. The stack outputs `CouchbaseSecretName`, and the script prints the ARN
+  after writing, so both can be checked first.
+- **Only Lambdas declaring `metadata.lambda.couchbase: true` are granted read.**
+  The Couchbase user's permissions are scope-wide (ADR-0005), so that grant lets
+  a function read every collection in the environment - `health` and `me`
+  deliberately do not have it.
+
+**prod has no Couchbase configuration yet**, so there is nothing to create for
+it. Its bucket is a different cluster (`SellAvantProd`) and it has no scope; a
+Lambda declaring the flag against prod fails the synth rather than deploying
+broken.
 
 ## What is not reproducible from this repository
 

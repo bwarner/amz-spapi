@@ -25,6 +25,9 @@ importers:
       '@amz-spapi/ai-provider':
         specifier: 0.0.1
         version: link:libs/ai-provider
+      '@amz-spapi/couchbase-secrets':
+        specifier: 0.0.1
+        version: link:libs/couchbase-secrets
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:libs/couchbase-utils
@@ -49,6 +52,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.1034.0
         version: 3.1077.0
+      '@aws-sdk/client-secrets-manager':
+        specifier: ^3.1102.0
+        version: 3.1102.0
       '@aws-sdk/client-sqs':
         specifier: ^3.1102.0
         version: 3.1102.0
@@ -237,7 +243,7 @@ importers:
         version: 11.0.0
       openai:
         specifier: ^6.33.0
-        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.21.0)(zod@3.25.76)
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.18.0)(zod@3.25.76)
       pino:
         specifier: ^9.7.0
         version: 9.14.0
@@ -478,6 +484,15 @@ importers:
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.12.4)(@vitest/ui@3.2.6)(jiti@2.4.2)(less@4.6.7)(lightningcss@1.32.0)(sass-embedded@1.100.0)(sass@1.101.0)(terser@5.48.0)(yaml@2.9.0)
 
   libs/ai-provider: {}
+
+  libs/couchbase-secrets:
+    dependencies:
+      '@amz-spapi/couchbase-utils':
+        specifier: 0.0.1
+        version: link:../couchbase-utils
+      '@aws-sdk/client-secrets-manager':
+        specifier: ^3.1102.0
+        version: 3.1102.0
 
   libs/couchbase-utils: {}
 
@@ -778,6 +793,13 @@ packages:
     resolution:
       {
         integrity: sha512-yWK6jOMrMUgGarXlrQaAopWXva20NaOqTPApuE68SzsBFQ57fQ5E13BKUPLwtPgymk+8L6vG/O4h7Q30IBYr2w==,
+      }
+    engines: { node: '>=20.0.0' }
+
+  '@aws-sdk/client-secrets-manager@3.1102.0':
+    resolution:
+      {
+        integrity: sha512-0xHNuhdiqKHuHH7LH8oZHHLgBYHKVSkiEfy2eeRU09ScZqR0Y3MUzZTvKNtFbKaqdUCGtWde8oDmouRy9BwTCw==,
       }
     engines: { node: '>=20.0.0' }
 
@@ -19377,6 +19399,17 @@ snapshots:
       '@smithy/types': 4.15.0
       tslib: 2.8.1
 
+  '@aws-sdk/client-secrets-manager@3.1102.0':
+    dependencies:
+      '@aws-sdk/core': 3.977.5
+      '@aws-sdk/credential-provider-node': 3.972.77
+      '@aws-sdk/types': 3.974.2
+      '@smithy/core': 3.31.1
+      '@smithy/fetch-http-handler': 5.6.13
+      '@smithy/node-http-handler': 4.9.13
+      '@smithy/types': 4.16.1
+      tslib: 2.8.1
+
   '@aws-sdk/client-sqs@3.1102.0':
     dependencies:
       '@aws-sdk/core': 3.977.5
@@ -19481,11 +19514,11 @@ snapshots:
 
   '@aws-sdk/credential-provider-login@3.972.57':
     dependencies:
-      '@aws-sdk/core': 3.974.25
+      '@aws-sdk/core': 3.977.5
       '@aws-sdk/nested-clients': 3.997.25
-      '@aws-sdk/types': 3.973.14
-      '@smithy/core': 3.28.0
-      '@smithy/types': 4.15.0
+      '@aws-sdk/types': 3.974.2
+      '@smithy/core': 3.31.1
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-login@3.972.73':
@@ -19597,13 +19630,13 @@ snapshots:
 
   '@aws-sdk/nested-clients@3.997.25':
     dependencies:
-      '@aws-sdk/core': 3.974.25
+      '@aws-sdk/core': 3.977.5
       '@aws-sdk/signature-v4-multi-region': 3.996.37
-      '@aws-sdk/types': 3.973.14
-      '@smithy/core': 3.28.0
-      '@smithy/fetch-http-handler': 5.6.1
-      '@smithy/node-http-handler': 4.9.1
-      '@smithy/types': 4.15.0
+      '@aws-sdk/types': 3.974.2
+      '@smithy/core': 3.31.1
+      '@smithy/fetch-http-handler': 5.6.13
+      '@smithy/node-http-handler': 4.9.13
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
 
   '@aws-sdk/nested-clients@3.997.40':
@@ -19642,11 +19675,11 @@ snapshots:
 
   '@aws-sdk/token-providers@3.1077.0':
     dependencies:
-      '@aws-sdk/core': 3.974.25
+      '@aws-sdk/core': 3.977.5
       '@aws-sdk/nested-clients': 3.997.25
-      '@aws-sdk/types': 3.973.14
-      '@smithy/core': 3.28.0
-      '@smithy/types': 4.15.0
+      '@aws-sdk/types': 3.974.2
+      '@smithy/core': 3.31.1
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
 
   '@aws-sdk/token-providers@3.1102.0':
@@ -19670,7 +19703,7 @@ snapshots:
 
   '@aws-sdk/xml-builder@3.972.32':
     dependencies:
-      '@smithy/types': 4.15.0
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.37':
@@ -24164,8 +24197,8 @@ snapshots:
 
   '@smithy/signature-v4@5.6.0':
     dependencies:
-      '@smithy/core': 3.28.0
-      '@smithy/types': 4.15.0
+      '@smithy/core': 3.31.1
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
 
   '@smithy/signature-v4@5.6.12':
@@ -29981,11 +30014,11 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.21.0)(zod@3.25.76):
+  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.18.0)(zod@3.25.76):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.60
       '@smithy/signature-v4': 5.6.12
-      ws: 8.21.0
+      ws: 8.18.0
       zod: 3.25.76
 
   openapi-types@12.1.3: {}

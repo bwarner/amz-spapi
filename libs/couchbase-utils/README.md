@@ -12,14 +12,46 @@ counters.
 
 ## Configuration
 
-| Variable          | Required | Purpose                                         |
-| ----------------- | -------- | ----------------------------------------------- |
-| `CB_DATA_API_URL` | yes      | Data API base URL                               |
-| `CB_USERNAME`     | yes      | Cluster access username                         |
-| `CB_PASSWORD`     | yes      | Cluster access password                         |
-| `CB_BUCKET`       | yes      | Bucket name                                     |
-| `CB_SCOPE`        | no       | Default scope when a caller passes none         |
-| `CB_TEST_SCOPE`   | no       | Scope the integration tests provision (`itest`) |
+| Variable          | Required  | Purpose                                         |
+| ----------------- | --------- | ----------------------------------------------- |
+| `CB_DATA_API_URL` | yes       | Data API base URL                               |
+| `CB_USERNAME`     | see below | Cluster access username                         |
+| `CB_PASSWORD`     | see below | Cluster access password                         |
+| `CB_BUCKET`       | yes       | Bucket name                                     |
+| `CB_SCOPE`        | no        | Default scope when a caller passes none         |
+| `CB_TEST_SCOPE`   | no        | Scope the integration tests provision (`itest`) |
+
+## Where the login comes from
+
+The five `CB_*` variables are the default and cover Vercel, the CLIs and the
+scripts. On AWS **all of them are absent by design**: a Lambda environment
+variable is not a secret — it is written into the CloudFormation template and
+returned by `GetFunctionConfiguration` — so the connection is fetched from
+Secrets Manager at runtime instead, and the function carries only the secret's
+name.
+
+```ts
+import { setConnectionProvider } from '@amz-spapi/couchbase-utils';
+
+setConnectionProvider(async () => ({
+  dataApiUrl,
+  bucket,
+  scope,
+  username,
+  password,
+}));
+```
+
+The provider supplies the **whole connection**, not just the login: all five
+change together when a cluster is rebuilt, so keeping them in one place means
+they can never disagree.
+
+`@amz-spapi/couchbase-secrets` is the AWS implementation
+(`useSecretsManagerConnection()`), kept in a separate package so `@aws-sdk/*`
+never enters the Next.js bundle — a dynamic `import()` here would be resolved by
+the bundler whether or not the branch ran. See
+[ADR-0010](../../docs/adr/0010-lambdas-reach-couchbase-over-the-data-api.md),
+which also records why Lambdas use this transport rather than the native SDK.
 
 ## Data API behaviours these helpers are built around
 

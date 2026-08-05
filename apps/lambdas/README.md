@@ -20,7 +20,8 @@ builds the function from that declaration, so adding a Lambda is adding an app.
       "description": "…",
       "timeoutSeconds": 10, // optional, default 30
       "memoryMb": 256, // optional, default 512
-      "routes": ["GET /orders", "GET /orders/{orderId}"] // optional
+      "routes": ["GET /orders", "GET /orders/{orderId}"], // optional
+      "couchbase": true // optional, default false — see below
     }
   }
 }
@@ -33,6 +34,35 @@ A directory with no `metadata.lambda` is not deployed — helpers and fixtures c
 live here. Anything malformed **fails the synth** rather than deploying as the
 wrong kind of artefact, which would look like a successful deploy and fail on
 first invocation.
+
+## Reading Couchbase
+
+Declare `"couchbase": true` and the stack sets `CB_CREDENTIALS_SECRET_ID` and
+grants the function read on that secret. Then call
+`useSecretsManagerConnection()` once at module scope:
+
+```ts
+import { useSecretsManagerConnection } from '@amz-spapi/couchbase-secrets';
+
+useSecretsManagerConnection();
+```
+
+**Nothing about the connection is an environment variable** — the host, bucket,
+scope and login all live inside the secret and are fetched at runtime, cached
+for the container's life. An environment variable is in the CloudFormation
+template and in `GetFunctionConfiguration`, and keeping the five together means
+a cluster move is one secret write rather than a deploy.
+See [ADR-0010](../../docs/adr/0010-lambdas-reach-couchbase-over-the-data-api.md),
+and `docs/deployment-environment.md` for creating the secret.
+
+It is opt-in rather than derived from your dependencies because it governs an
+IAM grant, and the Couchbase user's permissions are scope-wide (ADR-0005): a
+function holding it can read **every** collection in the environment, including
+`credentials_profiles`. A test cross-checks the declaration against each app's
+dependencies, so forgetting either half fails CI with the line to add.
+
+A stage with no `couchbase` block in `infra/aws/config/stages.ts` **fails the
+synth** if any app declares this — `prod` has none, deliberately.
 
 ## Versions and the `live` alias
 
