@@ -46,7 +46,7 @@ The provider supplies the **whole connection**, not just the login: all five
 change together when a cluster is rebuilt, so keeping them in one place means
 they can never disagree.
 
-`@amz-spapi/couchbase-secrets` is the AWS implementation
+`@amz-spapi/aws-secrets` is the AWS implementation
 (`useSecretsManagerConnection()`), kept in a separate package so `@aws-sdk/*`
 never enters the Next.js bundle — a dynamic `import()` here would be resolved by
 the bundler whether or not the branch ran. See

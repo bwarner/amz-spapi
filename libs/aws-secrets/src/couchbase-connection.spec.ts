@@ -47,7 +47,8 @@ vi.mock('@amz-spapi/couchbase-utils', () => ({
 }));
 
 const { useSecretsManagerConnection, invalidateCachedConnection } =
-  await import('./secrets-manager-connection.js');
+  await import('./couchbase-connection.js');
+const { clearSecretCache } = await import('./secret-cache.js');
 
 const SECRET = 'sellavant-dev-couchbase';
 const PASSWORD = 'sup3r-s3cret-p4ssw0rd';
@@ -61,7 +62,9 @@ const provider = (): Promise<Connection> => {
 beforeEach(() => {
   send.mockReset();
   registered = undefined;
-  invalidateCachedConnection();
+  // Not `invalidateCachedConnection()`: that one keys off the environment
+  // variable set below, so at this point it would have nothing to forget.
+  clearSecretCache();
   vi.useFakeTimers();
   process.env['CB_CREDENTIALS_SECRET_ID'] = SECRET;
   for (const k of [

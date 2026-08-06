@@ -1,7 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc/libs/couchbase-secrets",
+    "outDir": "../../dist/out-tsc/libs/aws-secrets",
     "declaration": true,
     "composite": true,
     "types": ["node"]
