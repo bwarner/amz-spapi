@@ -1,14 +1,19 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import type { StageConfig } from '../config/stages.js';
 import { createAuth0Authorizer } from './auth0-authorizer.js';
+import {
+  credentialsKeyAlias,
+  credentialsKeyExportName,
+} from './credentials-key-stack.js';
 import { discoverLambdaApps, type LambdaApp } from './lambda-apps.js';
 import { LambdaHttpApi } from './lambda-http-api.js';
 import { SyncWiring } from './sync-wiring.js';
@@ -60,10 +65,15 @@ export class LambdasStack extends Stack {
   /** Alarms and the topic they publish to. Subscribe to the topic. */
   public readonly monitoring: ApiMonitoring;
 
+  private readonly stageConfig: StageConfig;
+
   constructor(scope: Construct, id: string, props: LambdasStackProps) {
     super(scope, id, props);
 
     const { config, workspaceRoot } = props;
+    // Held so the lazy resource getters below do not each need it threaded
+    // through; they are called from the loop, not from the constructor.
+    this.stageConfig = config;
     const apps = discoverLambdaApps(workspaceRoot);
 
     for (const app of apps) {
@@ -83,6 +93,21 @@ export class LambdasStack extends Stack {
       // still functions, an unconfigured Couchbase Lambda cannot.
       if (app.couchbase) {
         this.couchbaseSecret(config).grantRead(fn);
+      }
+
+      // The heaviest grant in the workspace: together these turn a stored blob
+      // into an access token for a seller's Amazon account (#55). Exactly one
+      // function declares it, and the whole of the credential slice's security
+      // argument is that no other runtime holds both halves.
+      if (app.amazonCredentials) {
+        this.amazonOauthSecret(config).grantRead(fn);
+        this.credentialsKey().grant(
+          fn,
+          'kms:Encrypt',
+          'kms:Decrypt',
+          'kms:DescribeKey',
+          'kms:GenerateDataKey'
+        );
       }
 
       // `$LATEST` is mutable and cannot be rolled back to — there is only ever
@@ -141,6 +166,15 @@ export class LambdasStack extends Stack {
         value: config.couchbase.secretName,
         description:
           'Secrets Manager secret holding {"username","password"}. Must exist.',
+      });
+    }
+
+    if (apps.some((app) => app.amazonCredentials) && config.amazonOauth) {
+      new CfnOutput(this, 'AmazonOauthSecretName', {
+        value: config.amazonOauth.secretName,
+        description:
+          'Secrets Manager secret holding the LWA and Ads client id/secret. ' +
+          'Must exist — create it with scripts/amazon-oauth-secret.sh.',
       });
     }
 
@@ -207,6 +241,58 @@ export class LambdasStack extends Stack {
 
   private cachedCouchbaseSecret?: secretsmanager.ISecret;
 
+  /**
+   * The LWA application credentials, referenced rather than created (#55).
+   *
+   * Same reasoning as the Couchbase secret, and the same lazy-once construction:
+   * CDK must never hold this value, so it is created out of band by
+   * `scripts/amazon-oauth-secret.sh` and referenced by name.
+   */
+  private amazonOauthSecret(config: StageConfig): secretsmanager.ISecret {
+    if (!config.amazonOauth) {
+      throw new Error(
+        `Stage "${config.stageName}" has no amazonOauth configuration, but a ` +
+          'Lambda declares metadata.lambda.amazonCredentials. Add it to ' +
+          'infra/aws/config/stages.ts, or drop the declaration.'
+      );
+    }
+
+    this.cachedAmazonOauthSecret ??= secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'AmazonOauthSecret',
+      config.amazonOauth.secretName
+    );
+    return this.cachedAmazonOauthSecret;
+  }
+
+  private cachedAmazonOauthSecret?: secretsmanager.ISecret;
+
+  /**
+   * The credentials KMS key, IMPORTED from the key stack's export.
+   *
+   * Imported rather than passed in as a construct, and that is the load-bearing
+   * detail. `Key.grant` on an owned key edits the key's own resource policy,
+   * which would need this stack's role ARN inside the key stack while this stack
+   * needs the key ARN — a CloudFormation dependency cycle, at synth, with a
+   * message about neither of those things. An imported key cannot have its
+   * policy edited, so `grant` writes only to the function's role, which is all
+   * that is needed: the key's policy already trusts account identities.
+   *
+   * The dependency runs one way, key stack to lambdas stack, and `app.ts`
+   * declares it explicitly — `Fn.importValue` is an opaque token, so CDK cannot
+   * infer the deploy ordering from it.
+   */
+  private credentialsKey(): kms.IKey {
+    this.cachedCredentialsKey ??= kms.Key.fromKeyArn(
+      this,
+      'CredentialsKey',
+      Fn.importValue(credentialsKeyExportName(this.stageConfig))
+    );
+    return this.cachedCredentialsKey;
+  }
+
+  private cachedCredentialsKey?: kms.IKey;
+
   private common(app: LambdaApp, config: StageConfig) {
     const functionName = `${config.appName}-${config.stageName}-${app.name}`;
 
@@ -249,6 +335,16 @@ export class LambdasStack extends Stack {
         // still says which environment this function belongs to.
         ...(app.couchbase && config.couchbase
           ? { CB_CREDENTIALS_SECRET_ID: config.couchbase.secretName }
+          : {}),
+        // Also pointers only. The secret NAME says which environment's LWA
+        // applications to use; the key ALIAS names a key whose whole security
+        // is the IAM grant above, not obscurity about its identity. Neither is
+        // sensitive, and both are worth being able to read off the function.
+        ...(app.amazonCredentials && config.amazonOauth
+          ? {
+              AMAZON_OAUTH_SECRET_ID: config.amazonOauth.secretName,
+              KMS_CREDENTIAL_KEY_ID: credentialsKeyAlias(config),
+            }
           : {}),
       },
     };

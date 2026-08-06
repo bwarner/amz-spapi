@@ -69,6 +69,28 @@ export type StageConfig = {
     secretName: string;
   };
   /**
+   * Where this stage's LWA application credentials are kept (#55).
+   *
+   * `{"spApiClientId","spApiClientSecret","adsClientId","adsClientSecret"}` in
+   * one secret, because the two LWA applications are registered and rotated
+   * together, and a stage holding one but not the other would fail at the first
+   * token refresh rather than at deploy.
+   *
+   * These are OUR application's credentials, not a seller's. They mint access
+   * tokens from every connected seller's refresh token, which is why they are
+   * not an environment variable on either side: a Lambda env var is returned by
+   * `GetFunctionConfiguration` to anyone with read access on the function, and
+   * in Vercel they were readable in a dashboard.
+   *
+   * Created out of band by `scripts/amazon-oauth-secret.sh`. Absent means the
+   * stage cannot mint tokens; any Lambda declaring
+   * `metadata.lambda.amazonCredentials` then fails synth rather than deploying
+   * broken.
+   */
+  amazonOauth?: {
+    secretName: string;
+  };
+  /**
    * Where alarms are sent. Unset creates the topic and the alarms without a
    * subscription — they still record in the console, and an alarm nobody
    * subscribed to is more use than no alarm at all.
@@ -153,6 +175,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Audience: envAuth0('dev', 'AUDIENCE') || 'https://local.sellavant.com',
     alarmEmail: process.env.SELLAVANT_DEV_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-dev-couchbase' },
+    amazonOauth: { secretName: 'sellavant-dev-amazon-oauth' },
   },
   staging: {
     stageName: 'staging',
@@ -169,6 +192,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Audience: envAuth0('staging', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-staging-couchbase' },
+    amazonOauth: { secretName: 'sellavant-staging-amazon-oauth' },
   },
   prod: {
     stageName: 'prod',

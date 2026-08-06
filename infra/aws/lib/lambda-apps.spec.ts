@@ -282,3 +282,60 @@ describe('metadata.lambda.couchbase', () => {
     }
   });
 });
+
+/**
+ * The amazonCredentials declaration (#55).
+ *
+ * The heaviest grant in the workspace: KMS decrypt on the credentials key plus
+ * the LWA client secret is, together, the ability to act as any connected
+ * seller. It should stay on exactly one function.
+ */
+describe('metadata.lambda.amazonCredentials', () => {
+  const appWith = (lambda: Record<string, unknown>) => ({
+    name: 'lambda-x',
+    metadata: {
+      lambda: { packaging: 'zip', handler: 'main.handler', ...lambda },
+    },
+  });
+
+  it('must be a boolean', () => {
+    expect(() =>
+      parseLambdaMetadata('x', appWith({ amazonCredentials: 'true' }))
+    ).toThrow(/must be a boolean/);
+  });
+
+  it('defaults to false when absent', () => {
+    expect(
+      parseLambdaMetadata('x', appWith({}))?.metadata.amazonCredentials
+    ).toBe(false);
+  });
+
+  it('requires couchbase, since the secrets live on the profile documents', () => {
+    // Otherwise it deploys clean and fails at the first request, having got the
+    // key grant it cannot use.
+    expect(() =>
+      parseLambdaMetadata('x', appWith({ amazonCredentials: true }))
+    ).toThrow(/needs couchbase/);
+  });
+
+  it('is carried through when declared alongside couchbase', () => {
+    expect(
+      parseLambdaMetadata(
+        'x',
+        appWith({ amazonCredentials: true, couchbase: true })
+      )?.metadata.amazonCredentials
+    ).toBe(true);
+  });
+
+  it('is declared by exactly one app in the workspace', () => {
+    // Not a style rule. Every function holding this can act as any connected
+    // seller, so a second one is a second blast radius — if another needs a
+    // token it should call the credentials API, not hold the key.
+    const root = process.cwd().replace(/\/infra\/aws$/, '');
+    const holders = discoverLambdaApps(root)
+      .filter((app) => app.amazonCredentials)
+      .map((app) => app.name);
+
+    expect(holders).toEqual(['credentials']);
+  });
+});
