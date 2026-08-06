@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { auth0 } from '../../../../lib/auth0';
-import { createSpApiOAuthFlow } from '../../../../lib/amazon-oauth';
+import { createState } from '../../../../lib/amazon-authorize';
 import { MARKETPLACE_REGIONS } from '@farvisionllc/models';
 
 const SELLER_CENTRAL_URLS: Record<string, string> = {
@@ -49,12 +49,9 @@ export async function GET(request: NextRequest) {
     searchParams.get('profile') ||
     `sp-${marketplaceId}-${Date.now().toString(36)}`;
 
-  const oauthFlow = createSpApiOAuthFlow(region);
-  const { state } = oauthFlow.generateAuthUrl(
-    'SP_API',
-    profileName,
-    session.user.sub
-  );
+  // Only the state; SP-API's consent screen is Seller Central's, built below.
+  const state = createState('SP_API', profileName, session.user.sub);
+
   const applicationId = process.env['SP_API_APPLICATION_ID'];
   if (!applicationId) {
     return NextResponse.json(

@@ -1,8 +1,7 @@
 import dns from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { SpApiClient } from '@farvisionllc/sp-client';
 import { stripHtmlToText } from './brand-guide-extraction';
-import { getCredentialStore } from './credential-store';
+import { spApiClientFor } from './amazon-clients';
 import { listAmazonConnections } from './amazon-connections';
 import { getCachedSourceFacts, setCachedSourceFacts } from './source-cache';
 import { withPaidCall } from './cost-ledger';
@@ -1156,31 +1155,13 @@ async function extractFromAmazonCatalog(
   const connection = connections.find((c) => c.missing.length === 0);
   if (!connection) return null;
 
-  const { profile, profileName } = connection;
+  const { profile } = connection;
   const marketplaceId =
     profile.marketplace_id ||
     process.env['SP_MARKETPLACE_ID'] ||
     'ATVPDKIKX0DER';
-  const credStore = getCredentialStore();
 
-  const client = new SpApiClient({
-    clientId: profile.client_id,
-    clientSecret: profile.client_secret,
-    refreshToken: profile.refresh_token,
-    accessToken: profile.access_token,
-    sellerId: profile.seller_id,
-    marketplaceId,
-    region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-    onTokenRefresh: async (accessToken, expiresIn) => {
-      await credStore.updateAccessToken(
-        profileName,
-        'SP_API',
-        accessToken,
-        expiresIn,
-        userId
-      );
-    },
-  });
+  const client = await spApiClientFor(connection, { marketplaceId });
 
   const item = (await client.getCatalogItem(asin, {
     marketplaceIds: [marketplaceId],

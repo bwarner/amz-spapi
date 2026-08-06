@@ -1,122 +1,33 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { auth0 } from '../../../../lib/auth0';
-import {
-  createSpApiOAuthFlow,
-  createAdsApiOAuthFlow,
-} from '../../../../lib/amazon-oauth';
-import { validateOAuthCallback } from '@farvisionllc/credential-store';
-import {
-  MARKETPLACE_REGIONS,
-  type AmazonCredentialProfile,
-} from '@farvisionllc/models';
-import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
-import { getCredentialStore } from '../../../../lib/credential-store';
-
-type AdsProfileCandidate = {
-  profileId?: number | string;
-  profile_id?: number | string;
-  id?: number | string;
-  countryCode?: string;
-  marketplaceId?: string;
-  accountInfo?: {
-    id?: string;
-    name?: string;
-    type?: string;
-    marketplaceStringId?: string;
-    marketplaceId?: string;
-  };
-};
-
-function asAdsProfiles(value: unknown): AdsProfileCandidate[] {
-  if (Array.isArray(value)) return value as AdsProfileCandidate[];
-  if (value && typeof value === 'object') {
-    const body = value as { profiles?: unknown; data?: unknown };
-    if (Array.isArray(body.profiles))
-      return body.profiles as AdsProfileCandidate[];
-    if (Array.isArray(body.data)) return body.data as AdsProfileCandidate[];
-  }
-  return [];
-}
-
-function getAdsProfileId(profile: AdsProfileCandidate): string | null {
-  const id = profile.profileId ?? profile.profile_id ?? profile.id;
-  return id == null ? null : String(id);
-}
-
-function getAdsMarketplaceId(
-  profile: AdsProfileCandidate,
-  fallbackMarketplaceId: string
-): string {
-  return (
-    profile.marketplaceId ||
-    profile.accountInfo?.marketplaceId ||
-    profile.accountInfo?.marketplaceStringId ||
-    fallbackMarketplaceId
-  );
-}
-
-function getAdsProfileName(
-  baseName: string,
-  marketplaceId: string,
-  advertiserProfileId: string,
-  profile: AdsProfileCandidate
-): string {
-  const accountName = profile.accountInfo?.name
-    ?.toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 36);
-
-  const readablePart = accountName ? `${accountName}-` : '';
-  return `${baseName}-${readablePart}${marketplaceId}-${advertiserProfileId}`;
-}
-
-async function expandAdsCredentialProfiles(
-  baseProfile: AmazonCredentialProfile,
-  selectedMarketplaceId: string
-): Promise<AmazonCredentialProfile[]> {
-  const adsClient = new AmazonAdsApiClient({
-    clientId: baseProfile.client_id,
-    clientSecret: baseProfile.client_secret,
-    accessToken: baseProfile.access_token,
-    refreshToken: baseProfile.refresh_token,
-    marketplaceId: selectedMarketplaceId,
-    region: baseProfile.region,
-  });
-
-  const response = await adsClient.getProfiles();
-  const adsProfiles = asAdsProfiles(response.data);
-
-  return adsProfiles.flatMap((adsProfile) => {
-    const advertiserProfileId = getAdsProfileId(adsProfile);
-    if (!advertiserProfileId) return [];
-
-    const marketplaceId = getAdsMarketplaceId(
-      adsProfile,
-      selectedMarketplaceId
-    );
-    return [
-      {
-        ...baseProfile,
-        profile_name: getAdsProfileName(
-          baseProfile.profile_name,
-          marketplaceId,
-          advertiserProfileId,
-          adsProfile
-        ),
-        marketplace_id: marketplaceId,
-        region: MARKETPLACE_REGIONS[marketplaceId] || baseProfile.region,
-        advertiser_profile_id: advertiserProfileId,
-      },
-    ];
-  });
-}
+import { parseState, redirectUri } from '../../../../lib/amazon-authorize';
+import { ApiError } from '../../../../services/api-service';
+import { credentialService } from '../../../../services/credential-service';
 
 /**
- * GET /api/amazon/callback
- * Shared OAuth callback for both SP-API and Ads API.
- * Differentiates by reading apiType from the state parameter.
+ * GET /api/amazon/callback — where Amazon sends the user back.
+ *
+ * Shared by SP-API and Ads; the `state` parameter says which.
+ *
+ * ## Why this is still here and not a Lambda (#55)
+ *
+ * The redirect URI is registered with Amazon and is a browser redirect target.
+ * Moving it to API Gateway would mean re-registering it in both LWA
+ * applications and giving the gateway a public unauthenticated route — this is
+ * the one route that cannot carry an Auth0 token, because the user is arriving
+ * from Amazon rather than from us. Staying here keeps the session cookie that
+ * says whose connection this is.
+ *
+ * ## What this route may hold, and what it may not
+ *
+ * It holds the authorization CODE: single-use, expires in minutes, and useless
+ * without the client secret, which is not in this runtime. It hands the code to
+ * the credentials API, which redeems it, encrypts the result and stores it.
+ *
+ * **The refresh token never enters the Vercel runtime.** That is the point of
+ * the whole slice, and it is why nothing below reads `LWA_CLIENT_SECRET` or
+ * touches `credential-store`.
  */
 export async function GET(request: NextRequest) {
   const session = await auth0.getSession();
@@ -125,54 +36,45 @@ export async function GET(request: NextRequest) {
   }
 
   const searchParams = request.nextUrl.searchParams;
-  const callbackCode =
-    searchParams.get('spapi_oauth_code') ??
-    searchParams.get('code') ??
-    undefined;
-  const callbackState = searchParams.get('state') ?? undefined;
-  const sellingPartnerId =
+
+  // Amazon reports a refusal here rather than by not redirecting, so a declined
+  // consent screen arrives looking much like a success.
+  const error = searchParams.get('error');
+  if (error) {
+    const description = searchParams.get('error_description');
+    return settings(request, {
+      error: `Amazon returned "${error}"${
+        description ? `: ${description}` : ''
+      }`,
+    });
+  }
+
+  // SP-API names it `spapi_oauth_code`; Ads uses the standard `code`.
+  const code =
+    searchParams.get('spapi_oauth_code') ?? searchParams.get('code') ?? '';
+  const callbackState = searchParams.get('state') ?? '';
+  const sellerId =
     searchParams.get('selling_partner_id') ??
     searchParams.get('seller_id') ??
     undefined;
-  const error = searchParams.get('error') ?? undefined;
-  const errorDescription = searchParams.get('error_description') ?? undefined;
 
-  // Validate basic callback parameters
-  try {
-    validateOAuthCallback({
-      code: callbackCode,
-      state: callbackState,
-      error,
-      error_description: errorDescription,
-    });
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'OAuth validation failed';
-    return NextResponse.redirect(
-      new URL(`/settings?error=${encodeURIComponent(message)}`, request.url)
-    );
-  }
-  if (!callbackCode || !callbackState) {
-    return NextResponse.redirect(
-      new URL('/settings?error=Missing+OAuth+callback+parameters.', request.url)
-    );
+  if (!code || !callbackState) {
+    return settings(request, { error: 'Missing OAuth callback parameters.' });
   }
 
-  // Validate CSRF: state must match the cookie we set before redirect
   const cookieStore = await cookies();
   const storedState = cookieStore.get('amazon_oauth_state')?.value;
   const storedMarketplace = cookieStore.get('amazon_oauth_marketplace')?.value;
 
+  // CSRF. The state came back through Amazon and a browser; the cookie is
+  // httpOnly and same-site, so only a flow this app started can match it.
+  // Compared before anything is spent on the code.
   if (!storedState || storedState !== callbackState) {
-    return NextResponse.redirect(
-      new URL(
-        '/settings?error=Invalid+state+parameter.+Please+try+again.',
-        request.url
-      )
-    );
+    return settings(request, {
+      error: 'Invalid state parameter. Please try connecting again.',
+    });
   }
 
-  // Clear the CSRF and marketplace cookies
   cookieStore.delete('amazon_oauth_state');
   cookieStore.delete('amazon_oauth_marketplace');
 
@@ -180,64 +82,51 @@ export async function GET(request: NextRequest) {
     storedMarketplace || process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
 
   try {
-    // Parse state to determine which API type
-    const tempFlow = createSpApiOAuthFlow();
-    const parsedState = tempFlow.parseState(callbackState);
-    const region = MARKETPLACE_REGIONS[marketplaceId];
+    // Only for `apiType` and `profileName`. `state.userId` is deliberately
+    // ignored: the API takes the caller from the verified JWT, and a state blob
+    // is a CSRF token rather than a claim about who is connecting.
+    const state = parseState(callbackState);
 
-    const oauthFlow =
-      parsedState.apiType === 'ADS_API'
-        ? createAdsApiOAuthFlow(region)
-        : createSpApiOAuthFlow(region);
-
-    // Exchange code for tokens and create credential profile
-    const profile = await oauthFlow.completeOAuthFlow(
-      callbackCode,
-      parsedState,
+    const credentials = await credentialService();
+    await credentials.connect({
+      apiType: state.apiType,
+      code,
+      profileName: state.profileName,
       marketplaceId,
-      parsedState.apiType === 'SP_API' ? sellingPartnerId : undefined
-    );
+      // Sent because it is per-deployment — local, staging and production each
+      // have their own — while one API stage serves all of a stage's front
+      // ends. Amazon checks it against the one the authorize request used.
+      redirectUri: redirectUri(),
+      ...(state.apiType === 'SP_API' && sellerId ? { sellerId } : {}),
+    });
 
-    // Store credentials in Couchbase
-    const credStore = getCredentialStore();
-
-    if (parsedState.apiType === 'ADS_API') {
-      const adsProfiles = await expandAdsCredentialProfiles(
-        profile,
-        marketplaceId
-      );
-      if (adsProfiles.length === 0) {
-        throw new Error(
-          'Amazon Ads OAuth succeeded, but no advertiser profiles were found for this login.'
-        );
-      }
-
-      for (const adsProfile of adsProfiles) {
-        await credStore.setProfile(adsProfile);
-      }
-      await credStore.setDefaultProfile(
-        adsProfiles[0].profile_name,
-        'ADS_API',
-        adsProfiles[0].user_id
-      );
-    } else {
-      await credStore.setProfile(profile);
-      await credStore.setDefaultProfile(
-        profile.profile_name,
-        profile.api_type,
-        profile.user_id
-      );
-    }
-
-    const apiLabel = parsedState.apiType === 'SP_API' ? 'sp_api' : 'ads_api';
-    return NextResponse.redirect(
-      new URL(`/settings?connected=${apiLabel}`, request.url)
-    );
+    return settings(request, {
+      connected: state.apiType === 'SP_API' ? 'sp_api' : 'ads_api',
+    });
   } catch (err) {
+    // The API's own detail is the useful part — "Amazon rejected the
+    // authorization code" tells the user to start again, where a generic
+    // failure sends them to support. It is safe to show: the service composes
+    // these deliberately and never puts a credential in one.
     const message =
-      err instanceof Error ? err.message : 'Token exchange failed';
-    return NextResponse.redirect(
-      new URL(`/settings?error=${encodeURIComponent(message)}`, request.url)
-    );
+      err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+        ? err.message
+        : 'The connection could not be completed.';
+
+    console.error('[amazon/callback] connect failed', message);
+    return settings(request, { error: message });
   }
+}
+
+/** Back to settings, saying what happened. */
+function settings(
+  request: NextRequest,
+  params: { connected?: string; error?: string }
+) {
+  const url = new URL('/settings', request.url);
+  if (params.connected) url.searchParams.set('connected', params.connected);
+  if (params.error) url.searchParams.set('error', params.error);
+  return NextResponse.redirect(url);
 }

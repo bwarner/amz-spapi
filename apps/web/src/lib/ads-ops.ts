@@ -1,5 +1,6 @@
 import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
 import type { SellerAdsOps } from '@amz-spapi/seller-agent';
+import { adsClientFor } from './amazon-clients';
 import {
   listAmazonConnections,
   type AmazonConnection,
@@ -34,17 +35,14 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
     return all.filter((c) => c.profile.advertiser_profile_id);
   }
 
-  function clientFor(connection: AmazonConnection): AmazonAdsApiClient {
-    const profile = connection.profile;
-    return new AmazonAdsApiClient({
-      clientId: profile.client_id,
-      clientSecret: profile.client_secret,
-      refreshToken: profile.refresh_token,
-      accessToken: profile.access_token,
-      marketplaceId: profile.marketplace_id,
-      region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-      profileId: profile.advertiser_profile_id,
-    });
+  /**
+   * Mints through the credentials API and re-mints on a 401 (#55). This runtime
+   * holds neither the refresh token nor the client secret.
+   */
+  function clientFor(
+    connection: AmazonConnection
+  ): Promise<AmazonAdsApiClient> {
+    return adsClientFor(connection);
   }
 
   /**

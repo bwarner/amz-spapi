@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { auth0 } from '../../../../lib/auth0';
-import { createAdsApiOAuthFlow } from '../../../../lib/amazon-oauth';
+import { buildAuthUrl, createState } from '../../../../lib/amazon-authorize';
 import { MARKETPLACE_REGIONS } from '@farvisionllc/models';
 
 /**
@@ -34,12 +34,8 @@ export async function GET(request: NextRequest) {
     searchParams.get('profile') ||
     `ads-${marketplaceId}-${Date.now().toString(36)}`;
 
-  const oauthFlow = createAdsApiOAuthFlow(region);
-  const { authUrl, state } = oauthFlow.generateAuthUrl(
-    'ADS_API',
-    profileName,
-    session.user.sub
-  );
+  const state = createState('ADS_API', profileName, session.user.sub);
+  const authUrl = buildAuthUrl('ADS_API', state);
 
   const cookieStore = await cookies();
 

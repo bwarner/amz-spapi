@@ -15,12 +15,46 @@ vi.mock('./amazon-connections', () => ({
   listAmazonConnections: (...args: unknown[]) => listAmazonConnections(...args),
 }));
 
-const listCampaigns = vi.fn().mockResolvedValue({ items: [] });
-vi.mock('@farvisionllc/ad-client', () => ({
-  AmazonAdsApiClient: class {
+/**
+ * One fake client, shared by both mocks below.
+ *
+ * `vi.hoisted` because `vi.mock` factories are lifted above ordinary
+ * declarations. Defining the class here rather than importing the real one
+ * inside a factory also keeps `@farvisionllc/ad-client` a STATIC dependency of
+ * this file — a dynamic `import()` makes Nx classify the library as lazy-loaded
+ * and then forbids the static imports everywhere else.
+ */
+const { listCampaigns, FakeAdsClient } = vi.hoisted(() => {
+  const listCampaigns = vi.fn();
+  class FakeAdsClient {
     constructor(public config: Record<string, unknown>) {}
     listCampaigns = (...args: unknown[]) => listCampaigns(this.config, ...args);
-  },
+  }
+  return { listCampaigns, FakeAdsClient };
+});
+
+vi.mock('@farvisionllc/ad-client', () => ({
+  AmazonAdsApiClient: FakeAdsClient,
+}));
+
+/**
+ * The client factory, stubbed.
+ *
+ * Since #55 building a client mints an access token through the credentials
+ * API, which needs a request scope and a session — neither of which exists in a
+ * unit test, and neither of which this file is about. The stub keeps
+ * `profileId` visible, since which advertiser profile a call is scoped to is
+ * exactly what these tests assert.
+ */
+vi.mock('./amazon-clients', () => ({
+  adsClientFor: async (connection: { profile: Record<string, unknown> }) =>
+    new FakeAdsClient({
+      clientId: connection.profile['client_id'],
+      accessToken: 'minted',
+      marketplaceId: connection.profile['marketplace_id'],
+      region: connection.profile['region'],
+      profileId: connection.profile['advertiser_profile_id'],
+    }),
 }));
 
 const { createAdsOps } = await import('./ads-ops');
@@ -33,9 +67,10 @@ function connection(
     profile: {
       profile_name: `ads-${marketplaceId}`,
       client_id: 'client',
-      client_secret: 'secret',
-      refresh_token: 'refresh',
-      access_token: 'access',
+      // No client_secret, refresh_token or access_token: since #55 a connection
+      // carries none, and a fixture that still did would let a regression that
+      // reintroduced them pass unnoticed.
+      has_refresh_token: true,
       marketplace_id: marketplaceId,
       region: 'NA',
       advertiser_profile_id: advertiserProfileId,
