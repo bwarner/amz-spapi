@@ -211,9 +211,24 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Domain: envAuth0('prod', 'DOMAIN'),
     auth0Audience: envAuth0('prod', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,
-    // `couchbase` is deliberately absent: prod has no scope yet, and its
-    // bucket is a different cluster (SellAvantProd). A placeholder here would
-    // look configured and fail at the first request instead of at synth.
+    // `couchbase` and `amazonOauth` are deliberately absent, and prod
+    // therefore FAILS SYNTH while any Lambda declares `couchbase: true`. That
+    // is the intended state, not an oversight.
+    //
+    // The `prod` scope in the `SellAvantProd` bucket does exist, with its
+    // collections. What does not exist is either Secrets Manager secret —
+    // `sellavant-prod-couchbase` or `sellavant-prod-amazon-oauth`.
+    //
+    // Naming them here before they exist would be worse than the current
+    // failure: `fromSecretNameV2` resolves by name and checks nothing at synth,
+    // so prod would deploy clean and every request would fail at runtime
+    // against a secret that was never created. A synth failure names the
+    // problem; a runtime one names a missing secret three layers down.
+    //
+    // To enable prod: create both secrets (`scripts/couchbase-secret.sh prod`,
+    // `scripts/amazon-oauth-secret.sh prod`), converge the scope
+    // (`couchbase-ddl.ts --env prod --apply`, which as of #55 adds
+    // `credentials_locks`), then add both blocks here.
   },
 };
 

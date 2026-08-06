@@ -74,8 +74,10 @@ case "$STAGE" in
     URL_DEFAULT="$CB_HOST"
     ;;
   prod)
-    # Prod is a DIFFERENT cluster (SellAvantProd) and has no scope yet, so there
-    # is no host to default to — ADR-0010. --url is required here.
+    # Prod lives in its own bucket, SellAvantProd, whose `prod` scope exists
+    # with its collections. No host is defaulted because prod's Data API
+    # endpoint has never been recorded here — ADR-0010 — so --url is required
+    # the first time. Take it from Capella under Connect > Data API.
     SECRET=sellavant-prod-couchbase
     PROFILE=sellavant-prod
     BUCKET=SellAvantProd
