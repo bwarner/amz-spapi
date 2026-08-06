@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { CfnOutput, Stack } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import type * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
 import type { StageConfig } from '../config/stages.js';
 
@@ -18,11 +17,11 @@ export type VercelAccessStackProps = cdk.StackProps & {
  * no access key in the Vercel dashboard, nothing to rotate, and nothing that
  * keeps working after the deployment that used it is gone.
  *
- * That matters more here than it usually would. The role's whole purpose is
- * `kms:Decrypt` on the credentials key, so a static key pair in a dashboard
- * would be a permanent, unrotated credential that unwraps every seller's
- * refresh token — reintroducing at the platform layer exactly the exposure #11
- * removed from the database.
+ * **It no longer decrypts seller credentials.** That grant was the original
+ * reason this stack existed, and #55 removed the need for it: stored
+ * credentials are unwrapped in the credentials Lambda now, so the Vercel
+ * runtime has nothing to decrypt and is not given the ability. What remains is
+ * S3 access for generated media.
  *
  * The trust policy pins both the audience and the subject, so it is not enough
  * to hold *a* Vercel token: it must be one issued for this team, this project,
@@ -87,22 +86,5 @@ export class VercelAccessStack extends Stack {
       value: subject,
       description: 'The only subject this role will accept.',
     });
-  }
-
-  /**
-   * Let the role unwrap stored credentials.
-   *
-   * `Encrypt` as well as `Decrypt`, because connecting an account and every
-   * token refresh writes a new ciphertext. Deliberately not `kms:*`: the role
-   * has no business scheduling the key for deletion or editing its policy.
-   */
-  public grantCredentialsKey(key: kms.IKey): void {
-    key.grant(
-      this.role,
-      'kms:Encrypt',
-      'kms:Decrypt',
-      'kms:DescribeKey',
-      'kms:GenerateDataKey'
-    );
   }
 }

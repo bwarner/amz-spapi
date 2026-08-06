@@ -87,10 +87,19 @@ const vercelAccessStack = stage.vercel
     )
   : undefined;
 
-if (vercelAccessStack) {
-  // The whole point of the role: unwrap stored seller credentials.
-  vercelAccessStack.grantCredentialsKey(credentialsKeyStack.key);
+// The credentials function imports the key's ARN by export name to grant itself
+// decrypt (#55). `Fn.importValue` is an opaque token, so CDK cannot infer the
+// ordering from it — without this, `cdk deploy --all` on a fresh account can
+// attempt the Lambdas before the export exists and fail on `No export named`.
+lambdasStack.addDependency(credentialsKeyStack);
 
+if (vercelAccessStack) {
+  // No KMS grant. It was the original purpose of this role, and #55 removed the
+  // need for it — stored credentials are unwrapped in the credentials Lambda,
+  // so the Vercel runtime has nothing to decrypt. Leaving the grant in place
+  // would leave the capability standing with nothing using it, which is the
+  // definition of what should be revoked.
+  //
   // Reuse the media stack's own runtime policy rather than restating S3
   // permissions here, so the two cannot drift apart.
   vercelAccessStack.role.addManagedPolicy(mediaAssetsStack.runtimePolicy);
