@@ -1,4 +1,6 @@
 import { extractText } from 'unpdf';
+import { loggerFor } from './logger';
+const log = loggerFor('pdf');
 
 /**
  * Extract text from a PDF, page by page.
@@ -33,9 +35,12 @@ export async function extractPdfText(buffer: Buffer): Promise<{
   } catch (error) {
     // A malformed or encrypted PDF must not fail the upload — the file is
     // already stored; it just cannot be classified from its text.
-    console.warn(
-      '[pdf] text extraction failed',
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.warn(
+      {
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'text extraction failed'
     );
     return { pages: [], text: '', looksScannedOrArtwork: true };
   }

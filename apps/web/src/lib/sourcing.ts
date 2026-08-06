@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { getCachedSourceFacts, setCachedSourceFacts } from './source-cache';
 import { withPaidCall } from './cost-ledger';
+import { loggerFor } from './logger';
+const log = loggerFor('sourcing');
 
 /**
  * Supplier sourcing search over Alibaba.
@@ -247,7 +249,7 @@ export async function searchAlibabaSuppliers(
     cacheKey
   );
   if (cached?.products?.length) {
-    console.log('[sourcing] cache HIT', keywords.join(' | '));
+    log.info({ detail: keywords.join(' | ') }, 'cache HIT');
     return { products: cached.products, cacheHit: true };
   }
 

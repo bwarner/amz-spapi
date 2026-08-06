@@ -6,6 +6,8 @@ import {
   upsertDocument,
   collectionName,
 } from '@amz-spapi/couchbase-utils';
+import { loggerFor } from './logger';
+const log = loggerFor('chat-store');
 
 /**
  * Chunked chat persistence:
@@ -247,9 +249,9 @@ async function storedSeqsFor(
     // Fall back to trusting the client rather than failing the save. That
     // reintroduces the over-count, which is a wrong number — losing the turn
     // would be lost work.
-    console.error(
-      '[chat-store] could not read stored seqs',
-      error instanceof Error ? error.message : error
+    log.error(
+      { error: error instanceof Error ? error.message : error },
+      'could not read stored seqs'
     );
     return new Map();
   }

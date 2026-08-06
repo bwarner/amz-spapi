@@ -5,6 +5,8 @@ import { spApiClientFor } from './amazon-clients';
 import { listAmazonConnections } from './amazon-connections';
 import { getCachedSourceFacts, setCachedSourceFacts } from './source-cache';
 import { withPaidCall } from './cost-ledger';
+import { loggerFor } from './logger';
+const log = loggerFor('source-reader');
 
 /**
  * Reads a public product/supplier page and distills it to facts plus readable
@@ -1337,7 +1339,7 @@ export async function readSourcePage(params: {
   const cacheKeyUrl = cleanUrl(url.toString());
   const cached = await getCachedSourceFacts<CachedSource>(cacheKeyUrl);
   if (cached?.facts && cached.readerVersion === READER_VERSION) {
-    console.log('[source-reader] cache HIT', cacheKeyUrl);
+    log.info({ cacheKeyUrl }, 'cache HIT');
     return {
       facts: cached.facts,
       text: cached.text,
@@ -1346,12 +1348,15 @@ export async function readSourcePage(params: {
       cacheHit: true,
     };
   }
-  console.log(
-    '[source-reader] cache MISS',
-    cacheKeyUrl,
-    cached?.facts
-      ? `(reader v${cached.readerVersion ?? 1} → v${READER_VERSION})`
-      : ''
+  log.info(
+    {
+      cacheKeyUrl,
+      // Present only when the miss was a reader-version bump rather than an
+      // absent entry — the two have very different causes.
+      staleReaderVersion: cached?.facts ? cached.readerVersion ?? 1 : undefined,
+      readerVersion: READER_VERSION,
+    },
+    'cache MISS'
   );
 
   const succeed = (
@@ -1374,13 +1379,13 @@ export async function readSourcePage(params: {
       params.userId
     );
     if (catalogFacts) {
-      console.log('[source-reader] SP-API catalog HIT', cacheKeyUrl);
+      log.info({ cacheKeyUrl }, 'SP-API catalog HIT');
       return succeed(catalogFacts, catalogFacts.evidence.join('\n'));
     }
   } catch (error) {
-    console.warn(
-      '[source-reader] SP-API catalog lookup failed; scraping instead:',
-      error instanceof Error ? error.message : error
+    log.warn(
+      { error: error instanceof Error ? error.message : error },
+      'SP-API catalog lookup failed; scraping instead'
     );
   }
 

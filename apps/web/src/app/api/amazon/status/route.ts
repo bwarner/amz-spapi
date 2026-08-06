@@ -1,6 +1,8 @@
 import { auth0 } from '../../../../lib/auth0';
 import { listAmazonConnections } from '../../../../lib/amazon-connections';
 import type { CredentialProfileView } from '../../../../services/credential-service';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('amazon/status');
 
 /**
  * GET /api/amazon/status — which Amazon accounts this user has connected.
@@ -60,7 +62,7 @@ async function section(apiType: 'SP_API' | 'ADS_API'): Promise<Section> {
     );
     return { connected: profiles.length > 0, profiles, unavailable: false };
   } catch (error) {
-    console.error('[amazon/status] could not list connections', apiType, error);
+    log.error({ apiType, error }, '[amazon/status] could not list connections');
     return { connected: false, profiles: [], unavailable: true };
   }
 }

@@ -30,6 +30,8 @@ import {
   brandThemeFrom,
   type BrandTheme,
 } from '../../../(dashboard)/a-plus/components/a-plus-design';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-export-zip');
 
 // The whole Seller Central hand-off in one download: instructions, every
 // image pre-cropped/rendered at Amazon's exact upload dims (filenames sort in
@@ -237,9 +239,7 @@ export async function POST(request: Request) {
         : error instanceof Error
         ? error.message
         : String(error);
-    console.error(
-      `[a-plus-export-zip] invalid payload: ${detail.slice(0, 500)}`
-    );
+    log.error(`invalid payload: ${detail.slice(0, 500)}`);
     return Response.json(
       { error: `Invalid export payload: ${detail.slice(0, 200)}` },
       { status: 400 }
@@ -467,12 +467,7 @@ export async function POST(request: Request) {
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        console.error(
-          `[a-plus-export-zip] entry ${spec.baseName} failed: ${detail.slice(
-            0,
-            200
-          )}`
-        );
+        log.error(`entry ${spec.baseName} failed: ${detail.slice(0, 200)}`);
         missing.push({ moduleOrder: spec.moduleOrder, slot: spec.slot });
       }
     }
@@ -508,9 +503,7 @@ export async function POST(request: Request) {
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      console.error(
-        `[a-plus-export-zip] preview composite failed: ${detail.slice(0, 200)}`
-      );
+      log.error(`preview composite failed: ${detail.slice(0, 200)}`);
       warnings.push(
         'The full-page preview image could not be generated — use the on-screen preview instead.'
       );
@@ -544,13 +537,12 @@ export async function POST(request: Request) {
     }
     const zip = zipSync(zippable);
 
-    console.log(
-      `[a-plus-export-zip] ${finalized.length} images, ${
-        missing.length
-      } missing, ${(zip.byteLength / 1024 / 1024).toFixed(1)}MB in ${(
-        (Date.now() - tStart) /
-        1000
-      ).toFixed(1)}s`
+    log.info(
+      `${finalized.length} images, ${missing.length} missing, ${(
+        zip.byteLength /
+        1024 /
+        1024
+      ).toFixed(1)}MB in ${((Date.now() - tStart) / 1000).toFixed(1)}s`
     );
     return new Response(new Uint8Array(zip), {
       headers: {
@@ -563,7 +555,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error(`[a-plus-export-zip] FAILED: ${detail.slice(0, 300)}`);
+    log.error(`FAILED: ${detail.slice(0, 300)}`);
     return Response.json(
       { error: 'Could not build the export kit. Please try again.' },
       { status: 500 }

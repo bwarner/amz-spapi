@@ -40,6 +40,8 @@ import {
   resolveAplusGenerationMode,
   resolveImageModelVariant,
 } from '../../../../lib/image-model-flag';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-generate');
 
 export const maxDuration = 120;
 
@@ -407,8 +409,8 @@ async function generateModulesSingle(
       // Some models reject a non-default temperature — retry without it.
       if (isTemperatureRejection(err)) temperature = undefined;
       if (NoObjectGeneratedError.isInstance(err)) {
-        console.error(
-          `[a-plus-generate] single-call schema mismatch (attempt ${
+        log.error(
+          `single-call schema mismatch (attempt ${
             attempt + 1
           }): ${describeNoObjectError(err)}`
         );
@@ -430,8 +432,8 @@ async function generateModulesSingle(
               reason: `${salvaged.invalid} module(s) failed schema validation and were skipped.`,
             });
           }
-          console.log(
-            `[a-plus-generate] salvaged ${salvaged.modules.length} module(s) from the failed response (${salvaged.invalid} invalid)`
+          log.info(
+            `salvaged ${salvaged.modules.length} module(s) from the failed response (${salvaged.invalid} invalid)`
           );
           return { results, failures };
         }
@@ -441,10 +443,7 @@ async function generateModulesSingle(
   const reason =
     lastError instanceof Error ? lastError.message : String(lastError);
   failures.push({ order: 0, reason });
-  console.error(
-    '[a-plus-generate] single-call module generation FAILED after retry:',
-    reason
-  );
+  log.error({ reason }, 'single-call module generation FAILED after retry');
   return { results, failures };
 }
 
@@ -511,10 +510,8 @@ async function generateModulesParallel(
           // Some models reject a non-default temperature — retry without it.
           if (isTemperatureRejection(err)) temperature = undefined;
           if (NoObjectGeneratedError.isInstance(err)) {
-            console.error(
-              `[a-plus-generate] module ${
-                spec.order
-              } schema mismatch (attempt ${
+            log.error(
+              `module ${spec.order} schema mismatch (attempt ${
                 attempt + 1
               }): ${describeNoObjectError(err)}`
             );
@@ -524,9 +521,9 @@ async function generateModulesParallel(
       const reason =
         lastError instanceof Error ? lastError.message : String(lastError);
       failures.push({ order: spec.order, reason });
-      console.error(
-        `[a-plus-generate] module ${spec.order} (${spec.amazonModuleType}) FAILED after retry:`,
-        reason
+      log.error(
+        { reason },
+        `module ${spec.order} (${spec.amazonModuleType}) FAILED after retry:`
       );
       emit({ type: 'module-failed', order: spec.order, reason });
     })
@@ -593,13 +590,15 @@ export async function POST(request: Request) {
       const tStart = Date.now();
       let phase: 'narrative' | 'package-modules' | 'images' = 'narrative';
 
-      console.log(
-        '[a-plus-generate] start',
-        JSON.stringify({
-          narrativeModel: provider.modelId('fast'),
-          packageModuleModel: provider.modelId('fast'),
-          contextChars: context.length,
-        })
+      log.info(
+        {
+          detail: JSON.stringify({
+            narrativeModel: provider.modelId('fast'),
+            packageModuleModel: provider.modelId('fast'),
+            contextChars: context.length,
+          }),
+        },
+        'start'
       );
       send({ type: 'start', contextChars: context.length });
 
@@ -640,8 +639,8 @@ export async function POST(request: Request) {
           .then((result) => result.output)
           .catch((err: unknown) => {
             const detail = err instanceof Error ? err.message : String(err);
-            console.error(
-              `[a-plus-generate] narrative planning failed — using fallback plan: ${detail.slice(
+            log.error(
+              `narrative planning failed — using fallback plan: ${detail.slice(
                 0,
                 300
               )}`
@@ -658,8 +657,8 @@ export async function POST(request: Request) {
         });
         plan.beats = beats;
         const narrativeMs = Date.now() - tNarrative;
-        console.log(
-          `[a-plus-generate] narrative: ${(narrativeMs / 1000).toFixed(1)}s (${
+        log.info(
+          `narrative: ${(narrativeMs / 1000).toFixed(1)}s (${
             beats.length
           } beats)`
         );
@@ -724,8 +723,8 @@ export async function POST(request: Request) {
           resolveAplusGenerationMode(session.user.sub),
           resolveImageModelVariant(session.user.sub),
         ]);
-        console.log(
-          `[a-plus-generate] generation mode: ${generationMode}, image variant: ${imageVariant}`
+        log.info(
+          `generation mode: ${generationMode}, image variant: ${imageVariant}`
         );
         const moduleGenContext: ModuleGenContext = {
           provider,
@@ -743,8 +742,8 @@ export async function POST(request: Request) {
         // fails schema validation wholesale; per-module generation is far more
         // robust (one small schema per call) — use it as the safety net.
         if (moduleResults.length === 0 && generationMode !== 'parallel') {
-          console.error(
-            '[a-plus-generate] single-call produced no modules — falling back to parallel per-module generation'
+          log.error(
+            'single-call produced no modules — falling back to parallel per-module generation'
           );
           ({ results: moduleResults, failures: moduleFailures } =
             await generateModulesParallel(moduleGenContext));
@@ -759,8 +758,8 @@ export async function POST(request: Request) {
           const missing = moduleSpecs.filter(
             (spec) => !written.has(spec.order)
           );
-          console.error(
-            `[a-plus-generate] ${missing.length} section(s) missing after primary write — topping up via parallel writer`
+          log.error(
+            `${missing.length} section(s) missing after primary write — topping up via parallel writer`
           );
           const topUp = await generateModulesParallel({
             ...moduleGenContext,
@@ -781,10 +780,10 @@ export async function POST(request: Request) {
         // bands exist only when the narrative PLANS a brand beat.)
         ensureLogoBackdrop(moduleResults, humanProductName(input));
         const modulesMs = Date.now() - tModules;
-        console.log(
-          `[a-plus-generate] package modules: ${(modulesMs / 1000).toFixed(
-            1
-          )}s (${moduleResults.length}/${moduleSpecs.length} succeeded)`
+        log.info(
+          `package modules: ${(modulesMs / 1000).toFixed(1)}s (${
+            moduleResults.length
+          }/${moduleSpecs.length} succeeded)`
         );
         send({
           type: 'phase-done',
@@ -864,8 +863,8 @@ export async function POST(request: Request) {
           );
           imageResults = await Promise.all(tasks);
           const imagesMs = Date.now() - tImages;
-          console.log(
-            `[a-plus-generate] images: ${(imagesMs / 1000).toFixed(1)}s (${
+          log.info(
+            `images: ${(imagesMs / 1000).toFixed(1)}s (${
               imageResults.length
             } generated)`
           );
@@ -885,7 +884,7 @@ export async function POST(request: Request) {
         });
 
         const totalMs = Date.now() - tStart;
-        console.log(`[a-plus-generate] total: ${(totalMs / 1000).toFixed(1)}s`);
+        log.info(`total: ${(totalMs / 1000).toFixed(1)}s`);
 
         send({
           type: 'final',
@@ -924,10 +923,7 @@ export async function POST(request: Request) {
       } catch (error) {
         const elapsed = ((Date.now() - tStart) / 1000).toFixed(1);
         const detail = error instanceof Error ? error.message : String(error);
-        console.error(
-          `[a-plus-generate] FAILED phase=${phase} after=${elapsed}s`,
-          detail
-        );
+        log.error({ detail }, `FAILED phase=${phase} after=${elapsed}s`);
         const classified = classifyError(detail, phase);
         send({
           type: 'error',

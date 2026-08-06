@@ -2,6 +2,8 @@ import sharp from 'sharp';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { auth0 } from '../../../../lib/auth0';
 import { createAssetS3Client, getAsset } from '../../../../lib/media-assets';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-asset-export');
 
 // Exact-dimension asset export for Premium A+ NATIVE modules: the seller
 // uploads raw photos into Amazon's image slots, so every download leaves the
@@ -79,11 +81,8 @@ export async function GET(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Asset export failed.';
-    console.error(
-      `[a-plus-asset-export] FAILED (asset=${assetId}, ${width}x${height}): ${message.slice(
-        0,
-        300
-      )}`
+    log.error(
+      `FAILED (asset=${assetId}, ${width}x${height}): ${message.slice(0, 300)}`
     );
     return Response.json({ error: 'Could not export image.' }, { status: 500 });
   }

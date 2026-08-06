@@ -13,6 +13,8 @@ import {
   brandThemeFrom,
   type BrandTheme,
 } from '../../../(dashboard)/a-plus/components/a-plus-design';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-module-image');
 
 // Needs the AWS SDK + S3 to inline private asset images, so run on Node.
 export const runtime = 'nodejs';
@@ -185,9 +187,7 @@ export async function POST(request: Request) {
         : error instanceof Error
         ? error.message
         : String(error);
-    console.error(
-      `[a-plus-module-image] invalid payload: ${detail.slice(0, 500)}`
-    );
+    log.error(`invalid payload: ${detail.slice(0, 500)}`);
     return Response.json(
       { error: `Invalid module payload: ${detail.slice(0, 200)}` },
       { status: 400 }

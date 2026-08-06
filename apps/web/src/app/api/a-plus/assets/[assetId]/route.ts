@@ -3,6 +3,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import sharp from 'sharp';
 import { auth0 } from '../../../../../lib/auth0';
 import { createAssetS3Client, getAsset } from '../../../../../lib/media-assets';
+import { loggerFor } from '../../../../../lib/logger';
+const log = loggerFor('assets');
 
 // sharp requires the Node runtime.
 export const runtime = 'nodejs';
@@ -60,10 +62,13 @@ export async function GET(
     // A bare `catch {}` here turned every lookup failure into an unexplained
     // "500 in 254ms" in the dev log. A 500 is our bug by definition, so the
     // cause has to reach the terminal.
-    console.error(
-      '[assets] lookup failed',
-      assetId,
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.error(
+      {
+        assetId,
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'lookup failed'
     );
     return Response.json({ error: 'Asset lookup failed.' }, { status: 500 });
   }
@@ -117,10 +122,13 @@ export async function GET(
       // Falling through to the signed URL is the right behaviour — the preview
       // still works — but silently means a permanently broken thumbnail path
       // looks like success. Warn, don't fail.
-      console.warn(
-        '[assets] thumbnail failed, serving full resolution',
-        assetId,
-        error instanceof Error ? `${error.name}: ${error.message}` : error
+      log.warn(
+        {
+          assetId,
+          error:
+            error instanceof Error ? `${error.name}: ${error.message}` : error,
+        },
+        'thumbnail failed, serving full resolution'
       );
     }
   }

@@ -43,7 +43,7 @@ export function getConfig() {
       clientId: process.env.AUTH0_CLIENT_ID,
       clientSecret: process.env.AUTH0_CLIENT_SECRET,
       secret: process.env.AUTH0_SECRET,
-      audience: process.env.AUTH0_AUDIENCE
+      audience: process.env.AUTH0_AUDIENCE,
     },
 
     // Stripe configuration
@@ -52,12 +52,12 @@ export function getConfig() {
       publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
       webhookSecret: process.env.STRIPE_ENDPOINT_SECRET,
       mvsProductId: process.env.STRIPE_MVS_PRODUCT_ID,
-      mvsPriceId: process.env.STRIPE_MVS_PRICE_ID
+      mvsPriceId: process.env.STRIPE_MVS_PRICE_ID,
     },
 
     // Feature flags
     features: {
-      stripeEnabled: !!process.env.STRIPE_SECRET_KEY
-    }
+      stripeEnabled: !!process.env.STRIPE_SECRET_KEY,
+    },
   };
 }

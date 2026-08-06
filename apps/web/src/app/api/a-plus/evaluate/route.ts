@@ -17,6 +17,8 @@ import {
   buildNarrativeContextBlock,
   humanProductName,
 } from '../../../../lib/aplus-generation-prompts';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-evaluate');
 
 export const maxDuration = 60;
 
@@ -131,8 +133,8 @@ export async function POST(request: Request) {
         prompt,
       });
       const result = aplusJudgeResultSchema.parse(res.output);
-      console.log(
-        `[a-plus-evaluate] ${provider.modelId('default')}: ${(
+      log.info(
+        `${provider.modelId('default')}: ${(
           (Date.now() - tStart) /
           1000
         ).toFixed(1)}s, ${result.suggestions.length} suggestions`
@@ -146,10 +148,10 @@ export async function POST(request: Request) {
       // Some models reject a non-default temperature — retry without it.
       if (isTemperatureRejection(err)) temperature = undefined;
       if (NoObjectGeneratedError.isInstance(err)) {
-        console.error(
-          `[a-plus-evaluate] schema mismatch (attempt ${
-            attempt + 1
-          }): finishReason=${err.finishReason ?? 'unknown'}`
+        log.error(
+          `schema mismatch (attempt ${attempt + 1}): finishReason=${
+            err.finishReason ?? 'unknown'
+          }`
         );
       }
     }
@@ -157,9 +159,7 @@ export async function POST(request: Request) {
 
   const detail =
     lastError instanceof Error ? lastError.message : String(lastError);
-  console.error(
-    `[a-plus-evaluate] FAILED after retry: ${detail.slice(0, 300)}`
-  );
+  log.error(`FAILED after retry: ${detail.slice(0, 300)}`);
   return Response.json(
     { error: 'Could not evaluate the content. Please try again.' },
     { status: 502 }

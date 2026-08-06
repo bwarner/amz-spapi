@@ -27,6 +27,8 @@ import {
   compactGenerationInput,
   humanProductName,
 } from '../../../../lib/aplus-generation-prompts';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-section-regenerate');
 
 export const maxDuration = 60;
 
@@ -177,12 +179,10 @@ export async function POST(request: Request) {
         order: targetBeat.order,
         beat: targetBeat,
       });
-      console.log(
-        `[a-plus-section-regenerate] beat ${targetBeat.order} (${
-          targetBeat.job
-        }/${targetBeat.archetype}): ${((Date.now() - tStart) / 1000).toFixed(
-          1
-        )}s`
+      log.info(
+        `beat ${targetBeat.order} (${targetBeat.job}/${
+          targetBeat.archetype
+        }): ${((Date.now() - tStart) / 1000).toFixed(1)}s`
       );
       return Response.json({ section });
     } catch (err: unknown) {
@@ -190,10 +190,10 @@ export async function POST(request: Request) {
       // Some models reject a non-default temperature — retry without it.
       if (isTemperatureRejection(err)) temperature = undefined;
       if (NoObjectGeneratedError.isInstance(err)) {
-        console.error(
-          `[a-plus-section-regenerate] schema mismatch (attempt ${
-            attempt + 1
-          }): finishReason=${err.finishReason ?? 'unknown'}`
+        log.error(
+          `schema mismatch (attempt ${attempt + 1}): finishReason=${
+            err.finishReason ?? 'unknown'
+          }`
         );
       }
     }
@@ -201,9 +201,7 @@ export async function POST(request: Request) {
 
   const detail =
     lastError instanceof Error ? lastError.message : String(lastError);
-  console.error(
-    `[a-plus-section-regenerate] FAILED after retry: ${detail.slice(0, 300)}`
-  );
+  log.error(`FAILED after retry: ${detail.slice(0, 300)}`);
   return Response.json(
     { error: 'Could not regenerate this section. Please try again.' },
     { status: 502 }
