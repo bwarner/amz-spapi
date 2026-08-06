@@ -5,21 +5,13 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
-import {
-  useRef,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useState,
-  useCallback,
-} from 'react';
+import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Send,
   Sparkles,
   Loader2,
-  ArrowDown,
   AlertCircle,
   Paperclip,
   X,
@@ -31,6 +23,11 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from '@/components/ui/sidebar';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '../../../components/ai-elements/conversation';
 import { ConversationSidebar } from './conversation-sidebar';
 import { MessageBubble, type AppMessage } from './message-bubble';
 
@@ -167,25 +164,6 @@ function isDocumentFile(file: File): boolean {
 
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
-/**
- * How close to the bottom still counts as "following along".
- *
- * Shared by the auto-scroll and the scroll-to-bottom button so they cannot
- * disagree — a button that appears while the view is still being auto-scrolled
- * is its own kind of flicker.
- */
-const FOLLOW_THRESHOLD_PX = 100;
-
-/**
- * `useLayoutEffect` on the client, `useEffect` on the server.
- *
- * The scroll correction has to run before paint or the wrong position is
- * visible, but `useLayoutEffect` warns when React renders on the server, which
- * it does for this component's first pass.
- */
-const useIsomorphicLayoutEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
-
 type ChatSummary = {
   chatId: string;
   title: string;
@@ -240,15 +218,6 @@ export default function ChatPage() {
   });
 
   const isStreaming = status === 'submitted' || status === 'streaming';
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [showScrollButton, setShowScrollButton] = useState(false);
-  /**
-   * Set whenever a whole conversation is swapped in, so the next scroll jumps
-   * to the end instead of animating through the history that just appeared.
-   * True initially: the first paint of a resumed conversation is the same case.
-   */
-  const jumpToEndRef = useRef(true);
 
   // Resume the last conversation from the server (browser only remembers its id).
   useEffect(() => {
@@ -268,7 +237,6 @@ export default function ChatPage() {
       .then((data: { chat?: { messages?: AppMessage[] } } | null) => {
         if (cancelled) return;
         if (data?.chat?.messages?.length) {
-          jumpToEndRef.current = true;
           setMessages(data.chat.messages);
         }
       })
@@ -287,7 +255,6 @@ export default function ChatPage() {
     window.localStorage.setItem(CHAT_ID_KEY, chatId);
     // Also a whole-conversation swap, even though the new one is empty: the
     // first reply should not animate up from wherever the old one was left.
-    jumpToEndRef.current = true;
     setMessages([]);
     setPendingPhotos([]);
   }, [setMessages]);
@@ -315,7 +282,6 @@ export default function ChatPage() {
         chatIdRef.current = chatId;
         setActiveChatId(chatId);
         window.localStorage.setItem(CHAT_ID_KEY, chatId);
-        jumpToEndRef.current = true;
         setMessages(data.chat?.messages ?? []);
         setPendingPhotos([]);
       } catch {
@@ -354,58 +320,23 @@ export default function ChatPage() {
   ];
 
   /**
-   * Keep the latest message in view, without hijacking the scroll.
+   * Scrolling is `Conversation`'s job now (`use-stick-to-bottom`).
    *
-   * Three cases, which the previous single `scrollIntoView({ behavior:
-   * 'smooth' })` conflated:
+   * What used to be here: a layout effect handling three cases — jump to the
+   * end when a conversation is swapped in, follow smoothly when a message
+   * arrives while you are at the bottom, and leave the scroll alone when you
+   * have scrolled up to read — plus a scroll listener driving a button, and a
+   * shared 100px threshold so the two could not disagree.
    *
-   * 1. **Opening a conversation.** It should already be at the end, so this
-   *    jumps with no animation, in a LAYOUT effect — before the browser paints.
-   *    Running after paint is what produced the blink: the newly loaded
-   *    conversation was painted at the previous scroll position and only then
-   *    animated all the way down through its history.
-   * 2. **A message arriving while you are at the bottom.** Follow it smoothly.
-   * 3. **A message arriving while you have scrolled up to read.** Leave the
-   *    scroll alone — the button that appears is how you come back. Being
-   *    yanked to the end mid-sentence is the same complaint as (1), just later.
+   * All three cases are what `use-stick-to-bottom` exists to solve, and it does
+   * one thing the hand-rolled version did not: it keeps the view pinned while
+   * content GROWS, which is what a streaming reply does between message
+   * updates. The old effect only ran when `messages` changed, so a long token
+   * stream drifted off the bottom until the next update yanked it back.
+   *
+   * The `jumpToEndRef` flag is gone too — `initial="smooth"` on `Conversation`
+   * covers opening a conversation.
    */
-  useIsomorphicLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    if (jumpToEndRef.current) {
-      jumpToEndRef.current = false;
-      // `scrollTop` rather than scrollIntoView: the latter can scroll ancestors
-      // too, which on a short conversation moves the whole page.
-      container.scrollTop = container.scrollHeight;
-      return;
-    }
-
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    if (distanceFromBottom < FOLLOW_THRESHOLD_PX) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
-
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
-      const isNearBottom =
-        scrollHeight - scrollTop - clientHeight < FOLLOW_THRESHOLD_PX;
-      setShowScrollButton(!isNearBottom && messages.length > 0);
-    };
-
-    container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [messages.length]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
 
   /**
    * Send PDFs through the existing document importer.
@@ -601,12 +532,10 @@ export default function ChatPage() {
           </span>
         </div>
 
-        {/* Messages area */}
-        <div
-          ref={scrollContainerRef}
-          className="min-h-0 flex-1 overflow-y-auto"
-        >
-          <div className="mx-auto max-w-3xl xl:max-w-5xl 2xl:max-w-6xl px-4 py-6">
+        {/* Messages area. Scroll behaviour is `use-stick-to-bottom`'s — see the
+            note on the removed effects above. */}
+        <Conversation className="min-h-0 flex-1">
+          <ConversationContent className="mx-auto w-full max-w-3xl xl:max-w-5xl 2xl:max-w-6xl gap-0 px-4 py-6">
             {messages.length === 0 ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
                 <div className="rounded-full bg-primary/10 p-4">
@@ -646,23 +575,12 @@ export default function ChatPage() {
                     }
                   />
                 ))}
-                <div ref={messagesEndRef} />
               </div>
             )}
-          </div>
-        </div>
-
-        {/* Scroll to bottom button */}
-        {showScrollButton && (
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={scrollToBottom}
-            className="absolute bottom-24 left-1/2 -translate-x-1/2 rounded-full shadow-md"
-          >
-            <ArrowDown className="h-4 w-4" />
-          </Button>
-        )}
+          </ConversationContent>
+          {/* Renders itself only when you have scrolled away from the bottom. */}
+          <ConversationScrollButton className="bottom-6 shadow-md" />
+        </Conversation>
 
         {/* Error banner */}
         {error && (
