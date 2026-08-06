@@ -19,6 +19,24 @@ export interface SpApiClientConfig {
   marketplaceId: string; // e.g., 'ATVPDKIKX0DER' for US
   region?: 'NA' | 'EU' | 'FE'; // Defaults to NA
   onTokenRefresh?: (accessToken: string, expiresIn: number) => Promise<void>;
+  /**
+   * Get a fresh access token from somewhere that holds the refresh token (#55).
+   *
+   * The seam that lets a caller keep automatic retry-on-401 **without holding
+   * the refresh token or the client secret**. When set it REPLACES the LWA call
+   * below: this client asks for a token instead of minting one, so the material
+   * that mints it can live somewhere else entirely — for the web app, in the
+   * credentials Lambda.
+   *
+   * Without this the choice was between putting the long-lived secrets in every
+   * runtime that calls Amazon, or losing the 401 retry and making every call
+   * site handle re-authentication itself. Neither is acceptable, and this is
+   * cheaper than both.
+   *
+   * `onTokenRefresh` is not called on this path — whoever mints the token has
+   * already stored it.
+   */
+  mintAccessToken?: () => Promise<string>;
 }
 
 interface LwaTokenResponse {
@@ -182,11 +200,7 @@ export class SpApiClient {
     // Request interceptor: inject access token (and refresh if missing)
     this.httpClient.interceptors.request.use(async (config) => {
       // If no access token, try to get one via refresh
-      if (
-        !this.config.accessToken &&
-        this.config.refreshToken &&
-        this.config.clientSecret
-      ) {
+      if (!this.config.accessToken && this.canRefresh()) {
         await this.refreshAccessToken();
       }
 
@@ -211,8 +225,7 @@ export class SpApiClient {
         if (
           (error.response?.status === 401 || error.response?.status === 403) &&
           !originalRequest._retry &&
-          this.config.refreshToken &&
-          this.config.clientSecret
+          this.canRefresh()
         ) {
           originalRequest._retry = true;
           try {
@@ -286,6 +299,20 @@ export class SpApiClient {
   /**
    * Refresh the LWA access token using refresh token
    */
+  /**
+   * Whether a token can be obtained at all.
+   *
+   * Either this client holds the material to mint one itself, or it was given
+   * a way to ask. Without one of the two, a 401 is final and retrying it would
+   * just send the same rejected credential again.
+   */
+  private canRefresh(): boolean {
+    return Boolean(
+      this.config.mintAccessToken ||
+        (this.config.refreshToken && this.config.clientSecret)
+    );
+  }
+
   private async refreshAccessToken(): Promise<string> {
     // Prevent concurrent refresh requests
     if (this.isRefreshing && this.refreshPromise) {
@@ -295,6 +322,14 @@ export class SpApiClient {
     this.isRefreshing = true;
     this.refreshPromise = (async () => {
       try {
+        // Asking beats minting when the caller offered: it means neither the
+        // refresh token nor the client secret is in this process.
+        if (this.config.mintAccessToken) {
+          const minted = await this.config.mintAccessToken();
+          this.config.accessToken = minted;
+          return minted;
+        }
+
         const response = await axios.post<LwaTokenResponse>(
           this.LWA_TOKEN_URL,
           new URLSearchParams({
