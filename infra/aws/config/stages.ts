@@ -215,9 +215,21 @@ export const STAGES: Record<StageName, StageConfig> = {
     // therefore FAILS SYNTH while any Lambda declares `couchbase: true`. That
     // is the intended state, not an oversight.
     //
-    // The `prod` scope in the `SellAvantProd` bucket does exist, with its
-    // collections. What does not exist is either Secrets Manager secret —
-    // `sellavant-prod-couchbase` or `sellavant-prod-amazon-oauth`.
+    // The `prod` scope in the `SellAvantProd` bucket exists with all its
+    // collections, on the same cluster as dev and staging — isolation is the
+    // per-scope database user (ADR-0005), not the host. Both Secrets Manager
+    // secrets now exist too.
+    //
+    // What is missing is AUTH0. `auth0Domain` and `auth0Audience` read from the
+    // environment and are set nowhere, and a stage without them deploys its
+    // routes UNAUTHENTICATED behind a synth warning rather than a failure.
+    // Filling in the two blocks below would remove the synth failure that is
+    // currently the only thing stopping a public, unauthenticated credentials
+    // API — the one that mints access tokens for every connected seller.
+    //
+    // So this stays absent until prod has an Auth0 tenant. The order is: set
+    // SELLAVANT_PROD_AUTH0_DOMAIN and _AUDIENCE, confirm the authorizer is
+    // attached, and only then add these.
     //
     // Naming them here before they exist would be worse than the current
     // failure: `fromSecretNameV2` resolves by name and checks nothing at synth,
@@ -225,10 +237,8 @@ export const STAGES: Record<StageName, StageConfig> = {
     // against a secret that was never created. A synth failure names the
     // problem; a runtime one names a missing secret three layers down.
     //
-    // To enable prod: create both secrets (`scripts/couchbase-secret.sh prod`,
-    // `scripts/amazon-oauth-secret.sh prod`), converge the scope
-    // (`couchbase-ddl.ts --env prod --apply`, which as of #55 adds
-    // `credentials_locks`), then add both blocks here.
+    // couchbase: { secretName: 'sellavant-prod-couchbase' },
+    // amazonOauth: { secretName: 'sellavant-prod-amazon-oauth' },
   },
 };
 

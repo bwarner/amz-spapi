@@ -74,15 +74,14 @@ case "$STAGE" in
     URL_DEFAULT="$CB_HOST"
     ;;
   prod)
-    # Prod lives in its own bucket, SellAvantProd, whose `prod` scope exists
-    # with its collections. No host is defaulted because prod's Data API
-    # endpoint has never been recorded here — ADR-0010 — so --url is required
-    # the first time. Take it from Capella under Connect > Data API.
+    # Same cluster as dev and staging, a different BUCKET — SellAvantProd,
+    # whose `prod` scope exists with its collections. Isolation comes from the
+    # per-scope database user (ADR-0005), not from the host.
     SECRET=sellavant-prod-couchbase
     PROFILE=sellavant-prod
     BUCKET=SellAvantProd
     USERNAME=sellavant-prod
-    URL_DEFAULT=""
+    URL_DEFAULT="$CB_HOST"
     ;;
   *) die "unknown stage '$STAGE' (expected dev, staging or prod)" ;;
 esac
