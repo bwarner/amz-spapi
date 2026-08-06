@@ -5,6 +5,24 @@ import {
   describeToken,
 } from './api-service';
 
+/**
+ * The logger, captured.
+ *
+ * `api-service` moved off `console.*` onto Pino, so asserting on the console
+ * would silently pass while logging nothing. What these tests actually guard is
+ * that a failure is RECORDED somewhere before the response hides it — so they
+ * assert on the logger the code really uses.
+ */
+const { logError } = vi.hoisted(() => ({ logError: vi.fn() }));
+vi.mock('../lib/logger', () => ({
+  loggerFor: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: logError,
+  }),
+}));
+
 /** A concrete service, since ApiService is abstract by design. */
 class TestService extends ApiService {
   get(path: string) {
@@ -78,7 +96,7 @@ describe('ApiService failure mapping', () => {
   beforeEach(() => {
     // The 401 path describes the token to the log; that is deliberate, and
     // noise in the test output.
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logError.mockClear();
   });
 
   afterEach(() => {
@@ -232,7 +250,7 @@ describe('describeToken', () => {
 
 describe('apiErrorResponse', () => {
   beforeEach(() => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    logError.mockClear();
   });
 
   afterEach(() => {
@@ -270,9 +288,6 @@ describe('apiErrorResponse', () => {
 
     apiErrorResponse(error);
 
-    expect(console.error).toHaveBeenCalledWith(
-      '[api-service] unexpected error',
-      error
-    );
+    expect(logError).toHaveBeenCalledWith({ error }, 'unexpected error');
   });
 });
