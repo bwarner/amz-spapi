@@ -21,7 +21,8 @@ builds the function from that declaration, so adding a Lambda is adding an app.
       "timeoutSeconds": 10, // optional, default 30
       "memoryMb": 256, // optional, default 512
       "routes": ["GET /orders", "GET /orders/{orderId}"], // optional
-      "couchbase": true // optional, default false — see below
+      "couchbase": true, // optional, default false — see below
+      "amazonCredentials": true // optional, default false — see below
     }
   }
 }
@@ -42,7 +43,7 @@ grants the function read on that secret. Then call
 `useSecretsManagerConnection()` once at module scope:
 
 ```ts
-import { useSecretsManagerConnection } from '@amz-spapi/couchbase-secrets';
+import { useSecretsManagerConnection } from '@amz-spapi/aws-secrets';
 
 useSecretsManagerConnection();
 ```
@@ -63,6 +64,26 @@ dependencies, so forgetting either half fails CI with the line to add.
 
 A stage with no `couchbase` block in `infra/aws/config/stages.ts` **fails the
 synth** if any app declares this — `prod` has none, deliberately.
+
+## Using seller credentials
+
+Declare `"amazonCredentials": true` and the stack grants the function
+`kms:Decrypt` on the credentials key and read on the stage's Amazon OAuth
+secret, and sets `KMS_CREDENTIAL_KEY_ID` and `AMAZON_OAUTH_SECRET_ID`.
+
+**This is the heaviest grant in the workspace.** The two together are the
+ability to act as any connected seller: the key turns a stored blob into a
+refresh token, and the client secret turns that refresh token into an access
+token for their Amazon account. Exactly one function has it — `credentials` —
+and a test asserts that. If another function needs a token it should call
+`POST /credentials/{apiType}/{profileName}/access-token`, not hold the key.
+
+It requires `"couchbase": true`, because the encrypted secrets live on the
+profile documents; declaring one without the other fails the synth rather than
+deploying a function that throws on its first request. So does a stage with no
+`amazonOauth` block in `infra/aws/config/stages.ts`.
+
+See #55 and `docs/deployment-environment.md` for creating the secret.
 
 ## Versions and the `live` alias
 

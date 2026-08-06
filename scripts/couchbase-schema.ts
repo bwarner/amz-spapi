@@ -43,6 +43,11 @@ export const SOURCES: Source[] = [
     (c) => ({ domain: 'sp_cache', collection: c })
   ),
   { domain: 'credentials', collection: 'profiles' },
+  // Short-lived single-flight locks for token refresh (#55). Its own
+  // collection rather than a key prefix in `profiles`: every document here
+  // expires on its own, so a collection that is briefly non-empty and normally
+  // empty can be reasoned about — and no profile query can ever see one.
+  { domain: 'credentials', collection: 'locks' },
   ...['assets', 'asset_hashes', 'asset_links'].map((c) => ({
     domain: 'media',
     collection: c,

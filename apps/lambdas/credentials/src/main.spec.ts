@@ -46,7 +46,50 @@ vi.mock('@aws-lambda-powertools/logger', () => ({
   },
 }));
 
-const { handler, subjectOf, redactErrorMessage } = await import('./main.js');
+/**
+ * The minting path, stubbed.
+ *
+ * What is under test here is dispatch — which requests reach the one route that
+ * produces a credential. Whether it produces the right one is
+ * `access-token.spec.ts`, and mocking it keeps a routing regression from being
+ * hidden behind a KMS or Secrets Manager failure.
+ */
+const mintAccessToken = vi.fn();
+vi.mock('./access-token.js', () => ({
+  mintAccessToken: (...args: unknown[]) => mintAccessToken(...args),
+}));
+
+/**
+ * The connect path, stubbed for the same reason.
+ *
+ * `ConnectRequestSchema` is NOT stubbed — body validation is part of what this
+ * route does, and a mocked schema would test nothing.
+ */
+const connect = vi.fn();
+vi.mock('./connect.js', async () => {
+  const actual = await vi.importActual<typeof import('./connect.js')>(
+    './connect.js'
+  );
+  return {
+    ConnectRequestSchema: actual.ConnectRequestSchema,
+    connect: (...args: unknown[]) => connect(...args),
+  };
+});
+
+/** The disconnect path, stubbed for the same reason as the other two. */
+const disconnect = vi.fn();
+vi.mock('./disconnect.js', () => ({
+  disconnect: (...args: unknown[]) => disconnect(...args),
+}));
+
+const {
+  handler,
+  subjectOf,
+  redactErrorMessage,
+  ACCESS_TOKEN_ROUTE,
+  CONNECT_ROUTE,
+  DISCONNECT_ROUTE,
+} = await import('./main.js');
 
 const SUBJECT = 'auth0|69cf4c211c2242f800bcec09';
 
@@ -77,6 +120,25 @@ beforeEach(() => {
   getDocument.mockReset();
   executeQuery.mockResolvedValue({ rows: [stored()] });
   getDocument.mockResolvedValue(null);
+  disconnect
+    .mockReset()
+    .mockResolvedValue({ ok: true, deleted: true, clearedDefault: false });
+  connect.mockReset().mockResolvedValue({
+    ok: true,
+    connected: {
+      profiles: [{ profile_name: 'sp-1', api_type: 'SP_API' }],
+      default: 'sp-1',
+    },
+  });
+  mintAccessToken.mockReset().mockResolvedValue({
+    ok: true,
+    token: {
+      access_token: 'Atza|TOKEN',
+      expires_at: Date.now() + 3600_000,
+      token_type: 'bearer',
+      refreshed: true,
+    },
+  });
 });
 
 describe('identity comes from the token', () => {
@@ -278,5 +340,259 @@ describe('routing', () => {
     const [, statement, options] = executeQuery.mock.calls[0];
     expect(statement).toContain('$apiType');
     expect(options.parameters.apiType).toBe('ADS_API');
+  });
+});
+
+describe('the access-token route', () => {
+  const tokenRequest = (extra: Record<string, unknown> = {}) =>
+    authorized({
+      routeKey: ACCESS_TOKEN_ROUTE,
+      pathParameters: { apiType: 'SP_API', profileName: 'sp-1' },
+      requestContext: {
+        http: { method: 'POST' },
+        authorizer: { jwt: { claims: { sub: SUBJECT } } },
+      },
+      ...extra,
+    });
+
+  it('mints for the token subject, never a caller-supplied id', async () => {
+    const result = await handler(tokenRequest());
+
+    expect(result.statusCode).toBe(200);
+    expect(mintAccessToken).toHaveBeenCalledWith(SUBJECT, 'SP_API', 'sp-1');
+  });
+
+  it('still refuses without a verified subject', async () => {
+    const result = await handler({
+      routeKey: ACCESS_TOKEN_ROUTE,
+      pathParameters: { apiType: 'SP_API', profileName: 'sp-1' },
+    });
+
+    expect(result.statusCode).toBe(401);
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not mint for the profile GET, which shares the path prefix', async () => {
+    await handler(
+      authorized({ pathParameters: { apiType: 'SP_API', profileName: 'sp-1' } })
+    );
+
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('needs POST as well as the path when there is no routeKey', async () => {
+    // The direct-invocation fallback. A GET at a suggestive URL must not reach
+    // the one route that produces a credential.
+    await handler(
+      authorized({
+        rawPath: '/credentials/SP_API/sp-1/access-token',
+        pathParameters: { apiType: 'SP_API', profileName: 'sp-1' },
+        requestContext: {
+          http: { method: 'GET' },
+          authorizer: { jwt: { claims: { sub: SUBJECT } } },
+        },
+      })
+    );
+
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('passes the failure status through rather than flattening it', async () => {
+    // 409 means the user must reconnect; 502 means retry. Collapsing them
+    // sends the UI down the wrong path.
+    mintAccessToken.mockResolvedValue({
+      ok: false,
+      failure: {
+        status: 409,
+        error: 'RefreshTokenRejected',
+        detail: 'Amazon rejected the refresh token.',
+      },
+    });
+
+    const result = await handler(tokenRequest());
+
+    expect(result.statusCode).toBe(409);
+    expect(JSON.parse(result.body).error).toBe('RefreshTokenRejected');
+  });
+
+  it('never logs the token it just issued', async () => {
+    // CloudWatch retains logs and anyone with log access can read them. The
+    // audit line records THAT a token was issued, not what it was.
+    await handler(tokenRequest());
+
+    expect(JSON.stringify(logged)).not.toContain('Atza|TOKEN');
+    expect(JSON.stringify(logged)).toContain('minted access token');
+  });
+});
+
+describe('the connect route', () => {
+  const body = (overrides: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      apiType: 'SP_API',
+      code: 'ANLrEXAMPLECODE',
+      profileName: 'sp-1',
+      marketplaceId: 'ATVPDKIKX0DER',
+      redirectUri: 'https://local.sellavant.com/api/amazon/callback',
+      ...overrides,
+    });
+
+  const connectRequest = (extra: Record<string, unknown> = {}) =>
+    authorized({
+      routeKey: CONNECT_ROUTE,
+      body: body(),
+      requestContext: {
+        http: { method: 'POST' },
+        authorizer: { jwt: { claims: { sub: SUBJECT } } },
+      },
+      ...extra,
+    });
+
+  it('connects for the token subject, never one named in the body', async () => {
+    const result = await handler(connectRequest());
+
+    expect(result.statusCode).toBe(200);
+    expect(connect.mock.calls[0][0]).toBe(SUBJECT);
+  });
+
+  it('ignores a userId smuggled into the body', async () => {
+    await handler(connectRequest({ body: body({ userId: 'auth0|victim' }) }));
+
+    expect(connect.mock.calls[0][0]).toBe(SUBJECT);
+    expect(connect.mock.calls[0][1]).not.toHaveProperty('userId');
+  });
+
+  it('refuses without a verified subject', async () => {
+    const result = await handler({ routeKey: CONNECT_ROUTE, body: body() });
+
+    expect(result.statusCode).toBe(401);
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('does not fall through to the listing when the body is missing', async () => {
+    // `/credentials/connect` has no path parameters, so before the route check
+    // it would have been answered as a list — a connection attempt reported as
+    // a success that connected nothing.
+    const result = await handler(
+      authorized({ routeKey: CONNECT_ROUTE, body: null })
+    );
+
+    expect(result.statusCode).toBe(400);
+    expect(executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('decodes a base64 body, which API Gateway may send', async () => {
+    await handler(
+      connectRequest({
+        body: Buffer.from(body()).toString('base64'),
+        isBase64Encoded: true,
+      })
+    );
+
+    expect(connect).toHaveBeenCalled();
+  });
+
+  it('rejects a malformed body without echoing it', async () => {
+    // The body holds an authorization code; a validation error formatted with
+    // its input would put the code in the response and then in whatever logs it.
+    const result = await handler(
+      connectRequest({ body: body({ code: '', redirectUri: 'javascript:x' }) })
+    );
+
+    expect(result.statusCode).toBe(400);
+    expect(result.body).not.toContain('ANLrEXAMPLECODE');
+    expect(JSON.parse(result.body).detail).toContain('code');
+  });
+
+  it('passes the failure status through rather than flattening it', async () => {
+    connect.mockResolvedValue({
+      ok: false,
+      failure: {
+        status: 409,
+        error: 'AuthorizationCodeRejected',
+        detail: 'Amazon rejected the authorization code.',
+      },
+    });
+
+    const result = await handler(connectRequest());
+
+    expect(result.statusCode).toBe(409);
+    expect(JSON.parse(result.body).error).toBe('AuthorizationCodeRejected');
+  });
+
+  it('never logs the code it was given', async () => {
+    await handler(connectRequest());
+
+    expect(JSON.stringify(logged)).not.toContain('ANLrEXAMPLECODE');
+    expect(JSON.stringify(logged)).toContain('connected an amazon account');
+  });
+});
+
+describe('the disconnect route', () => {
+  const deleteRequest = (extra: Record<string, unknown> = {}) =>
+    authorized({
+      routeKey: DISCONNECT_ROUTE,
+      pathParameters: { apiType: 'SP_API', profileName: 'sp-1' },
+      requestContext: {
+        http: { method: 'DELETE' },
+        authorizer: { jwt: { claims: { sub: SUBJECT } } },
+      },
+      ...extra,
+    });
+
+  it('disconnects for the token subject', async () => {
+    const result = await handler(deleteRequest());
+
+    expect(result.statusCode).toBe(200);
+    expect(disconnect).toHaveBeenCalledWith(SUBJECT, 'SP_API', 'sp-1');
+  });
+
+  it('refuses without a verified subject', async () => {
+    const result = await handler({
+      routeKey: DISCONNECT_ROUTE,
+      pathParameters: { apiType: 'SP_API', profileName: 'sp-1' },
+    });
+
+    expect(result.statusCode).toBe(401);
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('does not delete in answer to a GET on the same path', async () => {
+    // `GET` and `DELETE` share this path, so the method is the entire
+    // distinction. Getting it wrong in the permissive direction destroys a
+    // credential in answer to a read.
+    getDocument.mockResolvedValue(stored());
+
+    await handler(
+      authorized({
+        rawPath: '/credentials/SP_API/sp-1',
+        pathParameters: { apiType: 'SP_API', profileName: 'sp-1' },
+        requestContext: {
+          http: { method: 'GET' },
+          authorizer: { jwt: { claims: { sub: SUBJECT } } },
+        },
+      })
+    );
+
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('reports a delete that found nothing as a success', async () => {
+    disconnect.mockResolvedValue({
+      ok: true,
+      deleted: false,
+      clearedDefault: false,
+    });
+
+    const result = await handler(deleteRequest());
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body).deleted).toBe(false);
+  });
+
+  it('records the destruction in the log', async () => {
+    // The one irreversible action here, so it needs an audit line.
+    await handler(deleteRequest());
+
+    expect(JSON.stringify(logged)).toContain('disconnected an amazon account');
   });
 });
