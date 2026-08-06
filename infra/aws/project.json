@@ -13,7 +13,13 @@
       "outputs": ["{options.reportsDirectory}"],
       "options": {
         "reportsDirectory": "../../coverage/infra/aws"
-      }
+      },
+      "dependsOn": [
+        {
+          "projects": "tag:scope:lambda",
+          "target": "build"
+        }
+      ]
     },
     "synth": {
       "executor": "nx:run-commands",

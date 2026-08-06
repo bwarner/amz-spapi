@@ -8,7 +8,7 @@
     "lambda": {
       "packaging": "zip",
       "handler": "main.handler",
-      "description": "Echoes the caller's verified Auth0 claims — proves the authenticated hop.",
+      "description": "Echoes the caller's verified Auth0 claims \u2014 proves the authenticated hop.",
       "timeoutSeconds": 10,
       "memoryMb": 256,
       "routes": ["GET /me"]
@@ -30,7 +30,12 @@
         "sourcemap": true,
         "generatePackageJson": false,
         "esbuildOptions": {
-          "outExtension": { ".js": ".js" }
+          "outExtension": {
+            ".js": ".js"
+          },
+          "banner": {
+            "js": "import { createRequire as __nodeCreateRequire } from 'node:module';const require = __nodeCreateRequire(import.meta.url);"
+          }
         }
       }
     },

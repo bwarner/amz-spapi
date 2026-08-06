@@ -38,6 +38,37 @@ export type StageConfig = {
   auth0Domain?: string;
   auth0Audience?: string;
   /**
+   * Where this stage's Couchbase connection is kept, for Lambdas that read it
+   * (#55, [ADR-0010](../../docs/adr/0010-lambdas-reach-couchbase-over-the-data-api.md)).
+   *
+   * Just a pointer. The host, bucket, scope and login all live inside the
+   * secret as one unit, because they change together: a rebuilt cluster has a
+   * new hostname AND new users, so splitting them across a template and a
+   * secret would leave a window where a function holds one with the other. One
+   * secret write moves a whole environment, with no deploy.
+   *
+   * The cost, accepted deliberately: the bucket and scope are no longer visible
+   * in a `cdk diff`. That is tolerable only because ADR-0005 gives each scope
+   * its own database user, so a wrong scope fails closed with `access denied`
+   * rather than silently reading another environment's data.
+   *
+   * CDK references the secret by NAME and never holds its contents — creating
+   * it would mean either a generated value that is wrong, or the real password
+   * in the template. Created out of band by `scripts/couchbase-secret.sh`.
+   *
+   * Absent means the stage has no Couchbase. Any Lambda declaring
+   * `couchbase: true` then fails synth rather than deploying broken.
+   */
+  couchbase?: {
+    /**
+     * The Secrets Manager secret holding this environment's whole connection:
+     * `{"dataApiUrl","bucket","scope","username","password"}`. Created out of
+     * band by `scripts/couchbase-secret.sh` — CDK references it by name and
+     * never holds its contents.
+     */
+    secretName: string;
+  };
+  /**
    * Where alarms are sent. Unset creates the topic and the alarms without a
    * subscription — they still record in the console, and an alarm nobody
    * subscribed to is more use than no alarm at all.
@@ -121,6 +152,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Domain: envAuth0('dev', 'DOMAIN') || 'sellavant-dev.us.auth0.com',
     auth0Audience: envAuth0('dev', 'AUDIENCE') || 'https://local.sellavant.com',
     alarmEmail: process.env.SELLAVANT_DEV_ALARM_EMAIL,
+    couchbase: { secretName: 'sellavant-dev-couchbase' },
   },
   staging: {
     stageName: 'staging',
@@ -136,6 +168,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Domain: envAuth0('staging', 'DOMAIN'),
     auth0Audience: envAuth0('staging', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
+    couchbase: { secretName: 'sellavant-staging-couchbase' },
   },
   prod: {
     stageName: 'prod',
@@ -154,6 +187,9 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Domain: envAuth0('prod', 'DOMAIN'),
     auth0Audience: envAuth0('prod', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,
+    // `couchbase` is deliberately absent: prod has no scope yet, and its
+    // bucket is a different cluster (SellAvantProd). A placeholder here would
+    // look configured and fail at the first request instead of at synth.
   },
 };
 

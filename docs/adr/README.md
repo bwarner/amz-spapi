@@ -25,5 +25,6 @@ in the repository?
 | [0007](0007-page-shaped-endpoints-and-gateway-jwt-validation.md) | Private API endpoints are page-shaped, and the gateway validates the token             | Accepted   |
 | [0008](0008-stored-bytes-are-retained-not-billed.md)             | Stored bytes are retained by policy, not metered for billing                           | Accepted   |
 | [0009](0009-scheduling-and-notifications-live-on-aws.md)         | Scheduled sync and Amazon notifications run on AWS, not Vercel Cron                    | Accepted   |
+| [0010](0010-lambdas-reach-couchbase-over-the-data-api.md)        | Lambdas reach Couchbase over the Data API, with the login fetched at runtime           | Accepted   |
 
 Related epic: [#51 — AWS integration](https://github.com/bwarner/amz-spapi/issues/51)

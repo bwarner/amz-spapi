@@ -77,7 +77,9 @@ export const AmazonCredentialProfileSchema = z.object({
   updated_at: z.number(),
 });
 
-export type AmazonCredentialProfile = z.infer<typeof AmazonCredentialProfileSchema>;
+export type AmazonCredentialProfile = z.infer<
+  typeof AmazonCredentialProfileSchema
+>;
 
 /**
  * Helper to create a new SP-API credential profile
@@ -193,7 +195,10 @@ export interface ICredentialRepository {
   /**
    * Get default profile name for a given API type
    */
-  getDefaultProfile(apiType: AmazonApiType, userId?: string): Promise<string | null>;
+  getDefaultProfile(
+    apiType: AmazonApiType,
+    userId?: string
+  ): Promise<string | null>;
 
   /**
    * Set default profile for a given API type
@@ -207,5 +212,117 @@ export interface ICredentialRepository {
   /**
    * Delete a profile
    */
-  deleteProfile(profileName: string, apiType: AmazonApiType, userId?: string): Promise<void>;
+  deleteProfile(
+    profileName: string,
+    apiType: AmazonApiType,
+    userId?: string
+  ): Promise<void>;
+}
+
+/**
+ * Where credential documents live, and how their keys are derived (#55).
+ *
+ * Shared because two runtimes now read the same documents: the Next.js app and
+ * the credentials Lambda. Key derivation duplicated across a network boundary
+ * is a silent bug — the two sides would agree until one was edited, and then
+ * one would write documents the other could not find, with no error anywhere.
+ */
+export const CREDENTIALS_DOMAIN = 'credentials';
+export const CREDENTIALS_COLLECTION = 'profiles';
+
+/** `SP_API::auth0|123::default`. `default` stands in for an absent user. */
+export function credentialDocKey(
+  profileName: string,
+  apiType: AmazonApiType,
+  userId?: string
+): string {
+  return `${apiType}::${userId || 'default'}::${profileName}`;
+}
+
+/** The pointer document naming a user's default profile for an API. */
+export function defaultProfileDocKey(
+  apiType: AmazonApiType,
+  userId?: string
+): string {
+  return `DEFAULT::${apiType}::${userId || 'default'}`;
+}
+
+/**
+ * A profile as stored: metadata in the clear, every secret in one blob.
+ *
+ * The clear fields are the ones queries filter and list on, and none of them is
+ * a credential.
+ */
+export type StoredCredentialProfile = Omit<
+  AmazonCredentialProfile,
+  'client_secret' | 'refresh_token' | 'access_token'
+> & {
+  encrypted_secrets: string;
+  /**
+   * Whether the encrypted blob holds a refresh token.
+   *
+   * Stored in the clear on purpose: a caller has to know whether a connection
+   * can be used, and the alternative is decrypting every profile just to answer
+   * a yes/no. The fact that a secret exists is not the secret.
+   *
+   * Optional only because documents written before #55 lack it. Readers must
+   * treat absence as "unknown" and say so rather than guessing — a wrong
+   * `false` presents a working connection as broken, and a wrong `true` sends
+   * the user down a path that fails at Amazon.
+   */
+  has_refresh_token?: boolean;
+  deleted?: boolean;
+};
+
+/**
+ * The only profile shape allowed to cross a network boundary (#55).
+ *
+ * An ALLOW-LIST, deliberately, rather than omitting the secret fields from the
+ * full profile. The two express the same thing today and diverge the moment
+ * somebody adds a field: a deny-list leaks anything new by default, and the
+ * failure is silent — a secret in a response body that nothing rejects, found
+ * later or not at all. Adding a field here is a decision someone has to make on
+ * purpose.
+ *
+ * `client_secret`, `refresh_token` and `access_token` are absent because they
+ * are secrets. `encrypted_secrets` is absent too: ciphertext the browser cannot
+ * read is still the material, and there is no reason for it to travel.
+ */
+export const PublicCredentialProfileSchema = z.object({
+  profile_name: z.string(),
+  api_type: AmazonApiTypeSchema,
+  user_id: z.string().optional(),
+  client_id: z.string(),
+  marketplace_id: z.string(),
+  region: AmazonRegionSchema.optional(),
+  seller_id: z.string().optional(),
+  advertiser_profile_id: z.string().optional(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  /** Whether a refresh token is held — never the token itself. */
+  has_refresh_token: z.boolean(),
+  /** When the cached access token lapses, so a caller can pre-empt a refresh. */
+  access_token_expires_at: z.number().optional(),
+});
+
+export type PublicCredentialProfile = z.infer<
+  typeof PublicCredentialProfileSchema
+>;
+
+/**
+ * Strip a stored profile down to what may be returned.
+ *
+ * Parsed rather than spread: `z.object` drops unknown keys, so a field added to
+ * storage cannot reach a caller by riding along in the rest of an object. That
+ * is the property being bought here — the schema is the boundary, and this is
+ * the only way through it.
+ */
+export function toPublicProfile(
+  stored: StoredCredentialProfile,
+  options: { hasRefreshToken: boolean }
+): PublicCredentialProfile {
+  return PublicCredentialProfileSchema.parse({
+    ...stored,
+    has_refresh_token: options.hasRefreshToken,
+  });
 }

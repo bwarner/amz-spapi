@@ -20,6 +20,7 @@ type Fixture = {
   handler?: string;
   body?: string;
   routes?: string[];
+  couchbase?: boolean;
 };
 
 /** A throwaway workspace root laid out the way discoverLambdaApps expects. */
@@ -42,6 +43,9 @@ function workspace(apps: Record<string, Fixture>): string {
             handler: fixture.handler ?? 'main.handler',
             description: `${name} fixture`,
             ...(fixture.routes ? { routes: fixture.routes } : {}),
+            ...(fixture.couchbase === undefined
+              ? {}
+              : { couchbase: fixture.couchbase }),
           },
         },
       })
@@ -400,5 +404,149 @@ describe('LambdasStack refusals', () => {
     );
 
     expect(() => synth(root)).toThrow(/Dockerfile/);
+  });
+});
+
+/**
+ * Couchbase access (#55).
+ *
+ * Two properties, and the second one is why the flag is opt-in rather than
+ * derived. The Couchbase user's permissions are scope-wide (ADR-0005), so a
+ * function holding the secret can read EVERY collection in the environment,
+ * `credentials_profiles` included. `health` and `me` must not have it.
+ */
+describe('couchbase configuration', () => {
+  const mixed = () =>
+    workspace({
+      reader: { packaging: 'zip', couchbase: true },
+      bystander: { packaging: 'zip' },
+    });
+
+  it('gives a declaring function the secret pointer', () => {
+    const template = Template.fromStack(stackOf(mixed()));
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: Match.stringLikeRegexp('reader$'),
+      Environment: {
+        Variables: Match.objectLike({
+          CB_CREDENTIALS_SECRET_ID: STAGES.dev.couchbase?.secretName,
+        }),
+      },
+    });
+  });
+
+  it('puts NOTHING about the connection in the template but the name', () => {
+    // The whole point of moving all five into the secret. The template carries
+    // a pointer; the host, bucket, scope and login are fetched at runtime, so
+    // none of them is in the console or in GetFunctionConfiguration — and a
+    // cluster move is a secret write rather than a deploy.
+    const json = JSON.stringify(Template.fromStack(stackOf(mixed())).toJSON());
+
+    for (const leaked of [
+      'CB_PASSWORD',
+      'CB_USERNAME',
+      'CB_DATA_API_URL',
+      'CB_BUCKET',
+      'CB_SCOPE',
+    ]) {
+      expect(json).not.toContain(leaked);
+    }
+  });
+
+  it('grants a declaring function read on the secret', () => {
+    Template.fromStack(stackOf(mixed())).hasResourceProperties(
+      'AWS::IAM::Policy',
+      {
+        PolicyDocument: Match.objectLike({
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith(['secretsmanager:GetSecretValue']),
+              Effect: 'Allow',
+            }),
+          ]),
+        }),
+      }
+    );
+  });
+
+  it('scopes the grant to that one secret, not every secret', () => {
+    const policies = Template.fromStack(stackOf(mixed())).findResources(
+      'AWS::IAM::Policy'
+    );
+    const statements = Object.values(policies).flatMap(
+      (p) =>
+        p.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>
+    );
+    const secretStatements = statements.filter((s) =>
+      JSON.stringify(s['Action']).includes('secretsmanager')
+    );
+
+    expect(secretStatements.length).toBeGreaterThan(0);
+    for (const statement of secretStatements) {
+      expect(JSON.stringify(statement['Resource'])).toContain(
+        STAGES.dev.couchbase?.secretName
+      );
+      expect(statement['Resource']).not.toBe('*');
+    }
+  });
+
+  it('gives a NON-declaring function neither config nor grant', () => {
+    // The important negative. A blanket grant would let `health` — which has no
+    // authorizer and no reason to touch data — read every seller credential in
+    // the environment.
+    const template = Template.fromStack(stackOf(mixed()));
+    const functions = template.findResources('AWS::Lambda::Function');
+    const bystander = Object.values(functions).find((fn) =>
+      String(fn.Properties.FunctionName).endsWith('bystander')
+    );
+
+    const vars = bystander?.Properties.Environment?.Variables ?? {};
+    expect(Object.keys(vars).filter((k) => k.startsWith('CB_'))).toEqual([]);
+
+    // And no policy names the bystander's role alongside the secret.
+    const policies = template.findResources('AWS::IAM::Policy');
+    for (const policy of Object.values(policies)) {
+      const doc = JSON.stringify(policy.Properties.PolicyDocument);
+      if (!doc.includes('secretsmanager')) continue;
+      expect(JSON.stringify(policy.Properties.Roles)).not.toContain(
+        'Bystander'
+      );
+    }
+  });
+
+  it('names the expected secret in the output', () => {
+    // `fromSecretNameV2` does not check existence at synth, so a missing secret
+    // fails at the first invocation. Printing it lets an operator check first.
+    Template.fromStack(stackOf(mixed())).hasOutput('CouchbaseSecretName', {
+      Value: STAGES.dev.couchbase?.secretName,
+    });
+  });
+
+  it('fails synth when the stage has no couchbase configured', () => {
+    // Deliberately an error, not a warning like the Auth0 case: an
+    // unauthenticated route still functions, whereas this function would throw
+    // on every request.
+    const unconfigured: StageConfig = { ...STAGES.dev, couchbase: undefined };
+
+    expect(() =>
+      stackOf(
+        workspace({ reader: { packaging: 'zip', couchbase: true } }),
+        unconfigured
+      )
+    ).toThrow(/couchbase configuration/i);
+  });
+
+  it('leaves a stage with no couchbase alone when nothing declares it', () => {
+    const unconfigured: StageConfig = { ...STAGES.dev, couchbase: undefined };
+
+    expect(() =>
+      stackOf(workspace({ plain: { packaging: 'zip' } }), unconfigured)
+    ).not.toThrow();
+  });
+
+  it('prod declares no couchbase, so it cannot deploy one by accident', () => {
+    // There is no prod scope yet and prod's bucket is a different cluster. A
+    // placeholder would look configured and fail at the first request.
+    expect(STAGES.prod.couchbase).toBeUndefined();
   });
 });

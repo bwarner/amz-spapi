@@ -30,6 +30,20 @@ export type LambdaAppMetadata = {
    * HTTP-facing, which is the normal case for queue and event consumers.
    */
   routes?: string[];
+  /**
+   * Whether this function reads Couchbase (#55).
+   *
+   * Declared per app rather than derived from its `package.json`, because the
+   * dependency is not always direct: `sync-worker` reaches Couchbase through
+   * `@amz-spapi/sp-sync`, so derivation would mean walking the dependency graph
+   * inside CDK and would be wrong in exactly the case that matters.
+   *
+   * It governs a grant, so the default of `false` is the safe one. The
+   * Couchbase user's permissions are scope-wide (ADR-0005), meaning any
+   * function holding this can read every collection in the environment —
+   * including `credentials_profiles`. `health` and `me` must not have it.
+   */
+  couchbase?: boolean;
 };
 
 export type LambdaApp = LambdaAppMetadata & {
@@ -171,6 +185,19 @@ export function parseLambdaMetadata(
     return value;
   };
 
+  // Strict rather than truthy, because this one governs an IAM grant. `"false"`
+  // and `"no"` are both truthy strings, and either would silently widen access
+  // to every collection in the environment.
+  const couchbase = metadata['couchbase'];
+  if (couchbase !== undefined && typeof couchbase !== 'boolean') {
+    fail(
+      name,
+      `metadata.lambda.couchbase must be a boolean, got ${JSON.stringify(
+        couchbase
+      )}`
+    );
+  }
+
   return {
     projectName: project.name,
     metadata: {
@@ -182,6 +209,7 @@ export function parseLambdaMetadata(
           : undefined,
       timeoutSeconds: numberOrUndefined('timeoutSeconds'),
       memoryMb: numberOrUndefined('memoryMb'),
+      couchbase: couchbase === true,
       routes: parseRoutes(name, metadata['routes']),
     },
   };

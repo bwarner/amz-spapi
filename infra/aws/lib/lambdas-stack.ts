@@ -5,6 +5,7 @@ import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import type { StageConfig } from '../config/stages.js';
 import { createAuth0Authorizer } from './auth0-authorizer.js';
@@ -73,6 +74,17 @@ export class LambdasStack extends Stack {
 
       this.functions.set(app.name, fn);
 
+      // Only apps that declared it. The Couchbase user's permissions are
+      // scope-wide (ADR-0005), so a grant here lets the function read every
+      // collection in the environment — including `credentials_profiles`.
+      // Throws when the stage has no Couchbase configured, which fails the
+      // synth rather than deploying a function guaranteed to error on its first
+      // request. Unlike the Auth0 case, which warns: an unauthenticated route
+      // still functions, an unconfigured Couchbase Lambda cannot.
+      if (app.couchbase) {
+        this.couchbaseSecret(config).grantRead(fn);
+      }
+
       // `$LATEST` is mutable and cannot be rolled back to — there is only ever
       // one of it, and deploying over it destroys what was there. Publishing a
       // version per change and pointing a fixed alias at it gives callers one
@@ -120,6 +132,18 @@ export class LambdasStack extends Stack {
       description: 'Subscribe to be told when an alarm fires.',
     });
 
+    // Named in the deploy output because `fromSecretNameV2` does not check that
+    // the secret exists — a missing one fails at the first invocation, not at
+    // deploy. Printing what the stack expects turns that into something the
+    // operator can check before finding out from a 500.
+    if (apps.some((app) => app.couchbase) && config.couchbase) {
+      new CfnOutput(this, 'CouchbaseSecretName', {
+        value: config.couchbase.secretName,
+        description:
+          'Secrets Manager secret holding {"username","password"}. Must exist.',
+      });
+    }
+
     new CfnOutput(this, 'DeployedLambdaCount', {
       value: String(apps.length),
       description: 'Lambda apps discovered under apps/lambdas.',
@@ -144,6 +168,44 @@ export class LambdasStack extends Stack {
       });
     }
   }
+
+  /**
+   * The Couchbase login, referenced rather than created (#55).
+   *
+   * `fromSecretNameV2` because CDK must never hold this value: creating the
+   * secret would mean either a generated string that is wrong and has to be
+   * overwritten by hand — indistinguishable from a real one until the first
+   * 401 — or the real password inside the template. It would also put a shared
+   * cluster credential inside the blast radius of a stack teardown. Created out
+   * of band once per stage; see `docs/deployment-environment.md`.
+   *
+   * By NAME rather than ARN so it survives the secret being recreated, which
+   * changes the random six-character ARN suffix. The cost is that `grantRead`
+   * scopes to `…:secret:<name>-??????` and that existence is not checked at
+   * synth — a missing secret fails on first invocation, which the deploy
+   * checklist covers.
+   *
+   * Built lazily and once: constructing it per function would create duplicate
+   * constructs under different ids for the same secret.
+   */
+  private couchbaseSecret(config: StageConfig): secretsmanager.ISecret {
+    if (!config.couchbase) {
+      throw new Error(
+        `Stage "${config.stageName}" has no couchbase configuration, but a ` +
+          'Lambda declares metadata.lambda.couchbase. Add it to ' +
+          'infra/aws/config/stages.ts, or drop the declaration.'
+      );
+    }
+
+    this.cachedCouchbaseSecret ??= secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'CouchbaseSecret',
+      config.couchbase.secretName
+    );
+    return this.cachedCouchbaseSecret;
+  }
+
+  private cachedCouchbaseSecret?: secretsmanager.ISecret;
 
   private common(app: LambdaApp, config: StageConfig) {
     const functionName = `${config.appName}-${config.stageName}-${app.name}`;
@@ -179,6 +241,15 @@ export class LambdasStack extends Stack {
         SERVICE_NAME: app.name,
         STAGE: config.stageName,
         NODE_OPTIONS: '--enable-source-maps',
+        // A POINTER, and nothing else. The host, bucket, scope and login all
+        // live inside the secret together (ADR-0010): they change as one unit
+        // when a cluster is rebuilt, so one write updates an environment with
+        // no deploy — and nothing can end up holding a new host with an old
+        // login. Only the secret's NAME is here, which is not sensitive and
+        // still says which environment this function belongs to.
+        ...(app.couchbase && config.couchbase
+          ? { CB_CREDENTIALS_SECRET_ID: config.couchbase.secretName }
+          : {}),
       },
     };
   }

@@ -1,0 +1,29 @@
+{
+  "name": "couchbase-secrets",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/couchbase-secrets/src",
+  "projectType": "library",
+  "tags": ["scope:data", "type:lib"],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/couchbase-secrets",
+        "main": "libs/couchbase-secrets/src/index.ts",
+        "tsConfig": "libs/couchbase-secrets/tsconfig.lib.json",
+        "assets": ["libs/couchbase-secrets/*.md"]
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../coverage/libs/couchbase-secrets"
+      }
+    }
+  }
+}
