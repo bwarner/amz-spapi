@@ -138,9 +138,9 @@ const envRegion = (name: StageName) =>
 /**
  * Auth0 settings, overridable per stage without a code change.
  *
- * Dev and prod have committed fallbacks; staging does not, because its tenant
- * is still unknown here. Neither value is a secret — both appear in every token
- * the browser already holds, and the API identifier is public by construction.
+ * All three stages have committed fallbacks. Neither value is a secret — both
+ * appear in every token the browser already holds, and the API identifier is
+ * public by construction.
  *
  * Committed rather than left to the environment because the failure mode of an
  * unset variable is the wrong one. `envAuth0` returning undefined does not fail
@@ -149,10 +149,17 @@ const envRegion = (name: StageName) =>
  * export must not be the difference between protected and open.
  *
  * A wrong tenant baked in here would be worse than either, but that is an
- * argument for verifying the value, not for leaving it out. Both were checked
- * against the live tenant: `sellvant.us.auth0.com` resolves (`sellavant.…` does
- * not — the spelling is deliberate), and `https://www.sellavant.com` is the
- * identifier of the "Sellavant - Prod" API.
+ * argument for verifying the value, not for leaving it out. Every one was
+ * checked against the live tenant's OIDC discovery document:
+ *
+ *   dev      sellavant-dev.us.auth0.com              200
+ *   staging  genai-18232523504408604.us.auth0.com    200
+ *   prod     sellvant.us.auth0.com                   200  (`sellavant.…` 404s —
+ *                                                    the missing `a` is real)
+ *
+ * That check is not ceremony. `.env.staging` carried
+ * `sellvant-dev.us.auth0.com`, which 404s — a typo nobody had hit because
+ * staging has never been deployed.
  */
 const envAuth0 = (name: StageName, key: 'DOMAIN' | 'AUDIENCE') =>
   process.env[`SELLAVANT_${name.toUpperCase()}_AUTH0_${key}`] ||
@@ -198,30 +205,13 @@ export const STAGES: Record<StageName, StageConfig> = {
     allowedOrigins: ['https://staging.sellavant.com'],
     retainAssets: true,
     noncurrentObjectExpirationDays: 60,
-    auth0Domain: envAuth0('staging', 'DOMAIN'),
-    auth0Audience: envAuth0('staging', 'AUDIENCE'),
+    auth0Domain:
+      envAuth0('staging', 'DOMAIN') || 'genai-18232523504408604.us.auth0.com',
+    auth0Audience:
+      envAuth0('staging', 'AUDIENCE') || 'https://staging.sellavant.com',
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-staging-couchbase' },
-    // `amazonOauth` is deliberately absent, so staging FAILS SYNTH while any
-    // Lambda declares `metadata.lambda.amazonCredentials`. That is the intended
-    // state, for two independent reasons:
-    //
-    //   1. staging has no Auth0 tenant configured, so its routes would deploy
-    //      UNAUTHENTICATED behind a synth warning — and the function that
-    //      declares `amazonCredentials` mints access tokens for every connected
-    //      seller. An open route in front of that is the one combination that
-    //      must never ship;
-    //   2. `sellavant-staging-amazon-oauth` does not exist. `fromSecretNameV2`
-    //      resolves by name and checks nothing at synth, so naming it here
-    //      would deploy clean and fail at runtime against a secret nobody
-    //      created.
-    //
-    // It was briefly present, added alongside dev's and prod's without either
-    // check. A test now asserts the invariant directly: a stage holding the
-    // credential secrets must also have Auth0.
-    //
-    // To enable: configure the Auth0 tenant, run
-    // `scripts/amazon-oauth-secret.sh staging`, then restore the line.
+    amazonOauth: { secretName: 'sellavant-staging-amazon-oauth' },
   },
   prod: {
     stageName: 'prod',
