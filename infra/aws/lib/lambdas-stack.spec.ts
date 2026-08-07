@@ -548,10 +548,21 @@ describe('couchbase configuration', () => {
     ).not.toThrow();
   });
 
-  it('prod declares no couchbase, so it cannot deploy one by accident', () => {
-    // There is no prod scope yet and prod's bucket is a different cluster. A
-    // placeholder would look configured and fail at the first request.
-    expect(STAGES.prod.couchbase).toBeUndefined();
+  it('every stage that declares couchbase names a secret', () => {
+    // This replaced an assertion that prod had NO couchbase config, which was
+    // true only until prod was provisioned — a temporary state written down as
+    // a permanent rule, so enabling prod failed a test that was describing the
+    // past rather than an invariant.
+    //
+    // The invariant that actually holds: a stage either has no Couchbase, or
+    // names a secret. An empty or missing name resolves to nothing at synth and
+    // fails at the first request instead.
+    for (const [name, stage] of Object.entries(STAGES)) {
+      if (!stage.couchbase) continue;
+      expect(stage.couchbase.secretName, `${name} names no secret`).toMatch(
+        /^sellavant-(dev|staging|prod)-couchbase$/
+      );
+    }
   });
 });
 
@@ -690,7 +701,23 @@ describe('amazon credential access', () => {
     ).toThrow(/amazonOauth configuration/i);
   });
 
-  it('prod declares no amazonOauth, so it cannot deploy one by accident', () => {
-    expect(STAGES.prod.amazonOauth).toBeUndefined();
+  it('a stage with amazonOauth also has Auth0, or its routes deploy open', () => {
+    // The real invariant, and the reason prod's config stayed commented for as
+    // long as it did. This stack's routes mint access tokens for every
+    // connected seller; a stage with no `auth0Domain` deploys them
+    // UNAUTHENTICATED behind a synth warning rather than a failure. Holding the
+    // credential secrets without an authorizer in front is the combination that
+    // must never ship.
+    for (const [name, stage] of Object.entries(STAGES)) {
+      if (!stage.amazonOauth) continue;
+      expect(
+        stage.auth0Domain,
+        `${name} has secrets but no Auth0`
+      ).toBeTruthy();
+      expect(
+        stage.auth0Audience,
+        `${name} has secrets but no Auth0 audience`
+      ).toBeTruthy();
+    }
   });
 });

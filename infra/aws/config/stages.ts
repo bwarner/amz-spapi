@@ -138,11 +138,28 @@ const envRegion = (name: StageName) =>
 /**
  * Auth0 settings, overridable per stage without a code change.
  *
- * Only dev has a committed fallback, because only dev's tenant is known here.
- * staging and prod read from the environment and are otherwise undefined, which
- * leaves their routes unauthenticated and loudly warned about — a wrong tenant
- * baked into a template would be worse, since it would look configured and
- * reject every real token.
+ * All three stages have committed fallbacks. Neither value is a secret — both
+ * appear in every token the browser already holds, and the API identifier is
+ * public by construction.
+ *
+ * Committed rather than left to the environment because the failure mode of an
+ * unset variable is the wrong one. `envAuth0` returning undefined does not fail
+ * the synth: it deploys the stage's routes UNAUTHENTICATED behind a warning. On
+ * the API that mints access tokens for every connected seller, forgetting an
+ * export must not be the difference between protected and open.
+ *
+ * A wrong tenant baked in here would be worse than either, but that is an
+ * argument for verifying the value, not for leaving it out. Every one was
+ * checked against the live tenant's OIDC discovery document:
+ *
+ *   dev      sellavant-dev.us.auth0.com              200
+ *   staging  genai-18232523504408604.us.auth0.com    200
+ *   prod     sellvant.us.auth0.com                   200  (`sellavant.…` 404s —
+ *                                                    the missing `a` is real)
+ *
+ * That check is not ceremony. `.env.staging` carried
+ * `sellvant-dev.us.auth0.com`, which 404s — a typo nobody had hit because
+ * staging has never been deployed.
  */
 const envAuth0 = (name: StageName, key: 'DOMAIN' | 'AUDIENCE') =>
   process.env[`SELLAVANT_${name.toUpperCase()}_AUTH0_${key}`] ||
@@ -188,8 +205,10 @@ export const STAGES: Record<StageName, StageConfig> = {
     allowedOrigins: ['https://staging.sellavant.com'],
     retainAssets: true,
     noncurrentObjectExpirationDays: 60,
-    auth0Domain: envAuth0('staging', 'DOMAIN'),
-    auth0Audience: envAuth0('staging', 'AUDIENCE'),
+    auth0Domain:
+      envAuth0('staging', 'DOMAIN') || 'genai-18232523504408604.us.auth0.com',
+    auth0Audience:
+      envAuth0('staging', 'AUDIENCE') || 'https://staging.sellavant.com',
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-staging-couchbase' },
     amazonOauth: { secretName: 'sellavant-staging-amazon-oauth' },
@@ -208,37 +227,29 @@ export const STAGES: Record<StageName, StageConfig> = {
       projectName: 'sellavant',
       environment: 'production',
     },
-    auth0Domain: envAuth0('prod', 'DOMAIN'),
-    auth0Audience: envAuth0('prod', 'AUDIENCE'),
+    auth0Domain: envAuth0('prod', 'DOMAIN') || 'sellvant.us.auth0.com',
+    auth0Audience: envAuth0('prod', 'AUDIENCE') || 'https://www.sellavant.com',
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,
-    // `couchbase` and `amazonOauth` are deliberately absent, and prod
-    // therefore FAILS SYNTH while any Lambda declares `couchbase: true`. That
-    // is the intended state, not an oversight.
+    // Every precondition for deploying prod is now met, in this order:
     //
-    // The `prod` scope in the `SellAvantProd` bucket exists with all its
-    // collections, on the same cluster as dev and staging — isolation is the
-    // per-scope database user (ADR-0005), not the host. Both Secrets Manager
-    // secrets now exist too.
+    //   1. the `prod` scope in the `SellAvantProd` bucket, with all its
+    //      collections — same cluster as dev and staging, isolated by the
+    //      per-scope database user (ADR-0005) rather than by host;
+    //   2. both Secrets Manager secrets, created out of band;
+    //   3. an Auth0 tenant and API, so the routes deploy behind the JWT
+    //      authorizer instead of open.
     //
-    // What is missing is AUTH0. `auth0Domain` and `auth0Audience` read from the
-    // environment and are set nowhere, and a stage without them deploys its
-    // routes UNAUTHENTICATED behind a synth warning rather than a failure.
-    // Filling in the two blocks below would remove the synth failure that is
-    // currently the only thing stopping a public, unauthenticated credentials
-    // API — the one that mints access tokens for every connected seller.
+    // (3) was the last to land and the one that mattered: without it a stage
+    // deploys its routes UNAUTHENTICATED behind a synth warning, and this
+    // stack's routes mint access tokens for every connected seller. These two
+    // lines stayed commented for exactly as long as that was true.
     //
-    // So this stays absent until prod has an Auth0 tenant. The order is: set
-    // SELLAVANT_PROD_AUTH0_DOMAIN and _AUDIENCE, confirm the authorizer is
-    // attached, and only then add these.
-    //
-    // Naming them here before they exist would be worse than the current
-    // failure: `fromSecretNameV2` resolves by name and checks nothing at synth,
-    // so prod would deploy clean and every request would fail at runtime
-    // against a secret that was never created. A synth failure names the
-    // problem; a runtime one names a missing secret three layers down.
-    //
-    // couchbase: { secretName: 'sellavant-prod-couchbase' },
-    // amazonOauth: { secretName: 'sellavant-prod-amazon-oauth' },
+    // Naming a secret here before it exists would be its own trap —
+    // `fromSecretNameV2` resolves by name and checks nothing at synth, so prod
+    // would deploy clean and fail at runtime against a secret nobody created.
+    // Both exist; verified with `secretsmanager list-secrets`.
+    couchbase: { secretName: 'sellavant-prod-couchbase' },
+    amazonOauth: { secretName: 'sellavant-prod-amazon-oauth' },
   },
 };
 
