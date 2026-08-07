@@ -6,6 +6,8 @@ import {
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
 import { withVendorSpan } from './telemetry';
+import { loggerFor } from './logger';
+const log = loggerFor('cost');
 
 /**
  * Durable record of metered vendor spend, plus the cap that enforces it.
@@ -203,8 +205,8 @@ export async function assertWithinBudget(params: {
 
   const spent = await spendTodayUsd(params.userId);
   if (spent + params.estimatedCostUsd > cap) {
-    console.warn(
-      `[cost] cap reached for ${userRef(params.userId)}: spent ${spent.toFixed(
+    log.warn(
+      `cap reached for ${userRef(params.userId)}: spent ${spent.toFixed(
         4
       )} + pending ${params.estimatedCostUsd.toFixed(4)} > cap ${cap}`
     );
@@ -243,19 +245,21 @@ export async function recordCost(params: {
   } catch (error) {
     // Losing a ledger write must not fail the user's request, but it must be
     // visible — this is the reconciliation record.
-    console.error(
-      '[cost] ledger write failed',
-      entry.vendor,
-      entry.operation,
-      error instanceof Error ? error.message : error
+    log.error(
+      {
+        vendor: entry.vendor,
+        operation: entry.operation,
+        error: error instanceof Error ? error.message : error,
+      },
+      'ledger write failed'
     );
   }
   try {
     await addToCounter(params.userId, params.costUsd);
   } catch (error) {
-    console.error(
-      '[cost] counter update failed',
-      error instanceof Error ? error.message : error
+    log.error(
+      { error: error instanceof Error ? error.message : error },
+      'counter update failed'
     );
   }
 }

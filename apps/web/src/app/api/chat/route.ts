@@ -42,6 +42,8 @@ import {
   saveChatTurn,
   type ChatUIMessage,
 } from '../../../lib/chat-store';
+import { loggerFor } from '../../../lib/logger';
+const log = loggerFor('chat');
 
 const MANIFEST_IMAGE_PATTERN =
   /!\[(Photo [A-Z]{1,2})\]\(\/api\/a-plus\/assets\/([a-zA-Z0-9_-]+)/g;
@@ -182,10 +184,13 @@ export async function POST(request: Request) {
     // Still falls back to env vars, which is what makes local development
     // without Couchbase work — but it no longer does so in silence.
     credentialsUnreadable = true;
-    console.error(
-      '[chat] could not read stored Amazon credentials for',
-      session.user.sub,
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.error(
+      {
+        sub: session.user.sub,
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'could not read stored Amazon credentials for'
     );
   }
 
@@ -445,9 +450,9 @@ export async function POST(request: Request) {
         });
       } catch (error) {
         // Metering must never cost the seller their answer.
-        console.error(
-          '[chat] usage not recorded',
-          error instanceof Error ? error.message : error
+        log.error(
+          { error: error instanceof Error ? error.message : error },
+          'usage not recorded'
         );
       }
 

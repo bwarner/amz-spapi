@@ -20,6 +20,8 @@ import {
   extractDocument,
   type ExtractionResult,
 } from '../../../../lib/document-extraction';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('documents');
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -199,10 +201,15 @@ export async function POST(request: Request) {
           }
         }
       } catch (error) {
-        console.error(
-          '[documents] box label not stored',
-          file.name,
-          error instanceof Error ? `${error.name}: ${error.message}` : error
+        log.error(
+          {
+            name: file.name,
+            error:
+              error instanceof Error
+                ? `${error.name}: ${error.message}`
+                : error,
+          },
+          'box label not stored'
         );
       }
     }
@@ -231,11 +238,7 @@ export async function POST(request: Request) {
         // extraction — including a budget refusal — must not lose the upload.
         extractionError =
           error instanceof Error ? error.message : 'Extraction failed.';
-        console.error(
-          '[documents] extraction failed',
-          file.name,
-          extractionError
-        );
+        log.error({ name: file.name, extractionError }, 'extraction failed');
       }
     }
 
@@ -271,10 +274,9 @@ export async function POST(request: Request) {
       } catch (error) {
         documentStoreError =
           error instanceof Error ? error.message : 'Could not store document.';
-        console.error(
-          '[documents] extraction not stored',
-          file.name,
-          documentStoreError
+        log.error(
+          { name: file.name, documentStoreError },
+          'extraction not stored'
         );
       }
     }
@@ -330,10 +332,13 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    console.error(
-      '[documents] import failed',
-      file.name,
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.error(
+      {
+        name: file.name,
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'import failed'
     );
     return Response.json(
       { error: 'Could not store the document.' },

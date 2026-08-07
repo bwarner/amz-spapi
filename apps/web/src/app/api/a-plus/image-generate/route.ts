@@ -8,6 +8,8 @@ import {
   getAsset,
   persistGeneratedImageAsset,
 } from '../../../../lib/media-assets';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('a-plus-image-generate');
 
 // Direct image-model generation runs ~8-12s, but allow headroom for slower
 // variants/high quality and cold starts so the request never times out
@@ -132,8 +134,8 @@ export async function POST(request: Request) {
         // Skip unreadable references — text-only generation still works.
       }
     }
-    console.log(
-      `[a-plus-image-generate] references: ${referenceImages.length}/${referenceAssetIds.length} usable`
+    log.info(
+      `references: ${referenceImages.length}/${referenceAssetIds.length} usable`
     );
   }
 
@@ -156,8 +158,8 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Image generation failed.';
-    console.error(
-      `[a-plus-image-generate] FAILED (variant=${variant}, refs=${
+    log.error(
+      `FAILED (variant=${variant}, refs=${
         referenceImages.length
       }): ${message.slice(0, 300)}`
     );

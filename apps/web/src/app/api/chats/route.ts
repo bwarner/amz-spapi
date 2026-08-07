@@ -1,5 +1,7 @@
 import { auth0 } from '../../../lib/auth0';
 import { listChats } from '../../../lib/chat-store';
+import { loggerFor } from '../../../lib/logger';
+const log = loggerFor('chats');
 
 export async function GET() {
   const session = await auth0.getSession();
@@ -13,9 +15,12 @@ export async function GET() {
   } catch (error) {
     // Same reason as the asset route: a 500 with no logged cause is a bug you
     // cannot act on from the dev terminal.
-    console.error(
-      '[chats] list failed',
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.error(
+      {
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'list failed'
     );
     return Response.json(
       { error: 'Could not list conversations.' },

@@ -1,4 +1,6 @@
 import { PostHog } from 'posthog-node';
+import { loggerFor } from './logger';
+const log = loggerFor('posthog');
 
 /**
  * The server-side PostHog client, shared.
@@ -61,10 +63,12 @@ export async function captureServerEvent(params: {
     });
     await posthog.flush();
   } catch (error) {
-    console.error(
-      '[posthog] capture failed',
-      params.event,
-      error instanceof Error ? error.message : error
+    log.error(
+      {
+        event: params.event,
+        error: error instanceof Error ? error.message : error,
+      },
+      'capture failed'
     );
   }
 }

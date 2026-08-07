@@ -2,6 +2,8 @@ import { ingestReportBuffer, isIngestError } from '@amz-spapi/sp-cache';
 import type { ReportKind } from '@amz-spapi/sp-cache';
 import { auth0 } from '../../../../lib/auth0';
 import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('reports');
 
 // Reports are decoded and parsed in-process; sharp-free but Node-only APIs.
 export const runtime = 'nodejs';
@@ -91,10 +93,13 @@ export async function POST(request: Request) {
       fileName: file.name,
     });
   } catch (error) {
-    console.error(
-      '[reports] import failed',
-      file.name,
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.error(
+      {
+        name: file.name,
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'import failed'
     );
     return Response.json(
       {
@@ -110,8 +115,8 @@ export async function POST(request: Request) {
   if (isIngestError(result)) {
     return Response.json(result, { status: 422 });
   }
-  console.log(
-    `[reports] imported ${result.kind} for ${sellerId}: ` +
+  log.info(
+    `imported ${result.kind} for ${sellerId}: ` +
       `${result.rowsNew} new, ${result.rowsDuplicate} duplicate ` +
       `(${result.observedFrom ?? '?'}..${result.observedTo ?? '?'})`
   );

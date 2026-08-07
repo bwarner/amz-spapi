@@ -4,6 +4,8 @@ import { auth0 } from '../../../../lib/auth0';
 import { parseState, redirectUri } from '../../../../lib/amazon-authorize';
 import { ApiError } from '../../../../services/api-service';
 import { credentialService } from '../../../../services/credential-service';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('amazon/callback');
 
 /**
  * GET /api/amazon/callback — where Amazon sends the user back.
@@ -115,7 +117,7 @@ export async function GET(request: NextRequest) {
         ? err.message
         : 'The connection could not be completed.';
 
-    console.error('[amazon/callback] connect failed', message);
+    log.error({ message }, '[amazon/callback] connect failed');
     return settings(request, { error: message });
   }
 }

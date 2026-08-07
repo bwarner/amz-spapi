@@ -7,6 +7,8 @@ import {
 import { summariseBoxLabels } from '@farvisionllc/models';
 import { auth0 } from '../../../../lib/auth0';
 import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
+import { loggerFor } from '../../../../lib/logger';
+const log = loggerFor('reconciliation');
 
 export const runtime = 'nodejs';
 
@@ -72,9 +74,12 @@ export async function GET() {
       shippedSideAvailable: shipped.length > 0,
     });
   } catch (error) {
-    console.error(
-      '[reconciliation] failed',
-      error instanceof Error ? `${error.name}: ${error.message}` : error
+    log.error(
+      {
+        error:
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+      },
+      'failed'
     );
     return Response.json(
       {
