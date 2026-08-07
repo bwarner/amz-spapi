@@ -312,6 +312,26 @@ export default function ChatPage() {
     };
   }, [setMessages]);
 
+  /**
+   * Everything the composer is holding, which belongs to the conversation it
+   * was typed in and to no other.
+   *
+   * Switching conversations used to clear the photos and leave the rest, so a
+   * failed upload announced itself over an empty new chat — "Media storage
+   * needs a fresh AWS session" with nothing to attach it to — and, worse,
+   * attached DOCUMENTS carried across: a report imported while asking about
+   * one thing would be listed in the manifest of an unrelated question, in a
+   * conversation that had never seen the file.
+   *
+   * One function, so the next thing the composer holds cannot be forgotten in
+   * one of the two paths.
+   */
+  const clearComposer = useCallback(() => {
+    setPendingPhotos([]);
+    setPendingDocuments([]);
+    setUploadError(null);
+  }, []);
+
   const handleNewChat = useCallback(() => {
     const chatId = newChatId();
     chatIdRef.current = chatId;
@@ -320,8 +340,8 @@ export default function ChatPage() {
     // Also a whole-conversation swap, even though the new one is empty: the
     // first reply should not animate up from wherever the old one was left.
     setMessages([]);
-    setPendingPhotos([]);
-  }, [setMessages]);
+    clearComposer();
+  }, [setMessages, clearComposer]);
 
   const refreshChatList = useCallback(async () => {
     try {
@@ -347,12 +367,12 @@ export default function ChatPage() {
         setActiveChatId(chatId);
         window.localStorage.setItem(CHAT_ID_KEY, chatId);
         setMessages(data.chat?.messages ?? []);
-        setPendingPhotos([]);
+        clearComposer();
       } catch {
         // Leave the current conversation in place on failure.
       }
     },
-    [setMessages]
+    [setMessages, clearComposer]
   );
 
   const deleteChatById = useCallback(
@@ -564,8 +584,10 @@ export default function ChatPage() {
     const photos = pendingPhotos;
     const documents = pendingDocuments;
     setInput('');
-    setPendingPhotos([]);
-    setPendingDocuments([]);
+    // Including the error: once the message has gone, a complaint about an
+    // attachment that did not make it into it is no longer actionable, and
+    // sat above the composer until something else happened to clear it.
+    clearComposer();
     const combined = [
       text,
       photos.length ? photoManifest(photos) : '',
