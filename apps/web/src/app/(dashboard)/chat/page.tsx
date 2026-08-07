@@ -466,6 +466,19 @@ export default function ChatPage() {
     );
   };
 
+  /**
+   * Stable across renders, so `memo` on MessageBubble actually bites.
+   *
+   * As an inline arrow this was a new function every keystroke, which would
+   * have made every bubble re-render regardless of the memo.
+   */
+  const handleApprovalResponse = useCallback(
+    (id: string, approved: boolean) => {
+      void addToolApprovalResponse({ id, approved });
+    },
+    [addToolApprovalResponse]
+  );
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim();
@@ -570,9 +583,7 @@ export default function ChatPage() {
                     message={message}
                     isLast={index === messages.length - 1}
                     isStreaming={isStreaming}
-                    onApprovalResponse={(id, approved) =>
-                      void addToolApprovalResponse({ id, approved })
-                    }
+                    onApprovalResponse={handleApprovalResponse}
                   />
                 ))}
               </div>

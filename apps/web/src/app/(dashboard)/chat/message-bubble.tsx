@@ -1,5 +1,7 @@
 'use client';
 
+import { memo } from 'react';
+
 import {
   Bot,
   User,
@@ -385,7 +387,25 @@ function ToolCallDisplay({
   );
 }
 
-export function MessageBubble({
+/**
+ * One message, memoized.
+ *
+ * The chat input's state lives in the page component that renders this list, so
+ * every keystroke re-renders that component — and without `memo`, every message
+ * in the conversation with it. Each bubble renders markdown, tables and images,
+ * so on a long conversation that is hundreds of subtrees rebuilt per character
+ * and typing visibly lags.
+ *
+ * Memo only helps if the props are referentially stable, which is why
+ * `onApprovalResponse` is a `useCallback` at the call site. An inline arrow
+ * there would be a new function every render and every bubble would re-render
+ * anyway — the failure mode where `memo` looks applied and does nothing.
+ *
+ * `message` identity comes from `useChat` and is stable per message; `isLast`
+ * and `isStreaming` change only for the last bubble, and only while streaming.
+ * So a keystroke re-renders none of them.
+ */
+function MessageBubbleImpl({
   message,
   isLast,
   isStreaming,
@@ -625,3 +645,5 @@ export function MessageBubble({
     </div>
   );
 }
+
+export const MessageBubble = memo(MessageBubbleImpl);
