@@ -90,46 +90,5 @@ export class CredentialsKeyStack extends Stack {
       value: credentialsKeyAlias(config),
       description: 'Stable alias for the same key; preferred over the ARN.',
     });
-
-    /**
-     * Keep the auto-generated key-ARN export alive while nothing consumes it.
-     *
-     * **This is a migration scaffold with a removal condition — see below.**
-     *
-     * The `vercel-access` stack used to hold `kms:Decrypt` on this key, which
-     * made CDK publish an `ExportsOutputFnGetAtt…` export here and import it
-     * there. #55 removed that grant, so this stack stopped needing the export
-     * and tried to delete it — while the consumer, not yet redeployed, was
-     * still importing it. CloudFormation refuses that, and the deploy rolls
-     * back:
-     *
-     *   Delete canceled. Cannot delete export
-     *   sellavant-<stage>-credentials-key:ExportsOutputFnGetAtt… as it is in
-     *   use by sellavant-<stage>-vercel-access.
-     *
-     * Deploying the consumer first fixes it, and that is what was done in dev.
-     * But the ordering is invisible in the code, `cdk deploy --all` gets it
-     * wrong, and prod still has the old import live — so the next prod deploy
-     * would fail for a reason nobody would connect to a KMS grant removed weeks
-     * earlier.
-     *
-     * `exportValue` publishes the export unconditionally, so this stack never
-     * tries to delete it and the two stacks can deploy in any order.
-     *
-     * NOT `addDependency` on the consumer, which is the other way to force the
-     * order: that would leave a KMS key stack depending on a Vercel OIDC stack
-     * — backwards, permanently coupling key changes to Vercel-role changes —
-     * and it only helps inside a single `cdk deploy --all`.
-     *
-     * REMOVE THIS once every stage has been deployed with the grant gone. By
-     * then nothing imports the export, so deleting it is uneventful. Verify
-     * first, per stage:
-     *
-     *   aws cloudformation list-imports --export-name \
-     *     "<app>-<stage>-credentials-key:ExportsOutputFnGetAttCredentialsKeyA24B74BFArn9B22653B"
-     *
-     * An error saying the export is not imported by any stack is the all-clear.
-     */
-    this.exportValue(this.key.keyArn);
   }
 }
