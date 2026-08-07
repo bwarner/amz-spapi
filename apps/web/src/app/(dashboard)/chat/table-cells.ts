@@ -54,12 +54,21 @@ export function classifyCell(text: string): CellKind {
   return 'prose';
 }
 
+/**
+ * Text long enough to be worth reserving width for.
+ *
+ * The floor exists to stop a sentence being crushed to one word per line by a
+ * neighbouring column that cannot wrap. Applied to everything that is not an
+ * identifier it did the opposite: a fulfilment centre code like "XAB40" is five
+ * characters, one short of the identifier pattern, and was given twelve rems —
+ * pushing the columns that mattered off the side of the table.
+ */
+const WORTH_RESERVING_WIDTH = 24;
+
 /** Tailwind for a cell of that kind. */
-export function cellClass(kind: CellKind): string {
+export function cellClass(kind: CellKind, text = ''): string {
   if (kind === 'identifier') return 'whitespace-nowrap font-mono text-xs';
   // Tabular figures so a column of money lines up on the decimal point.
   if (kind === 'numeric') return 'whitespace-nowrap text-right tabular-nums';
-  // A floor width stops a prose column being crushed to one word per line by a
-  // neighbouring column that cannot wrap.
-  return 'min-w-[12rem]';
+  return text.trim().length > WORTH_RESERVING_WIDTH ? 'min-w-[12rem]' : '';
 }

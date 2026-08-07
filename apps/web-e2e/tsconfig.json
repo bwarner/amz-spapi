@@ -4,8 +4,12 @@
     "allowJs": true,
     "outDir": "../../dist/out-tsc/apps/web-e2e",
     "sourceMap": false,
-    "module": "commonjs",
-    "moduleResolution": "node10"
+    // The workspace is `"type": "module"`, so Playwright loads this project as
+    // ESM — `__filename` does not exist and `import.meta` does. The scaffolded
+    // commonjs/node10 pair contradicted that, which is why the config used
+    // `__filename` and could never actually load.
+    "module": "nodenext",
+    "moduleResolution": "nodenext"
   },
   "include": [
     "**/*.ts",
