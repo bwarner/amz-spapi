@@ -102,6 +102,24 @@ type PendingDocument = {
    */
   preview?: string;
   totalRows?: number;
+  /**
+   * Set when the file was recognised as an Amazon report and INGESTED whole.
+   *
+   * The preview stops being the limit of what can be answered: every row is
+   * stored, and the manifest below says which tool reaches them. This is the
+   * difference between "here are 50 of your 487 rows" and an exact total.
+   */
+  report?: {
+    kind: string;
+    label: string;
+    rowsParsed: number;
+    rowsNew: number;
+    rowsDuplicate: number;
+    /** Already-held rows re-read under the current column mapping. */
+    rowsRefreshed: number;
+    observedFrom?: string;
+    observedTo?: string;
+  };
 };
 
 /**
@@ -115,12 +133,44 @@ type PendingDocument = {
  * sheet, so an id alone would attach a file the agent cannot open — the same
  * silence #72 is about, in a different container. Their rows travel inline,
  * bounded server-side, and a truncated preview says so.
+ *
+ * A spreadsheet the server recognised as an Amazon report gets NO preview at
+ * all, only a statement that it is imported and how to query it.
+ *
+ * That is deliberate, and it is the opposite of what the file needs when it has
+ * NOT been imported. Fifty rows next to a stored file are not context, they are
+ * temptation: an agent that doubts a total will add up the rows it can see,
+ * find a smaller number, and trust its own arithmetic over the tool. That is
+ * not hypothetical — one produced a "definitive answer" from 11 of 121 rows,
+ * declared the correct total wrong, and sent the seller to a spreadsheet
+ * formula. There is nothing in a preview that querying cannot answer better,
+ * and removing it removes the only material for that mistake.
  */
 function documentManifest(documents: PendingDocument[]): string {
   const entries = documents.map((doc) => {
     const head = `- ${doc.fileName}${
       doc.kind ? ` (looks like: ${doc.kind})` : ''
     } — assetId: ${doc.assetId}`;
+    const imported = doc.report
+      ? `\n\n  IMPORTED as ${doc.report.label} (kind: ${doc.report.kind}) — ` +
+        `all ${doc.report.rowsParsed} rows are stored` +
+        (doc.report.observedFrom
+          ? `, covering ${doc.report.observedFrom} to ${doc.report.observedTo}`
+          : '') +
+        (doc.report.rowsRefreshed
+          ? `, of which ${doc.report.rowsRefreshed} were already held and have ` +
+            `just been RE-READ under the current column mapping (so any column ` +
+            `that was missing before is present now)`
+          : '') +
+        `. No rows are shown here on purpose: answer every total, count and ` +
+        `per-ASIN or per-SKU breakdown with total-report-rows (kind: ` +
+        `${doc.report.kind}), which reads all of them. Its figures are the ` +
+        `answer — if one looks wrong, say so and check its measureColumns, but ` +
+        `never replace it with your own arithmetic and never ask the seller to ` +
+        `open a spreadsheet.`
+      : '';
+    // An imported file travels as the statement above and nothing else.
+    if (doc.report) return `${head}${imported}`;
     if (!doc.preview) return head;
     const rows = doc.totalRows != null ? ` — ${doc.totalRows} rows` : '';
     return `${head}${rows}\n\n${doc.preview}`;
@@ -369,6 +419,8 @@ export default function ChatPage() {
             truncated?: boolean;
           };
           spreadsheetError?: string;
+          report?: PendingDocument['report'];
+          reportError?: string;
         };
         if (!res.ok || !data.assetId) {
           failed.push(`${file.name}${data.error ? ` (${data.error})` : ''}`);
@@ -376,6 +428,10 @@ export default function ChatPage() {
         }
         if (data.spreadsheetError)
           failed.push(`${file.name} (${data.spreadsheetError})`);
+        // The file is attached either way; a recognised report that failed to
+        // ingest must still say so rather than quietly arriving as a preview.
+        if (data.reportError)
+          failed.push(`${file.name} as a report (${data.reportError})`);
         attached.push({
           assetId: data.assetId,
           fileName: file.name,
@@ -385,6 +441,7 @@ export default function ChatPage() {
               : undefined,
           preview: data.spreadsheet?.markdown,
           totalRows: data.spreadsheet?.totalRows,
+          report: data.report,
         });
       } catch {
         failed.push(file.name);
@@ -648,10 +705,20 @@ export default function ChatPage() {
                         <p className="max-w-[10rem] truncate text-xs font-medium">
                           {doc.fileName}
                         </p>
-                        {doc.kind && (
+                        {/* What was actually done with it beats what it looked
+                            like: "487 rows imported" is the fact that changes
+                            what the seller can ask for next. */}
+                        {doc.report ? (
                           <p className="text-[10px] text-muted-foreground">
-                            {doc.kind.replace(/-/g, ' ')}
+                            {doc.report.label} — {doc.report.rowsParsed} rows
+                            imported
                           </p>
+                        ) : (
+                          doc.kind && (
+                            <p className="text-[10px] text-muted-foreground">
+                              {doc.kind.replace(/-/g, ' ')}
+                            </p>
+                          )
                         )}
                       </div>
                       <button

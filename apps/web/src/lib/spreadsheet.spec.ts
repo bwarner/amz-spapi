@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import {
+  isBinaryWorkbook,
   previewAsMarkdown,
   readSpreadsheet,
   SpreadsheetError,
+  workbookAsCsv,
 } from './spreadsheet';
 
 /**
@@ -145,5 +147,59 @@ describe('previewAsMarkdown', () => {
 
     expect(markdown).toContain('Data');
     expect(markdown).toContain('Notes');
+  });
+
+  it('sends the agent to the report tool once the file has been imported', () => {
+    // The advice inverts: the alternative the truncation note points at now
+    // exists, and offering an import that already happened is how a seller
+    // gets asked to do the same thing twice.
+    const many = [
+      ['sku'],
+      ...Array.from({ length: 500 }, (_, i) => [`SKU-${i}`]),
+    ];
+
+    const markdown = previewAsMarkdown(
+      readSpreadsheet(workbook({ Big: many })),
+      { label: 'FBA Monthly Storage Fees', kind: 'storage-fee' }
+    );
+
+    expect(markdown).toContain('total-report-rows');
+    expect(markdown).toContain('storage-fee');
+    expect(markdown).toContain('500');
+    expect(markdown).not.toMatch(/offer to\s+import/i);
+  });
+});
+
+describe('workbookAsCsv', () => {
+  it('converts a whole workbook, not a preview of it', () => {
+    // The point of this path is the rows the preview cannot show, so a bound
+    // here would defeat it silently.
+    const many = [
+      ['sku', 'fee'],
+      ...Array.from({ length: 400 }, (_, i) => [`SKU-${i}`, '1.50']),
+    ];
+
+    const csv = workbookAsCsv(workbook({ Fees: many }));
+
+    expect(csv.split('\n').filter(Boolean)).toHaveLength(401);
+    expect(csv).toContain('SKU-399,1.50');
+  });
+
+  it('reads past a blank cover sheet, like the preview does', () => {
+    const csv = workbookAsCsv(workbook({ Cover: [], Data: SIMPLE }));
+    expect(csv).toContain('WIDGET-1');
+  });
+});
+
+describe('isBinaryWorkbook', () => {
+  it('tells a zip workbook from delimited text', () => {
+    // A .csv must reach the report importer as its own bytes: row identity is
+    // a hash of the raw columns, so converting one that did not need it would
+    // import the same export twice with every figure doubled.
+    expect(isBinaryWorkbook(workbook({ Sheet1: SIMPLE }))).toBe(true);
+    expect(isBinaryWorkbook(Buffer.from('sku,units\nA,1\n', 'utf8'))).toBe(
+      false
+    );
+    expect(isBinaryWorkbook(Buffer.from('', 'utf8'))).toBe(false);
   });
 });

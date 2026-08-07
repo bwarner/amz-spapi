@@ -9,20 +9,34 @@
  *
  * Usage:
  *   npx tsx --env-file=apps/web/.env.local scripts/report-rows.ts count <sellerId> [kind]
+ *   npx tsx --env-file=apps/web/.env.local scripts/report-rows.ts migrate <sellerId> [kind]
  *   npx tsx --env-file=apps/web/.env.local scripts/report-rows.ts delete <sellerId> <kind>
+ *
+ * `migrate` rewrites rows to what today's registry would produce, using only
+ * what is already stored — ISO dates and parsed numbers. It is idempotent, and
+ * it is the repair for data whose source file is gone. When the file IS still
+ * to hand, re-importing it is stronger: that re-reads every column.
  */
 import {
   deleteReportImports,
   deleteReportRows,
+  migrateReportRows,
   REPORT_KINDS,
   type ReportKind,
 } from '@amz-spapi/sp-cache';
-import { executeQuery } from '@amz-spapi/couchbase-utils';
+import { collectionName, executeQuery } from '@amz-spapi/couchbase-utils';
+
+/**
+ * Backticked, and flattened per ADR-0005. `rows` is also a N1QL reserved word.
+ * Naming it bare threw before this script could delete anything, which made the
+ * one tool for resetting a remapped report the one tool that did not run.
+ */
+const ROWS = `\`${collectionName('reports', 'rows')}\``;
 
 async function count(sellerId: string, kind?: string) {
   const { rows } = await executeQuery<{ reportKind: string; n: number }>(
     'reports',
-    'SELECT d.reportKind, COUNT(*) AS n FROM `rows` AS d ' +
+    `SELECT d.reportKind, COUNT(*) AS n FROM ${ROWS} AS d ` +
       'WHERE d.sellerId = $sellerId ' +
       (kind ? 'AND d.reportKind = $kind ' : '') +
       'GROUP BY d.reportKind ORDER BY d.reportKind',
@@ -41,7 +55,7 @@ async function main() {
   const [command, sellerId, kind] = process.argv.slice(2);
   if (!command || !sellerId) {
     console.error(
-      'Usage: report-rows.ts <count|delete> <sellerId> [kind]\n' +
+      'Usage: report-rows.ts <count|migrate|delete> <sellerId> [kind]\n' +
         `Kinds: ${REPORT_KINDS.join(', ')}`
     );
     process.exit(1);
@@ -49,6 +63,27 @@ async function main() {
 
   if (command === 'count') {
     await count(sellerId, kind);
+    return;
+  }
+
+  if (command === 'migrate') {
+    const kinds = kind ? [kind as ReportKind] : (REPORT_KINDS as ReportKind[]);
+    if (kind && !REPORT_KINDS.includes(kind as ReportKind)) {
+      console.error(
+        `Unknown kind "${kind}". One of: ${REPORT_KINDS.join(', ')}`
+      );
+      process.exit(1);
+    }
+    for (const target of kinds) {
+      const { scanned, updated } = await migrateReportRows({
+        sellerId,
+        kind: target,
+      });
+      if (!scanned) continue;
+      console.log(
+        `  ${target.padEnd(20)} ${scanned} scanned, ${updated} rewritten`
+      );
+    }
     return;
   }
 

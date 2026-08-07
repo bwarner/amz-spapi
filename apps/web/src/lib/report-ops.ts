@@ -2,6 +2,7 @@ import { SpApiClient, REPORT_TIMEOUT_MS } from '@farvisionllc/sp-client';
 import {
   getCoverage,
   queryLedgerRows,
+  queryReportAggregate,
   syncReport,
   isIngestError,
   type ReportKind,
@@ -65,5 +66,34 @@ export function createReportOps(params: {
         fnsku,
         granularity,
       }),
+    // Also stored rows only, and the same caveat applies: a total of nothing is
+    // not a total of zero. A ReportQueryError from an unknown field name names
+    // the valid ones, so it is allowed to reach the tool and be read there
+    // rather than being flattened into "failed".
+    queryReportAggregate: async ({
+      kind,
+      measure,
+      groupBy,
+      from,
+      to,
+      filters,
+    }) => {
+      const result = await queryReportAggregate({
+        sellerId: params.sellerId,
+        kind: kind as ReportKind,
+        measure,
+        groupBy,
+        from,
+        to,
+        filters,
+      });
+      return {
+        ...result,
+        groups: result.groups.map((group) => ({
+          ...group,
+          key: group.key as Record<string, string | null>,
+        })),
+      };
+    },
   };
 }

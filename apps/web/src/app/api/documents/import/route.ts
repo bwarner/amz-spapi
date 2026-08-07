@@ -3,7 +3,15 @@ import {
   recognizeDocument,
   summariseBoxLabels,
 } from '@farvisionllc/models';
-import { storeBoxLabel, storeExtractedDocument } from '@amz-spapi/sp-cache';
+import {
+  decodeReportBuffer,
+  detectReportKind,
+  ingestReportBuffer,
+  isIngestError,
+  REPORTS,
+  storeBoxLabel,
+  storeExtractedDocument,
+} from '@amz-spapi/sp-cache';
 import { resolveAmazonConnection } from '../../../../lib/amazon-connections';
 import { auth0 } from '../../../../lib/auth0';
 import {
@@ -12,9 +20,11 @@ import {
 } from '../../../../lib/media-assets';
 import { extractPdfText } from '../../../../lib/pdf-text';
 import {
+  isBinaryWorkbook,
   previewAsMarkdown,
   readSpreadsheet,
   SpreadsheetError,
+  workbookAsCsv,
 } from '../../../../lib/spreadsheet';
 import {
   extractDocument,
@@ -24,13 +34,24 @@ import { loggerFor } from '../../../../lib/logger';
 const log = loggerFor('documents');
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+// A recognised report is parsed into rows here as well as previewed, and a
+// year of ledger detail is a large file to parse — the same allowance the
+// reports importer makes.
+export const maxDuration = 120;
 
 /** Artwork can be large; invoices never are. */
 const MAX_BYTES = 64 * 1024 * 1024;
 
 /** Containers that hold a table, whatever the browser calls their mime type. */
 const SPREADSHEET_EXTENSIONS = new Set(['csv', 'tsv', 'xlsx', 'xls', 'xlsm']);
+
+/**
+ * Column share that stands in for a human saying which report this is.
+ *
+ * Higher than the explicit upload route's 0.5: there, someone chose "import a
+ * report", and here a file was merely attached to a sentence.
+ */
+const AUTO_IMPORT_CONFIDENCE = 0.6;
 
 function isSpreadsheetMime(mimeType: string): boolean {
   return (
@@ -127,14 +148,129 @@ export async function POST(request: Request) {
       }
     | undefined;
   let spreadsheetError: string | undefined;
-  if (SPREADSHEET_EXTENSIONS.has(extension) || isSpreadsheetMime(mimeType)) {
+  const isSpreadsheet =
+    SPREADSHEET_EXTENSIONS.has(extension) || isSpreadsheetMime(mimeType);
+
+  /**
+   * An attached spreadsheet that IS an Amazon report goes into the report
+   * importer, whole.
+   *
+   * This is the seam the preview has always pointed at and nothing crossed. A
+   * seller who cannot pull a report over SP-API — because the app lacks the
+   * role, which is the ordinary case for Finance — downloads it from Seller
+   * Central and attaches it, and until now that file arrived as 50 rows and an
+   * apology. Ingested, every row is stored and `total-report-rows` can answer
+   * exactly. The preview still travels alongside: it shows the shape, and it
+   * now says the whole file is available rather than offering an import that
+   * has already happened.
+   *
+   * Identification is by header row, never by filename, and it is held to a
+   * HIGHER bar than the explicit upload route: that one imports on the best
+   * guess because a human said "this is a report", while nobody said anything
+   * here — a file was simply attached to a sentence. So it takes a header no
+   * other report has, or a decisive share of the columns. An ordinary
+   * spreadsheet (a COGS list, a supplier quote) is previewed exactly as before,
+   * and a half-recognised one is not filed under a kind it may not be, where it
+   * would show up later as coverage nothing actually covers.
+   */
+  let report:
+    | {
+        kind: string;
+        label: string;
+        rowsParsed: number;
+        rowsNew: number;
+        rowsDuplicate: number;
+        rowsRefreshed: number;
+        observedFrom?: string;
+        observedTo?: string;
+        unmappedHeaders?: string[];
+      }
+    | undefined;
+  let reportError: string | undefined;
+  if (isSpreadsheet) {
+    try {
+      // Rows belong to a seller account, not to the user who uploaded them.
+      const resolved = await resolveAmazonConnection({
+        apiType: 'SP_API',
+        userId: session.user.sub,
+      });
+      const sellerId = resolved.connected
+        ? resolved.connection.profile.seller_id
+        : undefined;
+      if (sellerId) {
+        // A .csv/.tsv goes in as the bytes the seller downloaded — the importer
+        // decodes them itself, including the UTF-16 Seller Central often emits.
+        // Only a binary workbook needs converting, and converting one that did
+        // not need it would change every row's identity hash.
+        const buffer = isBinaryWorkbook(bytes)
+          ? Buffer.from(workbookAsCsv(bytes), 'utf8')
+          : bytes;
+        // Identification reads the header row, so it only needs the start of
+        // the file. Decoding all of a 64MB export just to look at line one
+        // would hold a second copy of it in memory for nothing.
+        const detection = detectReportKind(
+          decodeReportBuffer(buffer.subarray(0, 64 * 1024))
+        );
+        // Nothing identified is the NORMAL outcome for an arbitrary
+        // spreadsheet: it is previewed, and no claim is made about it.
+        const identified =
+          detection.kind &&
+          (detection.decisive === detection.kind ||
+            detection.confidence >= AUTO_IMPORT_CONFIDENCE)
+            ? detection.kind
+            : undefined;
+        const outcome = identified
+          ? await ingestReportBuffer({
+              sellerId,
+              buffer,
+              source: 'upload',
+              kind: identified,
+              fileName: file.name,
+            })
+          : undefined;
+        if (outcome && isIngestError(outcome)) {
+          // Detection already succeeded and the kind was passed in, so what is
+          // left is a real failure and is worth saying out loud.
+          reportError = outcome.error;
+        } else if (outcome) {
+          report = {
+            kind: outcome.kind,
+            label: REPORTS[outcome.kind].label,
+            rowsParsed: outcome.rowsParsed,
+            rowsNew: outcome.rowsNew,
+            rowsDuplicate: outcome.rowsDuplicate,
+            rowsRefreshed: outcome.rowsRefreshed,
+            observedFrom: outcome.observedFrom,
+            observedTo: outcome.observedTo,
+            unmappedHeaders: outcome.unmappedHeaders.length
+              ? outcome.unmappedHeaders
+              : undefined,
+          };
+          log.info(
+            `imported ${outcome.kind} from attachment for ${sellerId}: ` +
+              `${outcome.rowsNew} new, ${outcome.rowsDuplicate} duplicate ` +
+              `(${outcome.rowsRefreshed} re-read under the current mapping)`
+          );
+        }
+      }
+    } catch (error) {
+      // Never fail the upload over this. The file is stored and previewed
+      // either way, and the response says the import did not happen.
+      reportError =
+        error instanceof Error ? error.message : 'Report import failed.';
+      log.error({ name: file.name, reportError }, 'report import failed');
+    }
+
     try {
       const preview = readSpreadsheet(bytes);
       spreadsheet = {
         sheetName: preview.sheetName,
         totalRows: preview.totalRows,
         truncated: preview.truncated,
-        markdown: previewAsMarkdown(preview),
+        markdown: previewAsMarkdown(
+          preview,
+          report ? { label: report.label, kind: report.kind } : undefined
+        ),
       };
     } catch (error) {
       spreadsheetError =
@@ -317,6 +453,10 @@ export async function POST(request: Request) {
       extractionError,
       spreadsheet,
       spreadsheetError,
+      // Present when the file was recognised as an Amazon report and its rows
+      // were stored — the whole file is now queryable, preview or no preview.
+      report,
+      reportError,
       // Present once the extraction is kept, so a caller can refile the role or
       // group it into a purchase without re-uploading.
       documentId,
