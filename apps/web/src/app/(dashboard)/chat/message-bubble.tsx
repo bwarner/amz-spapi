@@ -26,6 +26,7 @@ import {
 } from '@/components/ai-elements/tool';
 import { approvalSummary, isStalled, toolTitle } from './tool-presentation';
 import { extractDownloads, type ProducedFile } from './downloads';
+import { extractListingToolImages, type ListingImage } from './listing-images';
 import { Button } from '@/components/ui/button';
 import {
   Artifact,
@@ -112,9 +113,6 @@ const LISTING_IMAGE_TOOL_TYPES = new Set([
   'tool-search-catalog',
 ]);
 
-/** Cap for one catalog item's image set so a single lookup can't flood the grid. */
-const CATALOG_IMAGES_MAX = 8;
-
 /**
  * One renderable step of an assistant turn, in the order it happened.
  *
@@ -143,96 +141,12 @@ type MessageBlock =
       approval?: ToolUIPartApproval;
     }
   | { kind: 'aplus'; doc: APlusDocument }
-  | { kind: 'images'; images: Array<{ url: string; label?: string }> }
+  | { kind: 'images'; images: ListingImage[] }
   /**
    * A file the turn produced. Read from the tool result rather than from a
    * markdown link the model had to remember to write.
    */
   | { kind: 'downloads'; files: ProducedFile[] };
-
-type CatalogImageEntry = { variant?: string; link?: string };
-type CatalogImageSet = { images?: CatalogImageEntry[] };
-
-function mainFirst(images: CatalogImageEntry[]): CatalogImageEntry[] {
-  return [...images].sort((a, b) =>
-    a.variant === 'MAIN' ? -1 : b.variant === 'MAIN' ? 1 : 0
-  );
-}
-
-function listingSlotLabel(slot: string): string {
-  if (slot === 'main_product_image_locator') return 'Main';
-  if (slot === 'swatch_product_image_locator') return 'Swatch';
-  const other = slot.match(/^other_product_image_locator_(\d+)$/);
-  return other ? `Image ${other[1]}` : slot;
-}
-
-/** Pull renderable images out of listing / photo tool outputs. */
-function extractListingToolImages(
-  output: unknown
-): Array<{ url: string; label?: string }> {
-  if (!output || typeof output !== 'object') return [];
-  const data = output as {
-    // Own-listing tools: flat {slot|label, url}. Catalog tools: nested
-    // SP-API sets {marketplaceId, images: [{variant, link}]}.
-    images?: Array<
-      { slot?: string; label?: string; url?: string } | CatalogImageSet
-    >;
-    listings?: Array<{ mainImage?: string; title?: string; sku?: string }>;
-    proposals?: Array<{ label?: string; url?: string }>;
-    // Catalog search: one MAIN image per result item.
-    items?: Array<{
-      asin?: string;
-      summaries?: Array<{ itemName?: string }>;
-      images?: CatalogImageSet[];
-    }>;
-  };
-  const collected: Array<{ url: string; label?: string }> = [];
-  const catalogEntries: CatalogImageEntry[] = [];
-  for (const image of data.images ?? []) {
-    if (!image) continue;
-    if ('url' in image && image.url) {
-      collected.push({
-        url: image.url,
-        label:
-          image.label ??
-          (image.slot ? listingSlotLabel(image.slot) : undefined),
-      });
-      continue;
-    }
-    if ('images' in image && Array.isArray(image.images)) {
-      catalogEntries.push(...image.images);
-    }
-  }
-  for (const entry of mainFirst(catalogEntries).slice(0, CATALOG_IMAGES_MAX)) {
-    if (entry.link) {
-      collected.push({ url: entry.link, label: entry.variant });
-    }
-  }
-  for (const item of data.items ?? []) {
-    const images = item?.images?.flatMap((set) => set.images ?? []) ?? [];
-    const main = mainFirst(images)[0];
-    if (main?.link) {
-      collected.push({
-        url: main.link,
-        label: item.summaries?.[0]?.itemName ?? item.asin,
-      });
-    }
-  }
-  for (const listing of data.listings ?? []) {
-    if (listing?.mainImage) {
-      collected.push({
-        url: listing.mainImage,
-        label: listing.title ?? listing.sku,
-      });
-    }
-  }
-  for (const proposal of data.proposals ?? []) {
-    if (proposal?.url) {
-      collected.push({ url: proposal.url, label: proposal.label });
-    }
-  }
-  return collected;
-}
 
 /**
  * A tool call: one line, expandable to what it was asked for and what it
@@ -584,7 +498,7 @@ function MessageBubbleImpl({
                     <figure key={image.url} className="w-24">
                       <a href={image.url} target="_blank" rel="noreferrer">
                         <img
-                          src={image.url}
+                          src={image.thumbUrl ?? image.url}
                           alt={image.label ?? 'Listing image'}
                           loading="lazy"
                           decoding="async"
