@@ -17,6 +17,12 @@ import remarkBreaks from 'remark-breaks';
 import type { UIMessage } from 'ai';
 import { APlusDocumentSchema, type APlusDocument } from '@farvisionllc/models';
 import { APlusPreview } from '@/components/aplus-preview/aplus-preview';
+import {
+  MarkdownTable,
+  MarkdownTableCell,
+  MarkdownTableHead,
+  MarkdownTableRow,
+} from './markdown-table';
 
 export type AppMessage = UIMessage;
 
@@ -40,28 +46,15 @@ function parseAPlusDoc(output: unknown): APlusDocument | null {
 
 const MARKDOWN_COMPONENTS: Components = {
   /**
-   * Wide tables scroll rather than compress.
-   *
-   * A tracking-number table is a dozen columns of fixed-width identifiers; with
-   * nowhere to go it squeezes every column until the values wrap mid-token and
-   * stop being readable as identifiers at all. Its own scroll container keeps
-   * the page from scrolling sideways with it.
+   * Tables get their own component: bordered, scrollable in both directions,
+   * collapsed behind a control once tall, and typeset per cell rather than per
+   * table. See `markdown-table.tsx` for why the old blanket monospace was the
+   * thing making listing tables unreadable.
    */
-  table: ({ children }) => (
-    <div className="my-2 max-w-full overflow-x-auto">
-      <table className="w-max min-w-full text-xs">{children}</table>
-    </div>
-  ),
-  // Identifiers — SKUs, FNSKUs, tracking numbers — read as one token in a
-  // fixed pitch and as noise in a proportional one.
-  td: ({ children }) => (
-    <td className="whitespace-nowrap align-top font-mono text-xs">
-      {children}
-    </td>
-  ),
-  th: ({ children }) => (
-    <th className="whitespace-nowrap text-left align-bottom">{children}</th>
-  ),
+  table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
+  td: ({ children }) => <MarkdownTableCell>{children}</MarkdownTableCell>,
+  th: ({ children }) => <MarkdownTableHead>{children}</MarkdownTableHead>,
+  tr: ({ children }) => <MarkdownTableRow>{children}</MarkdownTableRow>,
   img: ({ src, alt, title }) => {
     if (!src) return null;
     return (
