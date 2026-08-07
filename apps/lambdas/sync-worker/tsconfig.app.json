@@ -21,7 +21,7 @@
       "path": "../../../packages/sp-client/tsconfig.lib.json"
     },
     {
-      "path": "../../../libs/couchbase-secrets/tsconfig.lib.json"
+      "path": "../../../libs/aws-secrets/tsconfig.lib.json"
     }
   ]
 }

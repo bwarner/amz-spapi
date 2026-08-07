@@ -17,6 +17,17 @@ export interface AmazonAdsClientConfig {
   marketplaceId: string; // e.g., 'ATVPDKIKX0DER'
   region?: 'NA' | 'EU' | 'FE'; // Optional region override
   onTokenRefresh?: (accessToken: string, expiresIn: number) => Promise<void>; // Callback to persist new token
+  /**
+   * Get a fresh access token from somewhere that holds the refresh token (#55).
+   *
+   * When set it REPLACES the LWA call below, so this client keeps its automatic
+   * retry-on-401 **without holding the refresh token or the client secret**.
+   * See the identical option on `SpApiClientConfig` for the reasoning.
+   *
+   * `onTokenRefresh` is not called on this path — whoever minted the token has
+   * already stored it.
+   */
+  mintAccessToken?: () => Promise<string>;
 }
 
 interface LwaTokenResponse {
@@ -111,8 +122,7 @@ export class AmazonAdsApiClient {
         if (
           error.response?.status === 401 &&
           !originalRequest._retry &&
-          this.config.refreshToken &&
-          this.config.clientSecret
+          this.canRefresh()
         ) {
           originalRequest._retry = true;
 
@@ -144,7 +154,29 @@ export class AmazonAdsApiClient {
    * Refresh the access token using the refresh token
    * Handles concurrent refresh requests to avoid race conditions
    */
+  /**
+   * Whether a token can be obtained at all.
+   *
+   * Either this client holds the material to mint one, or it was given a way to
+   * ask. Without one of the two a 401 is final, and retrying would just send the
+   * same rejected credential again.
+   */
+  private canRefresh(): boolean {
+    return Boolean(
+      this.config.mintAccessToken ||
+        (this.config.refreshToken && this.config.clientSecret)
+    );
+  }
+
   private async refreshAccessToken(): Promise<string> {
+    // Asking beats minting when the caller offered: it means neither the
+    // refresh token nor the client secret is in this process.
+    if (this.config.mintAccessToken) {
+      const minted = await this.config.mintAccessToken();
+      this.config.accessToken = minted;
+      return minted;
+    }
+
     // If already refreshing, wait for that promise
     if (this.isRefreshing && this.refreshPromise) {
       return this.refreshPromise;

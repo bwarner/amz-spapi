@@ -21,6 +21,7 @@ type Fixture = {
   body?: string;
   routes?: string[];
   couchbase?: boolean;
+  amazonCredentials?: boolean;
 };
 
 /** A throwaway workspace root laid out the way discoverLambdaApps expects. */
@@ -46,6 +47,9 @@ function workspace(apps: Record<string, Fixture>): string {
             ...(fixture.couchbase === undefined
               ? {}
               : { couchbase: fixture.couchbase }),
+            ...(fixture.amazonCredentials === undefined
+              ? {}
+              : { amazonCredentials: fixture.amazonCredentials }),
           },
         },
       })
@@ -548,5 +552,145 @@ describe('couchbase configuration', () => {
     // There is no prod scope yet and prod's bucket is a different cluster. A
     // placeholder would look configured and fail at the first request.
     expect(STAGES.prod.couchbase).toBeUndefined();
+  });
+});
+
+/**
+ * Access to seller credentials (#55).
+ *
+ * The heaviest grant in the workspace: KMS decrypt on the credentials key turns
+ * a stored blob into a refresh token, and the Amazon OAuth secret turns that
+ * refresh token into an access token for the seller's account. Holding both is
+ * the capability, so the tests are mostly about who does NOT have it.
+ */
+describe('amazon credential access', () => {
+  const mixed = () =>
+    workspace({
+      minter: { packaging: 'zip', couchbase: true, amazonCredentials: true },
+      bystander: { packaging: 'zip', couchbase: true },
+    });
+
+  it('gives a declaring function both pointers', () => {
+    Template.fromStack(stackOf(mixed())).hasResourceProperties(
+      'AWS::Lambda::Function',
+      {
+        FunctionName: Match.stringLikeRegexp('minter$'),
+        Environment: {
+          Variables: Match.objectLike({
+            AMAZON_OAUTH_SECRET_ID: STAGES.dev.amazonOauth?.secretName,
+            KMS_CREDENTIAL_KEY_ID: 'alias/sellavant-dev-credentials',
+          }),
+        },
+      }
+    );
+  });
+
+  it('grants it decrypt on the credentials key', () => {
+    const policies = Template.fromStack(stackOf(mixed())).findResources(
+      'AWS::IAM::Policy'
+    );
+    const statements = Object.values(policies).flatMap(
+      (p) =>
+        p.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>
+    );
+    const kmsStatements = statements.filter((s) =>
+      JSON.stringify(s['Action']).includes('kms:Decrypt')
+    );
+
+    expect(kmsStatements).toHaveLength(1);
+    // Imported by export name, so the resource is the key ARN rather than a
+    // wildcard — and rather than the alias ARN, which IAM does not honour.
+    expect(JSON.stringify(kmsStatements[0]['Resource'])).toContain(
+      'sellavant-dev-credentials-key-arn'
+    );
+    expect(kmsStatements[0]['Resource']).not.toBe('*');
+  });
+
+  it('does not edit the key policy, which would be a stack cycle', () => {
+    // `Key.grant` on an OWNED key writes to the key's resource policy, needing
+    // this stack's role ARN inside the key stack while this stack needs the key
+    // ARN — a cycle CloudFormation reports as neither of those things. The key
+    // is imported precisely so the grant is identity-only.
+    const template = Template.fromStack(stackOf(mixed()));
+
+    expect(Object.keys(template.findResources('AWS::KMS::Key'))).toEqual([]);
+  });
+
+  it('gives a function that only declared couchbase neither grant', () => {
+    // The important negative. `sync-worker` reads Couchbase and must not be
+    // able to unwrap what it reads.
+    const template = Template.fromStack(stackOf(mixed()));
+    const functions = template.findResources('AWS::Lambda::Function');
+    const bystander = Object.values(functions).find((fn) =>
+      String(fn.Properties.FunctionName).endsWith('bystander')
+    );
+
+    const vars = bystander?.Properties.Environment?.Variables ?? {};
+    expect(vars['KMS_CREDENTIAL_KEY_ID']).toBeUndefined();
+    expect(vars['AMAZON_OAUTH_SECRET_ID']).toBeUndefined();
+
+    for (const policy of Object.values(
+      template.findResources('AWS::IAM::Policy')
+    )) {
+      const doc = JSON.stringify(policy.Properties.PolicyDocument);
+      if (!doc.includes('kms:Decrypt')) continue;
+      expect(JSON.stringify(policy.Properties.Roles)).not.toContain(
+        'Bystander'
+      );
+    }
+  });
+
+  it('scopes the OAuth secret grant to that one secret', () => {
+    const policies = Template.fromStack(stackOf(mixed())).findResources(
+      'AWS::IAM::Policy'
+    );
+    const statements = Object.values(policies).flatMap(
+      (p) =>
+        p.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>
+    );
+    const oauthStatements = statements.filter((s) =>
+      JSON.stringify(s['Resource']).includes(
+        STAGES.dev.amazonOauth?.secretName ?? 'never'
+      )
+    );
+
+    expect(oauthStatements.length).toBeGreaterThan(0);
+    for (const statement of oauthStatements) {
+      expect(statement['Resource']).not.toBe('*');
+    }
+  });
+
+  it('puts no client secret in the template, only the secret name', () => {
+    const json = JSON.stringify(Template.fromStack(stackOf(mixed())).toJSON());
+
+    expect(json).not.toContain('LWA_CLIENT_SECRET');
+    expect(json).not.toContain('ADS_CLIENT_SECRET');
+  });
+
+  it('names the expected secret in the output', () => {
+    Template.fromStack(stackOf(mixed())).hasOutput('AmazonOauthSecretName', {
+      Value: STAGES.dev.amazonOauth?.secretName,
+    });
+  });
+
+  it('fails synth when the stage has no amazonOauth configured', () => {
+    const unconfigured: StageConfig = { ...STAGES.dev, amazonOauth: undefined };
+
+    expect(() =>
+      stackOf(
+        workspace({
+          minter: {
+            packaging: 'zip',
+            couchbase: true,
+            amazonCredentials: true,
+          },
+        }),
+        unconfigured
+      )
+    ).toThrow(/amazonOauth configuration/i);
+  });
+
+  it('prod declares no amazonOauth, so it cannot deploy one by accident', () => {
+    expect(STAGES.prod.amazonOauth).toBeUndefined();
   });
 });

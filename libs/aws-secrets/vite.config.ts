@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: __dirname,
-  cacheDir: '../../node_modules/.vite/libs/couchbase-secrets',
+  cacheDir: '../../node_modules/.vite/libs/aws-secrets',
   plugins: [],
   test: {
     watch: false,
@@ -16,7 +16,7 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 60_000,
     coverage: {
-      reportsDirectory: '../../coverage/libs/couchbase-secrets',
+      reportsDirectory: '../../coverage/libs/aws-secrets',
       provider: 'v8',
     },
   },

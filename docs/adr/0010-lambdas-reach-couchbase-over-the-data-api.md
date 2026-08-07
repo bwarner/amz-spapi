@@ -51,7 +51,7 @@ would be unsafe.
 
 `libs/couchbase-utils` gained an injected `ConnectionProvider` whose default
 remains the environment, so Vercel, the CLIs and the scripts are unchanged and
-still read all five `CB_*` variables. `libs/couchbase-secrets` supplies the AWS
+still read all five `CB_*` variables. `libs/aws-secrets` supplies the AWS
 implementation and exists so `@aws-sdk/*` lives in a package the Next.js app
 never imports — a dynamic `import()` inside `couchbase-utils` would not be
 enough, since Next's bundler resolves the branch whether or not it runs.

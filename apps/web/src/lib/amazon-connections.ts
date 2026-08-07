@@ -1,20 +1,47 @@
-import type {
-  AmazonApiType,
-  AmazonCredentialProfile,
-} from '@farvisionllc/models';
-import { createSpApiProfile, MARKETPLACE_REGIONS } from '@farvisionllc/models';
-import { getCredentialStore } from './credential-store';
+import type { AmazonApiType } from '@farvisionllc/models';
+import {
+  credentialService,
+  type CredentialProfileView,
+} from '../services/credential-service';
+
+/**
+ * Which Amazon connections the current user has (#55).
+ *
+ * Read from the credentials API, not from the database. Every field here is
+ * metadata — marketplace, region, seller id, advertiser profile id, and a
+ * boolean for whether a refresh token is held. **No secret is in this file's
+ * types**, which is the property that makes the rest of step 5 possible: a
+ * caller that cannot name a refresh token cannot pass one to a client.
+ *
+ * The old `env-self-auth` fallback is gone. It read `LWA_REFRESH_TOKEN` from the
+ * environment and synthesised a connection out of it — a long-lived seller
+ * credential in the Vercel runtime, which is exactly what #55 exists to remove.
+ * It was also already dead: the variable is set in no environment.
+ */
 
 export type AmazonConnection = {
   profileName: string;
-  profile: AmazonCredentialProfile;
+  profile: CredentialProfileView;
   isDefault: boolean;
+  /**
+   * What this connection lacks in order to be usable. Empty means usable.
+   *
+   * Kept as strings because it is shown to the user on the connections page.
+   */
   missing: string[];
 };
 
 type ConnectionFilters = {
   apiType: AmazonApiType;
-  userId: string;
+  /**
+   * Ignored, and kept only so the many call sites that pass it still compile.
+   *
+   * The API takes the caller from the verified JWT, so there is no user to
+   * choose. Passing a different one here does nothing — which is the point, and
+   * is why it is not simply deleted: a signature change would let a call site
+   * silently keep an id it believed was being honoured.
+   */
+  userId?: string;
   marketplaceId?: string;
   profileName?: string;
   requireAdvertiserProfileId?: boolean;
@@ -33,20 +60,28 @@ type ResolveResult =
       candidates: AmazonConnection[];
     };
 
-const ENV_SP_PROFILE_NAME = 'env-self-auth';
-
 function getMissingFields(
-  profile: AmazonCredentialProfile,
+  profile: CredentialProfileView,
   options: Pick<
     ConnectionFilters,
     'apiType' | 'requireAdvertiserProfileId' | 'requireRefreshToken'
   >
-) {
+): string[] {
   const missing: string[] = [];
   if (!profile.client_id) missing.push('client_id');
-  if (options.requireRefreshToken !== false && !profile.refresh_token) {
-    missing.push('refresh_token');
+
+  if (options.requireRefreshToken !== false && !profile.has_refresh_token) {
+    // `has_refresh_token_known: false` means the stored document predates #55
+    // and carries no flag, so `false` here is a default rather than a fact.
+    // Said plainly rather than reported as a definite missing credential — the
+    // remedy differs, and a user told to reconnect a working account will.
+    missing.push(
+      profile.has_refresh_token_known
+        ? 'refresh_token'
+        : 'refresh_token (unverified)'
+    );
   }
+
   if (
     options.apiType === 'ADS_API' &&
     options.requireAdvertiserProfileId &&
@@ -57,36 +92,8 @@ function getMissingFields(
   return missing;
 }
 
-function getEnvSpConnection(userId: string): AmazonConnection | null {
-  const clientId = process.env['LWA_CLIENT_ID'];
-  const clientSecret = process.env['LWA_CLIENT_SECRET'];
-  const refreshToken = process.env['LWA_REFRESH_TOKEN'];
-  const marketplaceId = process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    return null;
-  }
-
-  const profile = createSpApiProfile({
-    profile_name: ENV_SP_PROFILE_NAME,
-    user_id: userId,
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: refreshToken,
-    marketplace_id: marketplaceId,
-    region: MARKETPLACE_REGIONS[marketplaceId] || 'NA',
-  });
-
-  return {
-    profileName: profile.profile_name,
-    profile,
-    isDefault: false,
-    missing: [],
-  };
-}
-
 function matchesMarketplace(
-  profile: AmazonCredentialProfile,
+  profile: CredentialProfileView,
   marketplaceId?: string
 ) {
   return !marketplaceId || profile.marketplace_id === marketplaceId;
@@ -107,60 +114,27 @@ function sortConnections(
   });
 }
 
+/**
+ * Every connection for one API, best first.
+ *
+ * One API call for the whole answer, per ADR-0007 — the previous version made
+ * one call to list names and then one per name to fetch each profile, which was
+ * N+1 against the database and decrypted every profile to answer a question
+ * about none of them.
+ */
 export async function listAmazonConnections(
   options: ConnectionFilters
 ): Promise<AmazonConnection[]> {
-  const credStore = getCredentialStore();
-  const defaultProfileName = await credStore.getDefaultProfile(
-    options.apiType,
-    options.userId
-  );
+  const credentials = await credentialService();
+  const listing = await credentials.list(options.apiType);
+  const defaultProfileName = listing.defaults[options.apiType];
 
-  if (options.profileName) {
-    const profile = await credStore.getProfile(
-      options.profileName,
-      options.apiType,
-      options.userId
-    );
-    if (profile && matchesMarketplace(profile, options.marketplaceId)) {
-      return [
-        {
-          profileName: profile.profile_name,
-          profile,
-          isDefault: profile.profile_name === defaultProfileName,
-          missing: getMissingFields(profile, options),
-        },
-      ];
-    }
-
-    if (
-      options.apiType === 'SP_API' &&
-      options.profileName === ENV_SP_PROFILE_NAME
-    ) {
-      const envConnection = getEnvSpConnection(options.userId);
-      if (
-        envConnection &&
-        matchesMarketplace(envConnection.profile, options.marketplaceId)
-      ) {
-        return [envConnection];
-      }
-    }
-
-    return [];
-  }
-
-  const profileNames = await credStore.listProfiles(
-    options.apiType,
-    options.userId
-  );
-  const profiles = await Promise.all(
-    profileNames.map((profileName) =>
-      credStore.getProfile(profileName, options.apiType, options.userId)
+  const connections = listing.profiles
+    .filter((profile) => profile.api_type === options.apiType)
+    .filter(
+      (profile) =>
+        !options.profileName || profile.profile_name === options.profileName
     )
-  );
-
-  const connections = profiles
-    .filter((profile): profile is AmazonCredentialProfile => Boolean(profile))
     .filter((profile) => matchesMarketplace(profile, options.marketplaceId))
     .map((profile) => ({
       profileName: profile.profile_name,
@@ -168,27 +142,6 @@ export async function listAmazonConnections(
       isDefault: profile.profile_name === defaultProfileName,
       missing: getMissingFields(profile, options),
     }));
-
-  if (options.apiType === 'SP_API') {
-    const envConnection = getEnvSpConnection(options.userId);
-    if (
-      envConnection &&
-      matchesMarketplace(envConnection.profile, options.marketplaceId) &&
-      !connections.some(
-        (connection) =>
-          connection.profile.client_id === envConnection.profile.client_id &&
-          connection.profile.refresh_token ===
-            envConnection.profile.refresh_token &&
-          connection.profile.marketplace_id ===
-            envConnection.profile.marketplace_id
-      )
-    ) {
-      connections.push({
-        ...envConnection,
-        isDefault: !defaultProfileName,
-      });
-    }
-  }
 
   return sortConnections(connections, options.marketplaceId);
 }

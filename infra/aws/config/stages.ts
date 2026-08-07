@@ -69,6 +69,28 @@ export type StageConfig = {
     secretName: string;
   };
   /**
+   * Where this stage's LWA application credentials are kept (#55).
+   *
+   * `{"spApiClientId","spApiClientSecret","adsClientId","adsClientSecret"}` in
+   * one secret, because the two LWA applications are registered and rotated
+   * together, and a stage holding one but not the other would fail at the first
+   * token refresh rather than at deploy.
+   *
+   * These are OUR application's credentials, not a seller's. They mint access
+   * tokens from every connected seller's refresh token, which is why they are
+   * not an environment variable on either side: a Lambda env var is returned by
+   * `GetFunctionConfiguration` to anyone with read access on the function, and
+   * in Vercel they were readable in a dashboard.
+   *
+   * Created out of band by `scripts/amazon-oauth-secret.sh`. Absent means the
+   * stage cannot mint tokens; any Lambda declaring
+   * `metadata.lambda.amazonCredentials` then fails synth rather than deploying
+   * broken.
+   */
+  amazonOauth?: {
+    secretName: string;
+  };
+  /**
    * Where alarms are sent. Unset creates the topic and the alarms without a
    * subscription — they still record in the console, and an alarm nobody
    * subscribed to is more use than no alarm at all.
@@ -153,6 +175,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Audience: envAuth0('dev', 'AUDIENCE') || 'https://local.sellavant.com',
     alarmEmail: process.env.SELLAVANT_DEV_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-dev-couchbase' },
+    amazonOauth: { secretName: 'sellavant-dev-amazon-oauth' },
   },
   staging: {
     stageName: 'staging',
@@ -169,6 +192,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Audience: envAuth0('staging', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-staging-couchbase' },
+    amazonOauth: { secretName: 'sellavant-staging-amazon-oauth' },
   },
   prod: {
     stageName: 'prod',
@@ -187,9 +211,34 @@ export const STAGES: Record<StageName, StageConfig> = {
     auth0Domain: envAuth0('prod', 'DOMAIN'),
     auth0Audience: envAuth0('prod', 'AUDIENCE'),
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,
-    // `couchbase` is deliberately absent: prod has no scope yet, and its
-    // bucket is a different cluster (SellAvantProd). A placeholder here would
-    // look configured and fail at the first request instead of at synth.
+    // `couchbase` and `amazonOauth` are deliberately absent, and prod
+    // therefore FAILS SYNTH while any Lambda declares `couchbase: true`. That
+    // is the intended state, not an oversight.
+    //
+    // The `prod` scope in the `SellAvantProd` bucket exists with all its
+    // collections, on the same cluster as dev and staging — isolation is the
+    // per-scope database user (ADR-0005), not the host. Both Secrets Manager
+    // secrets now exist too.
+    //
+    // What is missing is AUTH0. `auth0Domain` and `auth0Audience` read from the
+    // environment and are set nowhere, and a stage without them deploys its
+    // routes UNAUTHENTICATED behind a synth warning rather than a failure.
+    // Filling in the two blocks below would remove the synth failure that is
+    // currently the only thing stopping a public, unauthenticated credentials
+    // API — the one that mints access tokens for every connected seller.
+    //
+    // So this stays absent until prod has an Auth0 tenant. The order is: set
+    // SELLAVANT_PROD_AUTH0_DOMAIN and _AUDIENCE, confirm the authorizer is
+    // attached, and only then add these.
+    //
+    // Naming them here before they exist would be worse than the current
+    // failure: `fromSecretNameV2` resolves by name and checks nothing at synth,
+    // so prod would deploy clean and every request would fail at runtime
+    // against a secret that was never created. A synth failure names the
+    // problem; a runtime one names a missing secret three layers down.
+    //
+    // couchbase: { secretName: 'sellavant-prod-couchbase' },
+    // amazonOauth: { secretName: 'sellavant-prod-amazon-oauth' },
   },
 };
 

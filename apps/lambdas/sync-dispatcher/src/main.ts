@@ -3,7 +3,7 @@ import { MetricUnit, Metrics } from '@aws-lambda-powertools/metrics';
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { executeQuery } from '@amz-spapi/couchbase-utils';
 import type { SyncDomain } from '@amz-spapi/sp-sync';
-import { useSecretsManagerConnection } from '@amz-spapi/couchbase-secrets';
+import { useSecretsManagerConnection } from '@amz-spapi/aws-secrets';
 
 /**
  * Scheduled fan-out (#36, ADR-0009).
@@ -22,7 +22,7 @@ const logger = new Logger({ serviceName: 'sync-dispatcher' });
  * At module scope so it runs once during init and the login is cached for the
  * container's life. A Lambda environment variable is not a secret — it is
  * written into the CloudFormation template and returned by
- * `GetFunctionConfiguration`. See `@amz-spapi/couchbase-secrets`.
+ * `GetFunctionConfiguration`. See `@amz-spapi/aws-secrets`.
  */
 useSecretsManagerConnection();
 

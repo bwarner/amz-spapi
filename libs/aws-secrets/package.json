@@ -1,5 +1,5 @@
 {
-  "name": "@amz-spapi/couchbase-secrets",
+  "name": "@amz-spapi/aws-secrets",
   "version": "0.0.1",
   "private": true,
   "type": "module",

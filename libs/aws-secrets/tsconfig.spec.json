@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "../../dist/out-tsc/libs/couchbase-secrets/spec",
+    "outDir": "../../dist/out-tsc/libs/aws-secrets/spec",
     "baseUrl": "./",
     "composite": true,
     "declaration": true,

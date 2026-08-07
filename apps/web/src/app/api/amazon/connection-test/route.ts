@@ -1,8 +1,6 @@
 import { auth0 } from '../../../../lib/auth0';
 import { listAmazonConnections } from '../../../../lib/amazon-connections';
-import { getCredentialStore } from '../../../../lib/credential-store';
-import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
-import { SpApiClient } from '@farvisionllc/sp-client';
+import { adsClientFor, spApiClientFor } from '../../../../lib/amazon-clients';
 
 type ConnectionProbeResult = {
   apiType: 'SP_API' | 'ADS_API';
@@ -26,7 +24,6 @@ export async function GET() {
   }
 
   const userId = session.user.sub;
-  const credStore = getCredentialStore();
   const results: ConnectionProbeResult[] = [];
 
   const spConnections = await listAmazonConnections({
@@ -41,7 +38,9 @@ export async function GET() {
 
   for (const connection of spConnections) {
     const { profile, profileName, missing } = connection;
-    const source = profileName === 'env-self-auth' ? 'env' : 'stored';
+    // Always 'stored' now: the env-self-auth fallback is gone with #55, which
+    // is what put a refresh token in the Vercel environment.
+    const source = 'stored' as const;
 
     if (missing.length) {
       results.push({
@@ -60,27 +59,7 @@ export async function GET() {
     }
 
     try {
-      const client = new SpApiClient({
-        clientId: profile.client_id,
-        clientSecret: profile.client_secret,
-        refreshToken: profile.refresh_token,
-        accessToken: profile.access_token,
-        sellerId: profile.seller_id,
-        marketplaceId: profile.marketplace_id,
-        region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-        onTokenRefresh:
-          source === 'stored'
-            ? async (accessToken, expiresIn) => {
-                await credStore.updateAccessToken(
-                  profileName,
-                  'SP_API',
-                  accessToken,
-                  expiresIn,
-                  userId
-                );
-              }
-            : undefined,
-      });
+      const client = await spApiClientFor(connection);
 
       const inventory = (await client.getInventorySummaries({
         granularityType: 'Marketplace',
@@ -149,24 +128,7 @@ export async function GET() {
     }
 
     try {
-      const client = new AmazonAdsApiClient({
-        clientId: profile.client_id,
-        clientSecret: profile.client_secret,
-        refreshToken: profile.refresh_token,
-        accessToken: profile.access_token,
-        marketplaceId: profile.marketplace_id,
-        region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-        profileId: profile.advertiser_profile_id,
-        onTokenRefresh: async (accessToken, expiresIn) => {
-          await credStore.updateAccessToken(
-            profileName,
-            'ADS_API',
-            accessToken,
-            expiresIn,
-            userId
-          );
-        },
-      });
+      const client = await adsClientFor(connection);
 
       const profilesResponse = await client.getProfiles();
       const profiles = Array.isArray(profilesResponse.data)

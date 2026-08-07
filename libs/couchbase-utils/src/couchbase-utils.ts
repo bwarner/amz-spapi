@@ -66,7 +66,7 @@ const envConnection: ConnectionProvider = async () => {
     throw new Error(
       `Couchbase is not configured. Missing ${missing.join(', ')}. Set them, ` +
         'or register a provider with setConnectionProvider() — on AWS that is ' +
-        'useSecretsManagerConnection() from @amz-spapi/couchbase-secrets, ' +
+        'useSecretsManagerConnection() from @amz-spapi/aws-secrets, ' +
         'which reads all five from one Secrets Manager secret.'
     );
   }
@@ -95,7 +95,7 @@ let resolveConnection: ConnectionProvider = envConnection;
  * `@aws-sdk/client-secrets-manager`, and even a dynamic `import()` of it would
  * be resolved by Next's bundler whether or not the branch ever runs — pulling
  * the AWS SDK into the web bundle, which is exactly what must not happen.
- * See `@amz-spapi/couchbase-secrets`.
+ * See `@amz-spapi/aws-secrets`.
  */
 export function setConnectionProvider(provider: ConnectionProvider): void {
   resolveConnection = provider;

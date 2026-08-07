@@ -74,13 +74,14 @@ case "$STAGE" in
     URL_DEFAULT="$CB_HOST"
     ;;
   prod)
-    # Prod is a DIFFERENT cluster (SellAvantProd) and has no scope yet, so there
-    # is no host to default to — ADR-0010. --url is required here.
+    # Same cluster as dev and staging, a different BUCKET — SellAvantProd,
+    # whose `prod` scope exists with its collections. Isolation comes from the
+    # per-scope database user (ADR-0005), not from the host.
     SECRET=sellavant-prod-couchbase
     PROFILE=sellavant-prod
     BUCKET=SellAvantProd
     USERNAME=sellavant-prod
-    URL_DEFAULT=""
+    URL_DEFAULT="$CB_HOST"
     ;;
   *) die "unknown stage '$STAGE' (expected dev, staging or prod)" ;;
 esac

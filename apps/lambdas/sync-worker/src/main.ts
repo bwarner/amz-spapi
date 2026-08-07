@@ -6,7 +6,7 @@ import {
   type SyncDomain,
   type SyncJobResult,
 } from '@amz-spapi/sp-sync';
-import { useSecretsManagerConnection } from '@amz-spapi/couchbase-secrets';
+import { useSecretsManagerConnection } from '@amz-spapi/aws-secrets';
 
 /**
  * Runs one sync job unit per SQS message (#36, ADR-0009).
@@ -33,7 +33,7 @@ const logger = new Logger({ serviceName: 'sync-worker' });
  * At module scope so it runs once during init and the login is cached for the
  * container's life. A Lambda environment variable is not a secret — it is
  * written into the CloudFormation template and returned by
- * `GetFunctionConfiguration`. See `@amz-spapi/couchbase-secrets`.
+ * `GetFunctionConfiguration`. See `@amz-spapi/aws-secrets`.
  */
 useSecretsManagerConnection();
 

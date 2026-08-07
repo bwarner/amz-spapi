@@ -159,6 +159,49 @@ Two things worth knowing:
   a function read every collection in the environment - `health` and `me`
   deliberately do not have it.
 
+## The Amazon LWA application credentials
+
+Our two LWA applications — SP-API and Ads — live in one secret per stage,
+`sellavant-<stage>-amazon-oauth`, named by `amazonOauth.secretName` in
+`infra/aws/config/stages.ts` (#55):
+
+```json
+{
+  "spApiClientId": "amzn1.application-oa2-client....",
+  "spApiClientSecret": "amzn1.oa2-cs.v1....",
+  "adsClientId": "amzn1.application-oa2-client....",
+  "adsClientSecret": "amzn1.oa2-cs.v1...."
+}
+```
+
+Both applications together because they are registered and rotated together,
+and because a stage holding one but not the other fails at the first token
+refresh rather than at deploy.
+
+These client secrets mint access tokens from **every connected seller's**
+refresh token. That is why they are not a Vercel environment variable and not a
+Lambda one: the first is readable in a dashboard and present in every build,
+the second is returned by `GetFunctionConfiguration` to anyone with read access
+on the function.
+
+**Create and rotate with `scripts/amazon-oauth-secret.sh`**, which never puts a
+secret on a command line:
+
+```bash
+# create, or rotate both secrets. Client ids default to the current secret's.
+./scripts/amazon-oauth-secret.sh dev
+
+# first time, or after replacing an application
+./scripts/amazon-oauth-secret.sh dev --sp-client-id amzn1.… --ads-client-id amzn1.…
+
+# inspect, secrets redacted
+./scripts/amazon-oauth-secret.sh dev --show
+```
+
+Only the `credentials` Lambda is granted read on this, together with
+`kms:Decrypt` on the credentials key — see `apps/lambdas/README.md`. Nothing
+else should hold either, and a test asserts it.
+
 **prod has no Couchbase configuration yet**, so there is nothing to create for
 it. Its bucket is a different cluster (`SellAvantProd`) and it has no scope; a
 Lambda declaring the flag against prod fails the synth rather than deploying

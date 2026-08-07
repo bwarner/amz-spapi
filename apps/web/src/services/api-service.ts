@@ -1,3 +1,5 @@
+import { loggerFor } from '../lib/logger';
+
 /**
  * The BFF's half of the private-API seam (#54).
  *
@@ -11,6 +13,8 @@
  * service is testable without a request context and a caller cannot
  * accidentally use one user's token on another user's behalf.
  */
+
+const log = loggerFor('api-service');
 
 /**
  * A failed call, carrying the status the BFF should answer with.
@@ -39,6 +43,37 @@ export class ApiError extends Error {
   get isAuthError(): boolean {
     return this.status === 401;
   }
+}
+
+/**
+ * One line per private-API call, at `debug`.
+ *
+ * Exists because moving the credential slice behind an API (#55) put a network
+ * hop in the middle of local development that is **completely invisible while
+ * it works**. Next logs requests arriving at the dev server, not server-side
+ * `fetch` calls leaving it, and everything else in this file logs only on
+ * failure — so a working call and a call that never happened look identical
+ * from the terminal. That cost real time to diagnose once.
+ *
+ * `debug` rather than `info` because it fires on every call: useful while
+ * developing, noise in production where it would bury the failures that matter.
+ * Turn it on with `LOG_LEVEL=debug`.
+ *
+ * **Method, path, status and duration only.** Not the token, not the request
+ * body — a connect request carries an OAuth authorization code — and not the
+ * response, which for this API is sometimes an access token. The logger redacts
+ * those by path as a backstop, but the fix is not passing them.
+ */
+function debugLog(
+  method: string,
+  path: string,
+  status: number | string,
+  startedAt: number
+): void {
+  log.debug(
+    { method, path, status, ms: Date.now() - startedAt },
+    'private API'
+  );
 }
 
 export type ApiServiceOptions = {
@@ -85,6 +120,7 @@ export abstract class ApiService {
    * `path` is absolute from the API root, e.g. `/me`.
    */
   protected async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const startedAt = Date.now();
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.apiUrl}${path}`, {
@@ -95,7 +131,9 @@ export abstract class ApiService {
           Accept: 'application/json',
         },
       });
+      debugLog(init.method ?? 'GET', path, response.status, startedAt);
     } catch (cause) {
+      debugLog(init.method ?? 'GET', path, 'unreachable', startedAt);
       // DNS, TLS, connection refused, timeout. The user did nothing wrong and
       // signing in again will not help, so this is 502 and never 401.
       throw new ApiError(
@@ -132,9 +170,9 @@ export abstract class ApiService {
       // nothing about the cause. Everything needed to tell the causes apart is
       // in the token, so describe it rather than leaving the next person to
       // guess between a wrong audience, a wrong issuer and an expired session.
-      console.error(
-        '[api-service] the API rejected the token:',
-        describeToken(this.accessToken)
+      log.error(
+        { token: describeToken(this.accessToken) },
+        'the API rejected the token'
       );
 
       return new ApiError(
@@ -274,10 +312,10 @@ export function apiErrorResponse(error: unknown): Response {
     // A 502 means the API itself failed; the message names the path and the
     // upstream status, and it is the only record of them once this returns.
     if (error.status >= 500) {
-      console.error('[api-service]', error.message, {
-        upstreamStatus: error.upstreamStatus,
-        cause: error.cause,
-      });
+      log.error(
+        { upstreamStatus: error.upstreamStatus, cause: error.cause },
+        error.message
+      );
     }
 
     return Response.json(
@@ -294,6 +332,6 @@ export function apiErrorResponse(error: unknown): Response {
   // Not an ApiError, so a bug in our own code. The response says nothing —
   // the message could name internal hosts or tokens — which makes the log the
   // only place the detail survives.
-  console.error('[api-service] unexpected error', error);
+  log.error({ error }, 'unexpected error');
   return Response.json({ error: 'Internal error.' }, { status: 500 });
 }

@@ -275,6 +275,55 @@ export type StoredCredentialProfile = Omit<
 };
 
 /**
+ * The fields never written in the clear.
+ *
+ * All three travel as one JSON blob rather than three ciphertexts, so a read
+ * costs one KMS call instead of three. They are always written and read
+ * together, so there is nothing to gain from separating them.
+ */
+export type CredentialSecrets = {
+  client_secret: string;
+  refresh_token?: string;
+  access_token?: string;
+};
+
+/** What a ciphertext is bound to. Not secret; see below. */
+export type CredentialContext = {
+  userId?: string;
+  apiType: string;
+  profileName: string;
+};
+
+/**
+ * The KMS encryption context for a stored credential blob (#11, #55).
+ *
+ * Authenticated but not secret: decryption fails unless the same context is
+ * supplied. That makes a ciphertext non-transferable. Without it, anyone who
+ * could write to Couchbase could copy another seller's `encrypted_secrets` into
+ * their own profile document and the store would decrypt it for them — the data
+ * would be encrypted and still stolen. The binding costs nothing and closes it.
+ *
+ * **Shared because two runtimes now encrypt and decrypt the same documents:**
+ * the Next.js app and the credentials Lambda. A context is only useful if both
+ * sides build it identically, and two copies of these four lines would agree
+ * until one was edited — after which one runtime would write ciphertext the
+ * other could not read, surfacing as `InvalidCiphertextException` with nothing
+ * to say which field diverged.
+ */
+export function credentialEncryptionContext(
+  context: CredentialContext
+): Record<string, string> {
+  return {
+    // Matches the document key's own notion of an absent user, so a profile
+    // saved before sign-in still decrypts.
+    userId: context.userId || 'default',
+    apiType: context.apiType,
+    profileName: context.profileName,
+    purpose: 'amazon-credential',
+  };
+}
+
+/**
  * The only profile shape allowed to cross a network boundary (#55).
  *
  * An ALLOW-LIST, deliberately, rather than omitting the secret fields from the

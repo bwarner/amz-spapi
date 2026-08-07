@@ -44,6 +44,21 @@ export type LambdaAppMetadata = {
    * including `credentials_profiles`. `health` and `me` must not have it.
    */
   couchbase?: boolean;
+  /**
+   * Whether this function unwraps and uses seller credentials (#55).
+   *
+   * Grants two things together, because neither is useful alone and holding
+   * both is the definition of this capability: `kms:Decrypt` on the credentials
+   * key, which turns a stored blob into a refresh token, and read on the Amazon
+   * OAuth secret, whose client secret turns that refresh token into an access
+   * token for the seller's account.
+   *
+   * This is the most dangerous grant in the workspace — it reaches every
+   * connected seller — so it is declared per app, defaults to `false`, and
+   * should stay on exactly one function. If a second one needs a token, it
+   * should call this one.
+   */
+  amazonCredentials?: boolean;
 };
 
 export type LambdaApp = LambdaAppMetadata & {
@@ -185,16 +200,29 @@ export function parseLambdaMetadata(
     return value;
   };
 
-  // Strict rather than truthy, because this one governs an IAM grant. `"false"`
-  // and `"no"` are both truthy strings, and either would silently widen access
-  // to every collection in the environment.
-  const couchbase = metadata['couchbase'];
-  if (couchbase !== undefined && typeof couchbase !== 'boolean') {
+  // Strict rather than truthy, because these govern IAM grants. `"false"` and
+  // `"no"` are both truthy strings, and either would silently widen access —
+  // to every collection in the environment, or to every seller's credentials.
+  const flag = (key: 'couchbase' | 'amazonCredentials'): boolean => {
+    const value = metadata[key];
+    if (value !== undefined && typeof value !== 'boolean') {
+      fail(
+        name,
+        `metadata.lambda.${key} must be a boolean, got ${JSON.stringify(value)}`
+      );
+    }
+    return value === true;
+  };
+  const couchbase = flag('couchbase');
+  const amazonCredentials = flag('amazonCredentials');
+
+  // A function that can mint tokens but cannot read the profiles they are
+  // stored on is a misconfiguration that only shows up at the first request.
+  if (amazonCredentials && !couchbase) {
     fail(
       name,
-      `metadata.lambda.couchbase must be a boolean, got ${JSON.stringify(
-        couchbase
-      )}`
+      'metadata.lambda.amazonCredentials needs couchbase: true — the ' +
+        'encrypted secrets live on the profile documents'
     );
   }
 
@@ -209,7 +237,8 @@ export function parseLambdaMetadata(
           : undefined,
       timeoutSeconds: numberOrUndefined('timeoutSeconds'),
       memoryMb: numberOrUndefined('memoryMb'),
-      couchbase: couchbase === true,
+      couchbase,
+      amazonCredentials,
       routes: parseRoutes(name, metadata['routes']),
     },
   };

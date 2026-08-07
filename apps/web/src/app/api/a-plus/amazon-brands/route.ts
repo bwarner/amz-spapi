@@ -1,7 +1,5 @@
-import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
-import { SpApiClient } from '@farvisionllc/sp-client';
 import { auth0 } from '../../../../lib/auth0';
-import { getCredentialStore } from '../../../../lib/credential-store';
+import { adsClientFor, spApiClientFor } from '../../../../lib/amazon-clients';
 import { listAmazonConnections } from '../../../../lib/amazon-connections';
 
 type InventorySummary = {
@@ -89,7 +87,6 @@ export async function GET() {
   }
 
   const userId = session.user.sub;
-  const credStore = getCredentialStore();
   const defaultMarketplaceId =
     process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
   const brandMap = new Map<string, BrandResult>();
@@ -120,24 +117,7 @@ export async function GET() {
     }
 
     try {
-      const client = new AmazonAdsApiClient({
-        clientId: profile.client_id,
-        clientSecret: profile.client_secret,
-        refreshToken: profile.refresh_token,
-        accessToken: profile.access_token,
-        marketplaceId,
-        region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-        profileId: profile.advertiser_profile_id,
-        onTokenRefresh: async (accessToken, expiresIn) => {
-          await credStore.updateAccessToken(
-            profileName,
-            'ADS_API',
-            accessToken,
-            expiresIn,
-            userId
-          );
-        },
-      });
+      const client = await adsClientFor(connection, { marketplaceId });
 
       const brands = (await client.getNegativeBrands()) as AdsBrand[];
       for (const brand of brands) {
@@ -188,24 +168,7 @@ export async function GET() {
       }
 
       try {
-        const client = new SpApiClient({
-          clientId: profile.client_id,
-          clientSecret: profile.client_secret,
-          refreshToken: profile.refresh_token,
-          accessToken: profile.access_token,
-          sellerId: profile.seller_id,
-          marketplaceId,
-          region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-          onTokenRefresh: async (accessToken, expiresIn) => {
-            await credStore.updateAccessToken(
-              profileName,
-              'SP_API',
-              accessToken,
-              expiresIn,
-              userId
-            );
-          },
-        });
+        const client = await spApiClientFor(connection, { marketplaceId });
 
         const inventoryItems: InventorySummary[] = [];
         let nextToken: string | undefined;

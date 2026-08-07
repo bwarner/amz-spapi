@@ -12,10 +12,13 @@ import {
   type SellerListingWrites,
 } from '@amz-spapi/seller-agent';
 import { createAIProvider } from '@amz-spapi/ai-provider';
-import { SpApiClient } from '@farvisionllc/sp-client';
 import { SpCache } from '@amz-spapi/sp-cache';
 import { auth0 } from '../../../lib/auth0';
-import { resolveAmazonConnection } from '../../../lib/amazon-connections';
+import {
+  resolveAmazonConnection,
+  type AmazonConnection,
+} from '../../../lib/amazon-connections';
+import { spApiClientFor } from '../../../lib/amazon-clients';
 import { zipSync } from 'fflate';
 import {
   extensionForMime,
@@ -137,11 +140,15 @@ export async function POST(request: Request) {
 
   const marketplaceId = process.env['SP_MARKETPLACE_ID'] || 'ATVPDKIKX0DER';
 
-  // Try to load user's stored SP-API credentials from Couchbase
-  // Fall back to env vars for development
-  let clientId = process.env['LWA_CLIENT_ID'];
-  let clientSecret = process.env['LWA_CLIENT_SECRET'];
-  let refreshToken = process.env['LWA_REFRESH_TOKEN'];
+  /**
+   * The seller's SP-API connection, or nothing (#55).
+   *
+   * No env-var fallback any more. It read `LWA_CLIENT_SECRET` and
+   * `LWA_REFRESH_TOKEN` from the Vercel runtime — a long-lived seller
+   * credential in exactly the place this slice exists to remove it from — and
+   * it was already inert: neither variable is set in any environment.
+   */
+  let spConnection: AmazonConnection | undefined;
   let sellerId = process.env['SP_SELLER_ID'];
   let userMarketplaceId = marketplaceId;
 
@@ -167,9 +174,7 @@ export async function POST(request: Request) {
     });
     if (resolved.connected) {
       const { profile } = resolved.connection;
-      clientId = profile.client_id;
-      clientSecret = profile.client_secret;
-      refreshToken = profile.refresh_token;
+      spConnection = resolved.connection;
       sellerId = profile.seller_id || sellerId;
       userMarketplaceId = profile.marketplace_id || marketplaceId;
     }
@@ -197,12 +202,11 @@ export async function POST(request: Request) {
   // connections per call, so constructing it is free.
   const adsOps = createAdsOps({ userId: session.user.sub });
 
-  if (clientId && refreshToken) {
-    const spClient = new SpApiClient({
-      clientId,
-      clientSecret,
-      refreshToken,
-      sellerId,
+  if (spConnection) {
+    // Mints through the credentials API and re-mints on a 401. This runtime
+    // never holds the refresh token or the client secret that would let it
+    // mint one itself.
+    const spClient = await spApiClientFor(spConnection, {
       marketplaceId: userMarketplaceId,
     });
 

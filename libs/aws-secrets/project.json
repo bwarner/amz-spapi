@@ -1,7 +1,7 @@
 {
-  "name": "couchbase-secrets",
+  "name": "aws-secrets",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/couchbase-secrets/src",
+  "sourceRoot": "libs/aws-secrets/src",
   "projectType": "library",
   "tags": ["scope:data", "type:lib"],
   "targets": {
@@ -9,10 +9,10 @@
       "executor": "@nx/js:tsc",
       "outputs": ["{options.outputPath}"],
       "options": {
-        "outputPath": "dist/libs/couchbase-secrets",
-        "main": "libs/couchbase-secrets/src/index.ts",
-        "tsConfig": "libs/couchbase-secrets/tsconfig.lib.json",
-        "assets": ["libs/couchbase-secrets/*.md"]
+        "outputPath": "dist/libs/aws-secrets",
+        "main": "libs/aws-secrets/src/index.ts",
+        "tsConfig": "libs/aws-secrets/tsconfig.lib.json",
+        "assets": ["libs/aws-secrets/*.md"]
       }
     },
     "lint": {
@@ -22,7 +22,7 @@
       "executor": "@nx/vite:test",
       "outputs": ["{options.reportsDirectory}"],
       "options": {
-        "reportsDirectory": "../../coverage/libs/couchbase-secrets"
+        "reportsDirectory": "../../coverage/libs/aws-secrets"
       }
     }
   }

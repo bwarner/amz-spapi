@@ -1,7 +1,7 @@
 import { SpApiClient } from '@farvisionllc/sp-client';
 import type { ListingSnapshot, ProductListing } from '@farvisionllc/models';
 import { resolveAmazonConnection } from './amazon-connections';
-import { getCredentialStore } from './credential-store';
+import { spApiClientFor } from './amazon-clients';
 import { createProductId, deleteProduct, upsertProduct } from './products';
 import { createVariantId, upsertVariant } from './product-variants';
 import {
@@ -223,26 +223,10 @@ export async function createUserSpApiClient(
 
   const { profile, profileName } = resolved.connection;
   const marketplaceId = profile.marketplace_id || defaultMarketplaceId;
-  const credStore = getCredentialStore();
 
-  const client = new SpApiClient({
-    clientId: profile.client_id,
-    clientSecret: profile.client_secret,
-    refreshToken: profile.refresh_token,
-    accessToken: profile.access_token,
-    sellerId: profile.seller_id,
-    marketplaceId,
-    region: (profile.region as 'NA' | 'EU' | 'FE') || 'NA',
-    onTokenRefresh: async (accessToken, expiresIn) => {
-      await credStore.updateAccessToken(
-        profileName,
-        'SP_API',
-        accessToken,
-        expiresIn,
-        userId
-      );
-    },
-  });
+  // The client mints its own tokens through the credentials API and re-mints on
+  // a 401 (#55). Nothing here holds a refresh token or a client secret.
+  const client = await spApiClientFor(resolved.connection, { marketplaceId });
 
   return { client, marketplaceId, profileName };
 }

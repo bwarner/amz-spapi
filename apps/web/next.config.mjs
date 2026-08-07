@@ -24,6 +24,13 @@ const nextConfig = {
   // Optional provider dependencies must not be bundled by webpack
   serverExternalPackages: [
     '@aws-sdk/credential-provider-node',
+    // Pino's pretty transport runs in a worker thread it spawns by resolving a
+    // module path at runtime. Bundled, that path points inside the webpack
+    // output and the worker fails to start — taking the first log line with it.
+    // Must load from node_modules.
+    'pino',
+    'pino-pretty',
+    'thread-stream',
     // Background removal: native ONNX runtime + model files resolved relative
     // to the package dir — bundling breaks both. Must load from node_modules.
     '@imgly/background-removal-node',

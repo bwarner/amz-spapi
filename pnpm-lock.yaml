@@ -25,9 +25,9 @@ importers:
       '@amz-spapi/ai-provider':
         specifier: 0.0.1
         version: link:libs/ai-provider
-      '@amz-spapi/couchbase-secrets':
+      '@amz-spapi/aws-secrets':
         specifier: 0.0.1
-        version: link:libs/couchbase-secrets
+        version: link:libs/aws-secrets
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:libs/couchbase-utils
@@ -243,7 +243,7 @@ importers:
         version: 11.0.0
       openai:
         specifier: ^6.33.0
-        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.18.0)(zod@3.25.76)
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.21.0)(zod@3.25.76)
       pino:
         specifier: ^9.7.0
         version: 9.14.0
@@ -485,7 +485,7 @@ importers:
 
   libs/ai-provider: {}
 
-  libs/couchbase-secrets:
+  libs/aws-secrets:
     dependencies:
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
@@ -30014,11 +30014,11 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.18.0)(zod@3.25.76):
+  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.60)(@smithy/signature-v4@5.6.12)(ws@8.21.0)(zod@3.25.76):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.60
       '@smithy/signature-v4': 5.6.12
-      ws: 8.18.0
+      ws: 8.21.0
       zod: 3.25.76
 
   openapi-types@12.1.3: {}
