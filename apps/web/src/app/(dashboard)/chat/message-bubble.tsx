@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 
-import { Bot, User } from 'lucide-react';
+import { Bot, User, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -25,6 +25,15 @@ import {
   ToolOutput,
 } from '@/components/ai-elements/tool';
 import { approvalSummary, isStalled, toolTitle } from './tool-presentation';
+import { extractDownloads, type ProducedFile } from './downloads';
+import { Button } from '@/components/ui/button';
+import {
+  Artifact,
+  ArtifactActions,
+  ArtifactDescription,
+  ArtifactHeader,
+  ArtifactTitle,
+} from '@/components/ai-elements/artifact';
 import {
   Confirmation,
   ConfirmationAccepted,
@@ -134,7 +143,12 @@ type MessageBlock =
       approval?: ToolUIPartApproval;
     }
   | { kind: 'aplus'; doc: APlusDocument }
-  | { kind: 'images'; images: Array<{ url: string; label?: string }> };
+  | { kind: 'images'; images: Array<{ url: string; label?: string }> }
+  /**
+   * A file the turn produced. Read from the tool result rather than from a
+   * markdown link the model had to remember to write.
+   */
+  | { kind: 'downloads'; files: ProducedFile[] };
 
 type CatalogImageEntry = { variant?: string; link?: string };
 type CatalogImageSet = { images?: CatalogImageEntry[] };
@@ -355,6 +369,11 @@ function MessageBubbleImpl({
         approval: part.approval?.id ? part.approval : undefined,
       });
 
+      if (part.state === 'output-available') {
+        const files = extractDownloads(toolName, part.output);
+        if (files.length) blocks.push({ kind: 'downloads', files });
+      }
+
       if (
         part.type === APLUS_TOOL_PART_TYPE &&
         part.state === 'output-available'
@@ -497,8 +516,64 @@ function MessageBubbleImpl({
 
             case 'aplus':
               return (
-                <div key={index} className="mt-3">
+                <Artifact key={index} className="mt-3">
+                  <ArtifactHeader>
+                    <div className="min-w-0">
+                      <ArtifactTitle>A+ content</ArtifactTitle>
+                      <ArtifactDescription>
+                        {block.doc.modules.length} module
+                        {block.doc.modules.length === 1 ? '' : 's'} — a preview,
+                        not published
+                      </ArtifactDescription>
+                    </div>
+                  </ArtifactHeader>
+                  {/* No `ArtifactContent` padding: the preview renders its own
+                      page-width layout and boxing it inside a gutter would
+                      misrepresent how it lays out on Amazon. */}
                   <APlusPreview doc={block.doc} />
+                </Artifact>
+              );
+
+            case 'downloads':
+              return (
+                <div key={index} className="mt-3 space-y-2">
+                  {block.files.map((file) => (
+                    <Artifact key={file.url}>
+                      <ArtifactHeader>
+                        <div className="min-w-0">
+                          <ArtifactTitle className="truncate">
+                            {file.name}
+                          </ArtifactTitle>
+                          {file.detail && (
+                            <ArtifactDescription>
+                              {file.detail}
+                            </ArtifactDescription>
+                          )}
+                        </div>
+                        <ArtifactActions>
+                          {/* `Button asChild` rather than `ArtifactAction`,
+                              which renders its icon alongside an sr-only span —
+                              two children, which Slot refuses. An anchor and
+                              not a click handler, so it survives a middle-click
+                              and a "save link as". */}
+                          <Button
+                            asChild
+                            size="sm"
+                            variant="ghost"
+                            className="size-8 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                          >
+                            <a
+                              href={file.url}
+                              download
+                              aria-label={`Download ${file.name}`}
+                            >
+                              <Download className="size-4" />
+                            </a>
+                          </Button>
+                        </ArtifactActions>
+                      </ArtifactHeader>
+                    </Artifact>
+                  ))}
                 </div>
               );
 
