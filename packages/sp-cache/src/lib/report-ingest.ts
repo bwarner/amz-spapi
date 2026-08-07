@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import {
+  NUMERIC_FIELDS,
   normalizeHeader,
   REPORTS,
   type ReportDefinition,
@@ -40,15 +41,63 @@ const DATE_FIELDS = new Set<ReportFieldName>([
  * 01/05/2026 — so every coverage window spanning New Year would come back
  * backwards. Values already ISO are returned unchanged; anything unrecognised
  * is left alone rather than guessed at.
+ *
+ * A bare month ("2026-06", which is all the storage fee report states) becomes
+ * the first of that month. Left as-is it is a PREFIX of every day in it, so
+ * `date >= '2026-06-01'` excludes the month it names and any range query over a
+ * month-granular report silently returns nothing.
  */
 export function toIsoDate(value: string): string {
   const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const month = value.match(/^(\d{4})-(\d{2})$/);
+  if (month) return `${month[1]}-${month[2]}-01`;
   const us = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (us) {
     return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
   }
   return value;
+}
+
+/**
+ * Read a report cell as a number, or null.
+ *
+ * Runs ONCE, here, at ingest — not at query time. The first version of the
+ * aggregate query did this arithmetic in N1QL, where no test could execute it,
+ * and shipped reading every three-decimal figure as European thousands: "0.011"
+ * totalled as 11 and "0.787" as 787, turning a $23 storage month into thousands
+ * in front of a seller. A number the database merely SUMS cannot be got wrong
+ * by the database, and this function is covered by tests that run.
+ *
+ * Only some of locale formatting is decidable. "1.234" is genuinely ambiguous —
+ * 1234 written in German, 1.234 written in English — and nothing in the string
+ * separates them, so the English reading wins: it is what Amazon's own machine
+ * exports always are. Only UNAMBIGUOUS European forms are converted, being ones
+ * English never writes: more than one dot group ("1.234.567"), dot groups with
+ * a comma decimal ("1.234,56"), or a comma with one or two digits ("12,50").
+ *
+ * Anything unreadable — blank, "N/A", "--" — is null, and callers COUNT those
+ * rather than treating them as zero. A total that quietly skips rows is the
+ * failure this whole path exists to remove.
+ */
+export function readReportNumber(value: string): number | null {
+  const cleaned = value.replace(/[\s$£€]/g, '');
+  if (!cleaned) return null;
+
+  const europeanGroups = /^-?\d{1,3}(\.\d{3}){2,}$/;
+  const europeanGroupsWithDecimal = /^-?\d{1,3}(\.\d{3})+,\d+$/;
+  // One or two digits after the comma: "1,234" is three, and is English.
+  const europeanDecimal = /^-?\d+,\d{1,2}$/;
+
+  const normalised =
+    europeanGroups.test(cleaned) ||
+    europeanGroupsWithDecimal.test(cleaned) ||
+    europeanDecimal.test(cleaned)
+      ? cleaned.replace(/\./g, '').replace(',', '.')
+      : cleaned.replace(/,/g, '');
+
+  const parsed = Number(normalised);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export type ReportRow = {
@@ -59,8 +108,28 @@ export type ReportRow = {
   reportType: string;
   /** Mapped logical fields, present only when the header was recognised. */
   fields: Partial<Record<ReportFieldName, string>>;
+  /**
+   * The numeric fields, read as numbers. Absent where the value would not
+   * parse, which is how a total can say how many rows it had to leave out.
+   *
+   * Alongside `fields` rather than replacing it: the string is what the export
+   * actually said and stays the evidence for a claim.
+   */
+  numbers?: Partial<Record<ReportFieldName, number>>;
   /** Every column verbatim — kept only when some column was unrecognised. */
   raw?: Record<string, string>;
+  /**
+   * Which columns the registry extracted when this row was stored.
+   *
+   * Not part of identity — identity is the raw content, and must stay that way
+   * or every mapping change would re-import history as new rows. This is the
+   * other half of that trade: because identity ignores the mapping, a re-import
+   * of the same file dedupes and the OLD interpretation survives, so sending
+   * the file again — the obvious repair, and the one a user will try — silently
+   * does nothing and reports success. Comparing this on write is what lets a
+   * re-import actually re-read a file under the current registry.
+   */
+  mappingVersion?: string;
   /** reportOptions this row was fetched under, when known. */
   options?: Record<string, string>;
   /** Snapshot date for snapshot reports; the sync/import window end otherwise. */
@@ -208,6 +277,22 @@ export function parseReport(params: {
   }
 
   const hasUnmapped = headers.some((_, index) => !fieldByIndex.has(index));
+
+  // One fingerprint for the whole file: it describes the MAPPING, not any row's
+  // contents, so a row whose cell happened to be empty is not mistaken for a
+  // row parsed under different rules. The numeric marker is part of it because
+  // moving a field into NUMERIC_FIELDS changes what is stored without changing
+  // which columns were recognised.
+  const mappingVersion = crypto
+    .createHash('sha256')
+    .update(
+      [...fieldByIndex.values()]
+        .map((field) => `${field}${NUMERIC_FIELDS.has(field) ? '#n' : ''}`)
+        .sort()
+        .join(',')
+    )
+    .digest('hex')
+    .slice(0, 12);
   const rows: ReportRow[] = [];
   const seen = new Set<string>();
   /** Distinguishes genuinely repeated identical events within one export. */
@@ -255,12 +340,27 @@ export function parseReport(params: {
     if (seen.has(rowId)) continue;
     seen.add(rowId);
 
+    // Read once, here. Identity is built from the raw columns above, so adding
+    // these cannot re-import history as new rows — but by the same token an
+    // existing row will NOT gain them on re-import, since it dedupes. Changing
+    // what is stored means dropping the rows and loading them again.
+    const numbers: Partial<Record<ReportFieldName, number>> = {};
+    for (const [field, value] of Object.entries(fields) as Array<
+      [ReportFieldName, string]
+    >) {
+      if (!NUMERIC_FIELDS.has(field)) continue;
+      const parsed = readReportNumber(value);
+      if (parsed !== null) numbers[field] = parsed;
+    }
+
     rows.push({
       rowId,
       sellerId: params.sellerId,
       reportKind: definition.kind,
       reportType: definition.reportType,
       fields,
+      ...(Object.keys(numbers).length ? { numbers } : {}),
+      mappingVersion,
       // `raw` duplicates every mapped field, so keep it only when the file had
       // columns the registry did not recognise — that is the case where the
       // extra bytes buy something (a column we may need to map later).
@@ -281,6 +381,62 @@ export function parseReport(params: {
   );
 
   return { rows, unmappedHeaders, missingFields };
+}
+
+/**
+ * Bring a row stored under an older registry up to what it would be today,
+ * from what is already in it. Returns null when nothing changed.
+ *
+ * This is a ONE-WAY conversion of old data, not a compatibility layer: rows
+ * written before dates were normalised or numbers were parsed are rewritten to
+ * carry both, and afterwards there is only one representation.
+ *
+ * It needs no source file, because everything it derives is a pure function of
+ * the strings the row already holds — which is what makes it possible to repair
+ * a sync whose export nobody kept.
+ *
+ * `mappingVersion` is deliberately NOT set. It records which columns the
+ * registry extracted from a FILE, and this row never saw one; inventing a value
+ * would tell a later re-import to skip a row it should re-read. Leaving it
+ * absent keeps re-importing the file the stronger repair.
+ */
+export function remapStoredRow(row: ReportRow): ReportRow | null {
+  const fields = { ...row.fields };
+  let changed = false;
+
+  for (const field of DATE_FIELDS) {
+    const value = fields[field];
+    if (!value) continue;
+    const iso = toIsoDate(value);
+    if (iso === value) continue;
+    fields[field] = iso;
+    changed = true;
+  }
+
+  const numbers: Partial<Record<ReportFieldName, number>> = {};
+  for (const [field, value] of Object.entries(fields) as Array<
+    [ReportFieldName, string]
+  >) {
+    if (!NUMERIC_FIELDS.has(field)) continue;
+    const parsed = readReportNumber(value);
+    if (parsed !== null) numbers[field] = parsed;
+  }
+  const before = row.numbers ?? {};
+  if (
+    Object.keys(numbers).length !== Object.keys(before).length ||
+    (Object.keys(numbers) as ReportFieldName[]).some(
+      (field) => before[field] !== numbers[field]
+    )
+  ) {
+    changed = true;
+  }
+
+  if (!changed) return null;
+  return {
+    ...row,
+    fields,
+    ...(Object.keys(numbers).length ? { numbers } : {}),
+  };
 }
 
 /**
@@ -319,10 +475,22 @@ export function decodeReportBuffer(buffer: Buffer): string {
 export function detectReportKind(text: string): {
   kind: ReportKind | null;
   confidence: number;
+  /**
+   * The kind claimed by a header no other report has, when one matched.
+   *
+   * Separate from `kind` because the two answer different questions. A caller
+   * acting on a user's explicit "import this report" can accept a merely-best
+   * guess; one importing automatically, because a file happened to be attached,
+   * should not — and only this field tells it whether the identification rests
+   * on a unique marker or on a share of columns any inventory export might have.
+   */
+  decisive: ReportKind | null;
   scores: Array<{ kind: ReportKind; matched: number; possible: number }>;
 } {
   const headerLine = text.split(/\r?\n/).find((line) => line.trim().length);
-  if (!headerLine) return { kind: null, confidence: 0, scores: [] };
+  if (!headerLine) {
+    return { kind: null, confidence: 0, decisive: null, scores: [] };
+  }
 
   const delimiter = detectDelimiter(headerLine);
   const headers = new Set(
@@ -357,6 +525,9 @@ export function detectReportKind(text: string): {
     // report is confidently identified as a removal order and its fees are
     // parsed into removal columns. `settlementid` appears in no other report.
     settlement: ['settlementid'],
+    // Unique to the storage fee report — no other kind carries either column,
+    // so its position here is not load-bearing the way settlement's is.
+    'storage-fee': ['estimatedmonthlystoragefee', 'monthofcharge'],
     reimbursement: ['reimbursementid'],
     'removal-shipment': ['trackingnumber'],
     'removal-order': ['removalorderid', 'orderid'],
@@ -377,5 +548,10 @@ export function detectReportKind(text: string): {
       : confidence >= 0.5
       ? best.kind
       : null;
-  return { kind, confidence: Math.round(confidence * 100) / 100, scores };
+  return {
+    kind,
+    confidence: Math.round(confidence * 100) / 100,
+    decisive: decisiveHit ?? null,
+    scores,
+  };
 }

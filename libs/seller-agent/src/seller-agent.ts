@@ -210,6 +210,8 @@ export type ReportIngestResult = {
   rowsParsed: number;
   rowsNew: number;
   rowsDuplicate: number;
+  /** Of the duplicates, how many were re-read under the current mapping. */
+  rowsRefreshed?: number;
   observedFrom?: string;
   observedTo?: string;
   unmappedHeaders?: string[];
@@ -252,7 +254,46 @@ export interface SellerReportOps {
     fnsku?: string;
     granularity?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
   }): Promise<Array<{ fields: Record<string, unknown> }>>;
+  /**
+   * Total a numeric column of stored rows, grouped by other columns.
+   *
+   * The op that makes ingestion worth anything. Without it the agent can hold a
+   * 500-row storage fee report and STILL be unable to answer "what did these
+   * two ASINs cost me" — it would have to read every row into the conversation
+   * and add them up in prose, which is exactly the arithmetic-by-hand this
+   * replaces. Reduced in the database; only the totals come back.
+   */
+  queryReportAggregate(params: {
+    kind: string;
+    measure: string;
+    groupBy?: string[];
+    from?: string;
+    to?: string;
+    filters?: Record<string, string[]>;
+  }): Promise<ReportAggregateResult>;
 }
+
+/** Totals for one grouping of stored report rows. */
+export type ReportAggregateResult = {
+  kind: string;
+  measure: string;
+  /** The spreadsheet columns the measure was read from — evidence, not decoration. */
+  measureColumns: string[];
+  groupBy: string[];
+  groups: Array<{
+    key: Record<string, string | null>;
+    total: number;
+    rows: number;
+    /** Rows whose measure was not a readable number — never counted as zero. */
+    unparsed: number;
+    /** Rows carrying no such column at all — also never counted as zero. */
+    absent: number;
+  }>;
+  rowsMatched: number;
+  unparsed: number;
+  absent: number;
+  truncated: boolean;
+};
 
 /**
  * Host-provided READ-ONLY Amazon Ads access (#86).
@@ -2737,6 +2778,8 @@ function getReportTools(reportOps: SellerReportOps) {
     'removal-shipment',
     'reimbursement',
     'inbound-performance',
+    'settlement',
+    'storage-fee',
   ]);
 
   return {
@@ -2802,6 +2845,147 @@ function getReportTools(reportOps: SellerReportOps) {
         }
       },
     },
+    'total-report-rows': {
+      description:
+        'Total a numeric column of ALREADY-INGESTED report rows, grouped by ' +
+        'other columns, over the whole file — not a preview of it. This is how ' +
+        'you answer "what did I pay in storage fees for these two ASINs", ' +
+        '"which SKUs cost me the most in FBA fees", "how many units were ' +
+        'reimbursed" and every other question of that shape. Reads stored rows ' +
+        'and never calls Amazon, so it is free and instant.\n' +
+        'NEVER add up rows by hand and NEVER answer a totals question from an ' +
+        'attached spreadsheet preview — a preview is the first 50 rows and its ' +
+        'sum is wrong. If the file has been imported, total it here; if it has ' +
+        'not, say so.\n' +
+        'Common measures by kind: storage-fee -> amountTotal, which is the ' +
+        'COMPLETE monthly storage charge and already includes the utilisation ' +
+        'surcharge (storageFeeBase + storageFeeSurcharge are its breakdown — ' +
+        'total those to explain a fee, never to build one, and never add them ' +
+        'to amountTotal); settlement -> amount; reimbursement -> amountTotal ' +
+        'or quantity; ledger-detail -> quantity. Useful groupings: asin, msku, fnsku, date, ' +
+        'fulfillmentCenter, amountType, amountDescription, eventType. An ' +
+        'unknown field name comes back with the list of valid ones for that ' +
+        'report, so guess and read the answer rather than giving up.\n' +
+        'An empty result means NOTHING WAS INGESTED for that window, not that ' +
+        'the total is zero — check-report-coverage tells the two apart.',
+      inputSchema: z.object({
+        kind: kindSchema,
+        measure: z
+          .string()
+          .describe('Logical field holding the number, e.g. amountTotal'),
+        groupBy: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Break the total down by these fields, e.g. ["asin"]. Currency is ' +
+              'added automatically wherever the report has one.'
+          ),
+        from: z.string().optional().describe('YYYY-MM-DD, inclusive'),
+        to: z.string().optional().describe('YYYY-MM-DD, inclusive'),
+        filters: z
+          .record(z.string(), z.array(z.string()))
+          .optional()
+          .describe(
+            'Field to accepted values, e.g. {"asin":["B0FRD9RR2B","B0F1234567"]}. ' +
+              'Matched case-insensitively.'
+          ),
+      }),
+      execute: async (input: {
+        kind: string;
+        measure: string;
+        groupBy?: string[];
+        from?: string;
+        to?: string;
+        filters?: Record<string, string[]>;
+      }) => {
+        try {
+          const result = await reportOps.queryReportAggregate(input);
+          const notes: string[] = [];
+          if (!result.groups.length) {
+            notes.push(
+              'No stored rows matched. This does NOT mean the total is zero — ' +
+                'it may mean nothing has been ingested for that window, or that ' +
+                'the filter matched no rows. Check check-report-coverage before ' +
+                'saying a seller paid nothing.'
+            );
+          }
+          if (result.absent && result.absent === result.rowsMatched) {
+            // A column no stored row carries. The total is 0 only because
+            // there is nothing to add, which is not the same as a fee of zero
+            // and must never be reported as one.
+            notes.push(
+              `NONE of the ${result.rowsMatched} matching rows carry a ` +
+                `"${result.measure}" column at all, so there is nothing to ` +
+                'total — this is NOT a total of zero. Either the export did ' +
+                'not contain that column, or the rows were imported before it ' +
+                'was mapped. Say which figures you can give instead, and ' +
+                'offer a re-import. Never report $0.'
+            );
+          } else if (
+            result.unparsed &&
+            result.unparsed === result.rowsMatched
+          ) {
+            // Every single row unreadable is not a data problem, it is a
+            // vintage problem: those rows were stored before values were read
+            // as numbers, and no total can come out of them.
+            notes.push(
+              `NONE of the ${result.rowsMatched} matching rows carry a readable ` +
+                'number. That almost always means they were imported before ' +
+                'this report kind stored parsed figures. Tell the user to ' +
+                'delete and re-import that report — do NOT report a total of ' +
+                'zero, and do not send them to a spreadsheet.'
+            );
+          } else if (result.unparsed) {
+            notes.push(
+              `${result.unparsed} of ${result.rowsMatched} rows had no readable ` +
+                'number in that column and are EXCLUDED from these totals. Say ' +
+                'so — the figure is a floor, not the answer.'
+            );
+          }
+          if (result.truncated) {
+            notes.push(
+              'The group list was cut short; there are more groups than shown. ' +
+                'Narrow the range or filter before quoting a breakdown as complete.'
+            );
+          }
+          if (result.groupBy.includes('currency') && result.groups.length > 1) {
+            notes.push(
+              'Groups carry a currency. Never add two currencies together.'
+            );
+          }
+          if (result.groups.length) {
+            // Said on every successful total, because the doubt this answers
+            // is not rare: a total cannot be checked by eye, and an agent that
+            // cannot check one will invent a reason to distrust it.
+            notes.push(
+              `These figures are SUM(${result.measure}), read from the ` +
+                `"${result.measureColumns.join('" / "')}" column of the ` +
+                "seller's own file, over every stored row. They are the " +
+                'answer. You cannot sanity-check them against a handful of ' +
+                'rows — a per-ASIN total spans dozens of fulfilment centres, ' +
+                'so ANY partial view will look smaller and disagreeing with ' +
+                'it is a mistake. If you still believe a figure is wrong, say ' +
+                'which column you expected and ask; never substitute your own ' +
+                'arithmetic, and never send the user to Excel.'
+            );
+          }
+          return {
+            success: true as const,
+            ...result,
+            note: notes.length ? notes.join(' ') : undefined,
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not total report rows.',
+          };
+        }
+      },
+    },
+
     'check-report-coverage': {
       description:
         'What FBA report data has actually been ingested for a window, and where ' +
@@ -2866,7 +3050,12 @@ function getReportTools(reportOps: SellerReportOps) {
             ...result,
             note:
               `${result.rowsNew} new rows, ${result.rowsDuplicate} already held. ` +
-              'Duplicates are expected when re-syncing an overlapping window.',
+              'Duplicates are expected when re-syncing an overlapping window.' +
+              (result.rowsRefreshed
+                ? ` ${result.rowsRefreshed} of those were RE-READ under the ` +
+                  'current column mapping, so columns that were missing before ' +
+                  'are available now — retry whatever failed for want of them.'
+                : ''),
           };
         } catch (error) {
           return {
@@ -4317,8 +4506,15 @@ FBA INVENTORY RECONCILIATION (where did my units go):
   shipment does not exist, so never read absence as "nothing arrived".
 - Two ways to get data in, and the upload path needs NO Amazon permissions: sync-report
   pulls from SP-API (and 403s if the app lacks the FBA role), or the user downloads the
-  report in Seller Central and uploads the file. When a sync 403s, offer the upload
-  route rather than leaving them stuck.
+  report in Seller Central and ATTACHES it to the chat. When a sync 403s, offer the
+  attachment route rather than leaving them stuck — it is how a report behind a role we
+  were never granted still gets answered.
+- An attached CSV/TSV/XLSX that is a recognised Amazon report is imported automatically
+  and the attachment says so ("IMPORTED as ..."). When it does, EVERY row is stored, not
+  just the preview rows: answer with total-report-rows, quote exact figures, and never
+  tell a seller to open Excel or run a spreadsheet formula. Doing the arithmetic for them
+  is the job. If the file was NOT imported, say which report you need and where in Seller
+  Central to get it.
 - Re-syncing an overlapping window is safe — rows de-duplicate — so prefer widening a
   range over reasoning about a partial one.
 - Quantities in these reports are the seller's evidence for a claim. Quote them exactly,

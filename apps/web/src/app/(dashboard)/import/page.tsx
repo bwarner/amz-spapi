@@ -92,11 +92,18 @@ const REPORT_EXTENSIONS = new Set(['txt', 'tsv', 'csv']);
 function classify(file: File): 'report' | 'document' {
   const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
   if (REPORT_EXTENSIONS.has(extension)) return 'report';
-  // A .xlsx is tabular but not what Amazon exports; treat it as a document
-  // rather than feed the parser something it will only fail on.
+  // A .xlsx is tabular but not what Amazon exports, so it goes to the document
+  // importer — which converts a workbook and files it as a report anyway when
+  // the headers say it is one. Feeding the raw zip to the report parser here
+  // would only fail.
   return 'document';
 }
 
+/**
+ * Labels for the kinds detection can return. Kept in step with the registry in
+ * `sp-cache` by hand: importing it here would pull the Couchbase client into a
+ * client component.
+ */
 const REPORT_LABELS: Record<string, string> = {
   'ledger-detail': 'Inventory Ledger — Detail',
   'ledger-summary': 'Inventory Ledger — Summary',
@@ -105,6 +112,8 @@ const REPORT_LABELS: Record<string, string> = {
   'removal-shipment': 'Removal Shipment Detail',
   reimbursement: 'Reimbursements',
   'inbound-performance': 'FBA Inbound Performance',
+  settlement: 'Settlement (payments archive)',
+  'storage-fee': 'FBA Monthly Storage Fees',
 };
 
 export default function ReportsPage() {
@@ -227,7 +236,7 @@ export default function ReportsPage() {
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
           Reports (.txt, .tsv, .csv) — ledger, stranded, removals,
-          reimbursements, inbound performance
+          reimbursements, inbound performance, settlements, storage fees
           <br />
           Documents (.pdf, .ai, images) — invoices, receipts, PODs, box designs
         </p>

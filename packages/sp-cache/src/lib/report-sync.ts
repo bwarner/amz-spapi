@@ -29,6 +29,14 @@ export type IngestOutcome = {
   rowsParsed: number;
   rowsNew: number;
   rowsDuplicate: number;
+  /**
+   * Rows already held that were RE-READ under the current column mapping.
+   *
+   * A subset of `rowsDuplicate`: no new facts arrived, but the ones already
+   * stored now carry what the registry maps today. Non-zero means an earlier
+   * import of this file had captured less.
+   */
+  rowsRefreshed: number;
   /** Columns the registry did not recognise — kept in `raw`, surfaced here. */
   unmappedHeaders: string[];
   observedFrom?: string;
@@ -102,7 +110,10 @@ export async function ingestReportBuffer(params: {
   // Minted here so the rows and the audit record share it: coverage groups on
   // the rows' copy, so it must exist before they are written.
   const importId = crypto.randomUUID();
-  const { stored, duplicate } = await storeReportRows(parsed.rows, importId);
+  const { stored, duplicate, refreshed } = await storeReportRows(
+    parsed.rows,
+    importId
+  );
   const record: ReportImport = await recordImport({
     importId,
     sellerId: params.sellerId,
@@ -125,6 +136,7 @@ export async function ingestReportBuffer(params: {
     rowsParsed: parsed.rows.length,
     rowsNew: stored,
     rowsDuplicate: duplicate,
+    rowsRefreshed: refreshed,
     unmappedHeaders: parsed.unmappedHeaders,
     observedFrom: record.observedFrom,
     observedTo: record.observedTo,

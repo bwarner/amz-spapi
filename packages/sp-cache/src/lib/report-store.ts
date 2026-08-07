@@ -4,8 +4,13 @@ import {
   upsertDocument,
   collectionName,
 } from '@amz-spapi/couchbase-utils';
+import {
+  NUMERIC_FIELDS,
+  REPORTS,
+  type ReportFieldName,
+} from './report-registry.js';
 import type { ReportKind } from './report-registry.js';
-import type { ReportRow } from './report-ingest.js';
+import { remapStoredRow, type ReportRow } from './report-ingest.js';
 
 /**
  * Storage for ingested report rows, plus the import ledger that records what
@@ -76,36 +81,70 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-/** Which of these row ids already exist. */
-async function existingRowIds(ids: string[]): Promise<Set<string>> {
-  const found = new Set<string>();
+/** What is already stored under these ids, and how it was parsed. */
+type StoredShape = { mappingVersion?: string; importId?: string };
+
+async function existingRowShapes(
+  ids: string[]
+): Promise<Map<string, StoredShape>> {
+  const found = new Map<string, StoredShape>();
   for (const batch of chunk(ids, KEY_BATCH)) {
-    const { rows } = await reportStorage.executeQuery<string>(
+    const { rows } = await reportStorage.executeQuery<
+      StoredShape & { id: string }
+    >(
       SCOPE,
-      `SELECT RAW META(d).id FROM ${ROWS} AS d USE KEYS $ids`,
+      `SELECT META(d).id AS id, d.mappingVersion AS mappingVersion,
+              d.importId AS importId
+         FROM ${ROWS} AS d USE KEYS $ids`,
       { parameters: { ids: batch }, readonly: true }
     );
-    for (const id of rows) found.add(id);
+    for (const row of rows) {
+      found.set(row.id, {
+        mappingVersion: row.mappingVersion,
+        importId: row.importId,
+      });
+    }
   }
   return found;
 }
 
 /**
- * Persist rows, skipping ones already stored. Returns what was new so the
- * caller can report "imported 1,240 rows, 1,190 already known" rather than
- * implying every import added data.
+ * Persist rows. Already-stored rows are skipped — UNLESS they were parsed under
+ * a different column mapping, in which case they are re-written.
+ *
+ * That exception is the whole point. Identity is a content hash, so re-sending
+ * a file after the registry has been corrected dedupes every row and leaves the
+ * old, wrong interpretation in place while reporting a successful import. A
+ * seller who was told "your storage fees are unmapped, re-attach the file" did
+ * exactly that, twice, and nothing changed either time. Re-attaching the file is
+ * the repair anyone will reach for first, so it has to BE the repair.
+ *
+ * Refreshed rows are still counted as duplicates — no new facts arrived — and
+ * keep the importId that first stored them, so coverage windows do not move
+ * under a re-read.
  */
 export async function storeReportRows(
   rows: ReportRow[],
   /** Stamped on each row so coverage can be derived from the rows themselves. */
   importId?: string
-): Promise<{ stored: number; duplicate: number }> {
-  if (!rows.length) return { stored: 0, duplicate: 0 };
+): Promise<{ stored: number; duplicate: number; refreshed: number }> {
+  if (!rows.length) return { stored: 0, duplicate: 0, refreshed: 0 };
 
-  const existing = await existingRowIds(rows.map((row) => row.rowId));
-  const fresh = rows
-    .filter((row) => !existing.has(row.rowId))
-    .map((row) => (importId ? { ...row, importId } : row));
+  const existing = await existingRowShapes(rows.map((row) => row.rowId));
+  const fresh: ReportRow[] = [];
+  let duplicate = 0;
+  let refreshed = 0;
+  for (const row of rows) {
+    const prior = existing.get(row.rowId);
+    if (!prior) {
+      fresh.push(importId ? { ...row, importId } : row);
+      continue;
+    }
+    duplicate += 1;
+    if (prior.mappingVersion === row.mappingVersion) continue;
+    refreshed += 1;
+    fresh.push({ ...row, importId: prior.importId ?? importId });
+  }
   const ttl = rowTtlSeconds();
 
   for (const batch of chunk(fresh, WRITE_BATCH)) {
@@ -126,7 +165,9 @@ export async function storeReportRows(
     );
   }
 
-  return { stored: fresh.length, duplicate: rows.length - fresh.length };
+  // `fresh` carries both the new rows and the re-read ones, so the new count is
+  // what is left after taking the refreshes out.
+  return { stored: fresh.length - refreshed, duplicate, refreshed };
 }
 
 /**
@@ -399,13 +440,77 @@ export async function queryLedgerRows(
 }
 
 /**
+ * Rewrite stored rows to what today's registry would produce, in place.
+ *
+ * For data whose source file is gone — a sync from an API role since revoked,
+ * an upload nobody kept. Everything it derives is a pure function of the
+ * strings already in the row, so it repairs what re-importing cannot reach.
+ *
+ * A ONE-WAY conversion, not a compatibility layer: afterwards there is a single
+ * representation and nothing reads the old one.
+ *
+ * Keys are collected first and then read in batches rather than paged with
+ * OFFSET — the writes go back to the keys they were read from, so a shifting
+ * window would be a hazard for no benefit.
+ */
+export async function migrateReportRows(params: {
+  sellerId: string;
+  kind: ReportKind;
+}): Promise<{ scanned: number; updated: number }> {
+  const { rows: ids } = await reportStorage.executeQuery<string>(
+    SCOPE,
+    `SELECT RAW META(d).id FROM ${ROWS} AS d
+       WHERE d.sellerId = $sellerId AND d.reportKind = $kind`,
+    {
+      parameters: { sellerId: params.sellerId, kind: params.kind },
+      readonly: true,
+    }
+  );
+
+  const ttl = rowTtlSeconds();
+  let scanned = 0;
+  let updated = 0;
+
+  for (const batch of chunk(ids, KEY_BATCH)) {
+    const { rows } = await reportStorage.executeQuery<ReportRow>(
+      SCOPE,
+      `SELECT RAW d FROM ${ROWS} AS d USE KEYS $ids`,
+      { parameters: { ids: batch }, readonly: true }
+    );
+    scanned += rows.length;
+
+    const changed = rows
+      .map((row) => remapStoredRow(row))
+      .filter((row): row is ReportRow => row !== null);
+    updated += changed.length;
+
+    for (const writeBatch of chunk(changed, WRITE_BATCH)) {
+      const pairs = writeBatch
+        .map((_, index) => `($k${index}, $v${index}, {"expiration": $exp})`)
+        .join(', ');
+      const parameters: Record<string, unknown> = { exp: absoluteExpiry(ttl) };
+      writeBatch.forEach((row, index) => {
+        parameters[`k${index}`] = row.rowId;
+        parameters[`v${index}`] = row;
+      });
+      await reportStorage.executeQuery(
+        SCOPE,
+        `UPSERT INTO ${ROWS} (KEY, VALUE, OPTIONS) VALUES ${pairs}`,
+        { parameters }
+      );
+    }
+  }
+
+  return { scanned, updated };
+}
+
+/**
  * Delete stored rows for a seller and report kind.
  *
- * Needed because remapping columns changes how a row is INTERPRETED without
- * changing its content hash, so a re-import correctly reports every row as a
- * duplicate and the old sparse mapping persists. Dropping and re-importing is
- * the honest fix; a migration path for that is machinery for a problem that
- * only exists while the registry is still being corrected.
+ * Still the blunt instrument, for a registry change too structural to migrate —
+ * a column now read as a different field entirely. For the ordinary case, prefer
+ * re-importing the file (which re-reads rows stored under an older mapping) or
+ * `migrateReportRows` when the file is gone.
  */
 export async function deleteReportRows(params: {
   sellerId: string;
@@ -505,4 +610,266 @@ export async function queryReceiptAggregates(params: {
     { parameters, readonly: true }
   );
   return rows;
+}
+
+/**
+ * A caller asked for a field this report does not have. Carries the valid names
+ * so the answer is "here is what you can group by", not "no".
+ */
+export class ReportQueryError extends Error {
+  constructor(message: string, readonly validFields: ReportFieldName[]) {
+    super(message);
+    this.name = 'ReportQueryError';
+  }
+}
+
+/** One group of a totalled query. */
+export type ReportAggregateGroup = {
+  /** The grouping columns' values. Empty object when nothing was grouped by. */
+  key: Partial<Record<ReportFieldName, string | null>>;
+  total: number;
+  rows: number;
+  /** Rows that HAD a value which would not parse. Never counted as zero. */
+  unparsed: number;
+  /**
+   * Rows with no such column at all.
+   *
+   * Distinct from `unparsed`, and the difference matters: a column absent from
+   * every stored row is not a total of zero, it is a question that cannot be
+   * answered from what was imported — an export that lacked the column, or rows
+   * stored before it was mapped. Without this the query answers 0 and means
+   * "you were not charged".
+   */
+  absent: number;
+};
+
+export type ReportAggregate = {
+  kind: ReportKind;
+  measure: ReportFieldName;
+  /**
+   * The spreadsheet columns this measure was read from.
+   *
+   * Provenance travels with the figure because a total on its own is not
+   * checkable, and an unverifiable number invites a reader to substitute its
+   * own. A model asked for storage fees, given "27.65", guessed aloud that the
+   * tool had summed the wrong column and sent the seller to Excel — while the
+   * number was exactly right. Saying "amountTotal, from
+   * estimated_monthly_storage_fee" ends that argument with evidence.
+   */
+  measureColumns: string[];
+  groupBy: ReportFieldName[];
+  groups: ReportAggregateGroup[];
+  rowsMatched: number;
+  /** Rows the measure could not be read from, across every group. */
+  unparsed: number;
+  /** Rows carrying no such column at all, across every group. */
+  absent: number;
+  /** Set when `limit` cut the group list — the totals shown are not all of them. */
+  truncated: boolean;
+};
+
+/** Groups returned by default. Enough for a per-ASIN breakdown of a catalogue. */
+const AGGREGATE_LIMIT = 500;
+
+/** Backticked because `date` and several others are reserved words in N1QL. */
+function fieldPath(field: ReportFieldName): string {
+  return `d.fields.\`${field}\``;
+}
+
+/**
+ * The parsed number for a field, written at ingest by `readReportNumber`.
+ *
+ * MISSING where the value would not parse, and — for rows stored before numeric
+ * parsing existed — missing everywhere. The query reports that as unreadable
+ * rather than as zero, which is the honest answer: those rows have to be
+ * dropped and imported again to be totalled.
+ */
+function numberPath(field: ReportFieldName): string {
+  return `d.numbers.\`${field}\``;
+}
+
+/** Fields this report actually declares — the only identifiers ever interpolated. */
+function queryableFields(kind: ReportKind): ReportFieldName[] {
+  const definition = REPORTS[kind];
+  return (Object.keys(definition.fields) as ReportFieldName[]).filter(
+    (field) => definition.fields[field]?.length
+  );
+}
+
+function assertField(
+  kind: ReportKind,
+  field: string,
+  role: string
+): ReportFieldName {
+  const valid = queryableFields(kind);
+  if (!valid.includes(field as ReportFieldName)) {
+    throw new ReportQueryError(
+      `"${field}" is not a ${role} on the ${REPORTS[kind].label} report. ` +
+        `Available: ${valid.join(', ')}.`,
+      valid
+    );
+  }
+  return field as ReportFieldName;
+}
+
+/**
+ * The measure has to be a field that holds a number.
+ *
+ * Summing a text column is not an error the database will report — it answers
+ * zero, or null, and a caller reads that as "you were not charged". Refusing it
+ * by name, with the numeric columns listed, turns a wrong answer into a retry.
+ */
+function assertNumericField(kind: ReportKind, field: string): ReportFieldName {
+  const measure = assertField(kind, field, 'measure');
+  const numeric = queryableFields(kind).filter((entry) =>
+    NUMERIC_FIELDS.has(entry)
+  );
+  if (!NUMERIC_FIELDS.has(measure)) {
+    throw new ReportQueryError(
+      `"${field}" on the ${REPORTS[kind].label} report holds text, not a ` +
+        `number, so it cannot be totalled. Numeric measures: ${
+          numeric.length ? numeric.join(', ') : 'none on this report'
+        }.`,
+      numeric
+    );
+  }
+  return measure;
+}
+
+/**
+ * Total a numeric column of stored report rows, grouped by any of its own
+ * columns. The general form of "what did I pay for these two ASINs".
+ *
+ * Reads stored rows only, exactly like `queryLedgerRows` — an empty result
+ * means nothing was ingested, not that nothing happened, so coverage still has
+ * to be checked before concluding anything from zero.
+ *
+ * Reduced in the query service rather than in the caller: a year of storage
+ * fees is tens of thousands of rows and the answer is a handful of numbers,
+ * and the same reasoning that put `queryReceiptAggregates` in N1QL applies
+ * here with a bigger multiplier.
+ *
+ * `currency` joins the grouping automatically wherever the report has one.
+ * Summing GBP into USD produces a number that is wrong in a way no reader can
+ * see, and no caller remembers to guard against it every time.
+ */
+export async function queryReportAggregate(params: {
+  sellerId: string;
+  kind: ReportKind;
+  /** Logical field holding the number to total. */
+  measure: string;
+  groupBy?: string[];
+  from?: string;
+  to?: string;
+  /** field -> accepted values. Matched case-insensitively. */
+  filters?: Record<string, string[]>;
+  limit?: number;
+}): Promise<ReportAggregate> {
+  const measure = assertNumericField(params.kind, params.measure);
+
+  const requested = (params.groupBy ?? []).map((field) =>
+    assertField(params.kind, field, 'grouping')
+  );
+  const hasCurrency = queryableFields(params.kind).includes('currency');
+  const groupBy = [
+    ...new Set(
+      hasCurrency && measure !== 'currency'
+        ? [...requested, 'currency' as ReportFieldName]
+        : requested
+    ),
+  ];
+
+  const conditions = ['d.sellerId = $sellerId', 'd.reportKind = $kind'];
+  const parameters: Record<string, unknown> = {
+    sellerId: params.sellerId,
+    kind: params.kind,
+  };
+  if (params.from) {
+    conditions.push('d.fields.`date` >= $from');
+    parameters['from'] = params.from;
+  }
+  if (params.to) {
+    conditions.push('d.fields.`date` <= $to');
+    parameters['to'] = params.to;
+  }
+  for (const [index, [field, values]] of Object.entries(
+    params.filters ?? {}
+  ).entries()) {
+    const column = assertField(params.kind, field, 'filter');
+    if (!values.length) continue;
+    // Upper-cased both sides: an ASIN typed in lower case is the same ASIN, and
+    // a filter that silently matches nothing reads as "you were not charged".
+    conditions.push(`UPPER(${fieldPath(column)}) IN $filter${index}`);
+    parameters[`filter${index}`] = values.map((value) => value.toUpperCase());
+  }
+
+  // Interpolated rather than bound — N1QL will not take a parameter in LIMIT —
+  // so it is forced to a positive integer here and cannot be anything else.
+  const limit = Math.max(
+    1,
+    Math.floor(Number(params.limit) || AGGREGATE_LIMIT)
+  );
+
+  // The database only ADDS UP. Every value was read into a number at ingest by
+  // `readReportNumber`, which is a plain function under test — the arithmetic
+  // that used to live here as N1QL regular expressions could not be executed by
+  // any test, and was wrong.
+  //
+  // A row counts as unreadable when the export HAD a value and it would not
+  // parse; a blank cell is simply not a figure and is not held against the
+  // total. Rows stored before numeric parsing existed have no `numbers` at all,
+  // so they all land here — which is the honest report, and says to re-import.
+  const unreadable =
+    `CASE WHEN ${numberPath(measure)} IS MISSING ` +
+    `AND ${fieldPath(measure)} IS NOT MISSING ` +
+    `AND ${fieldPath(measure)} != "" THEN 1 ELSE 0 END`;
+
+  const { rows } = await reportStorage.executeQuery<
+    Record<string, unknown> & {
+      total: number;
+      rows: number;
+      unparsed: number;
+      absent: number;
+    }
+  >(
+    SCOPE,
+    `SELECT ${[
+      ...groupBy.map((field) => `${fieldPath(field)} AS \`${field}\``),
+      `SUM(${numberPath(measure)}) AS total`,
+      'COUNT(*) AS `rows`',
+      `SUM(${unreadable}) AS unparsed`,
+      `SUM(CASE WHEN ${fieldPath(measure)} IS MISSING THEN 1 ELSE 0 END) ` +
+        'AS absent',
+    ].join(', ')}
+       FROM ${ROWS} AS d
+       WHERE ${conditions.join(' AND ')}
+       ${groupBy.length ? `GROUP BY ${groupBy.map(fieldPath).join(', ')}` : ''}
+       ORDER BY ABS(SUM(${numberPath(measure)})) DESC
+       LIMIT ${limit + 1}`,
+    { parameters, readonly: true }
+  );
+
+  const truncated = rows.length > limit;
+  const groups = rows.slice(0, limit).map((row) => ({
+    key: Object.fromEntries(
+      groupBy.map((field) => [field, (row[field] as string | null) ?? null])
+    ) as Partial<Record<ReportFieldName, string | null>>,
+    // SUM over rows that are all unreadable is NULL, not 0.
+    total: typeof row.total === 'number' ? row.total : 0,
+    rows: row.rows,
+    unparsed: row.unparsed,
+    absent: row.absent,
+  }));
+
+  return {
+    kind: params.kind,
+    measure,
+    measureColumns: REPORTS[params.kind].fields[measure] ?? [],
+    groupBy,
+    groups,
+    rowsMatched: groups.reduce((sum, group) => sum + group.rows, 0),
+    unparsed: groups.reduce((sum, group) => sum + group.unparsed, 0),
+    absent: groups.reduce((sum, group) => sum + group.absent, 0),
+    truncated,
+  };
 }

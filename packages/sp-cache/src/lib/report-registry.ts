@@ -22,7 +22,8 @@ export type ReportKind =
   | 'removal-shipment'
   | 'reimbursement'
   | 'inbound-performance'
-  | 'settlement';
+  | 'settlement'
+  | 'storage-fee';
 
 /** Logical fields we can join and reconcile on. */
 export type ReportFieldName =
@@ -103,7 +104,24 @@ export type ReportFieldName =
   | 'amountDescription'
   | 'amount'
   | 'postedDate'
-  | 'promotionId';
+  | 'promotionId'
+  /**
+   * Monthly Storage Fees columns. The report is one row per FNSKU per
+   * fulfilment centre per month; the fee is `amountTotal` and the month is
+   * `date`.
+   *
+   * The breakdown is mapped, not just the total, because a seller asking why a
+   * fee moved is asking which HALF of it moved — a bigger base (more units, or
+   * bulkier ones) and a utilisation surcharge are different problems with
+   * different fixes. Leaving them unqueryable sent the agent looking for
+   * columns it could not reach and answering nothing.
+   */
+  | 'averageQuantityOnHand'
+  | 'productSizeTier'
+  | 'storageFeeBase'
+  | 'storageFeeSurcharge'
+  /** A CREDIT against the fee (new-selection incentives), not a charge. */
+  | 'storageIncentiveCredit';
 
 export type ReportDefinition = {
   kind: ReportKind;
@@ -340,6 +358,38 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       referenceId: ['caseid', 'amazonorderid'],
     },
   },
+  'storage-fee': {
+    kind: 'storage-fee',
+    reportType: 'GET_FBA_STORAGE_FEE_CHARGES_DATA',
+    label: 'FBA Monthly Storage Fees',
+    fields: {
+      // `month_of_charge` is a MONTH ("2026-06"), not a day. toIsoDate pins it
+      // to the first of the month so it orders and range-compares with the
+      // day-granular reports rather than sorting as a shorter string.
+      date: ['monthofcharge', 'month'],
+      asin: ['asin'],
+      fnsku: ['fnsku'],
+      // No seller SKU in this report: Amazon bills storage against the
+      // fulfilment-network item, so FNSKU/ASIN is the whole of its identity.
+      title: ['productname', 'title'],
+      fulfillmentCenter: ['fulfillmentcenter'],
+      country: ['countrycode', 'country'],
+      productSizeTier: ['productsizetier'],
+      averageQuantityOnHand: ['averagequantityonhand'],
+      // THE COMPLETE monthly storage charge for this row: Amazon computes
+      // `estimated_monthly_storage_fee` as est_base_msf + est_sus, so the
+      // utilisation surcharge is already inside it. Do not add the two columns
+      // below to this one — that double counts. They are the breakdown OF it.
+      amountTotal: ['estimatedmonthlystoragefee', 'monthlystoragefee'],
+      storageFeeBase: ['estbasemsf'],
+      storageFeeSurcharge: ['estsus'],
+      // Separate from the fee, and the opposite sign of one: an incentive that
+      // reduces what is owed. Never subtract it from `amountTotal` without
+      // saying so — the fee column is what Amazon billed for storage.
+      storageIncentiveCredit: ['totalincentivefeeamount'],
+      currency: ['currency'],
+    },
+  },
   'inbound-performance': {
     kind: 'inbound-performance',
     reportType: 'GET_FBA_FULFILLMENT_INBOUND_NONCOMPLIANCE_DATA',
@@ -361,6 +411,45 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
     },
   },
 };
+
+/**
+ * Fields that hold a NUMBER, and are read as one at ingest.
+ *
+ * Declared here rather than guessed at from the value, because guessing is how
+ * a seller SKU of "12345" becomes a quantity. Everything in this set gets a
+ * parsed copy in `ReportRow.numbers`; everything outside it stays the string
+ * the export contained and is never summed.
+ *
+ * This is also the list a caller may total, so an attempt to sum `amountType`
+ * or `asin` is refused with these names rather than answered with zero.
+ */
+export const NUMERIC_FIELDS = new Set<ReportFieldName>([
+  'quantity',
+  'quantityExpected',
+  'quantityReceived',
+  'amount',
+  'amountTotal',
+  'averageQuantityOnHand',
+  'storageFeeBase',
+  'storageFeeSurcharge',
+  'storageIncentiveCredit',
+  'reconciledQuantity',
+  'unreconciledQuantity',
+  'startingBalance',
+  'endingBalance',
+  'inTransit',
+  'receipts',
+  'customerShipments',
+  'customerReturns',
+  'vendorReturns',
+  'warehouseTransfer',
+  'found',
+  'lost',
+  'damaged',
+  'disposed',
+  'otherEvents',
+  'unknownEvents',
+]);
 
 export const REPORT_KINDS = Object.keys(REPORTS) as ReportKind[];
 

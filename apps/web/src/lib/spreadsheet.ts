@@ -74,6 +74,71 @@ function looksLikeSpreadsheet(bytes: Buffer): boolean {
   return !bytes.subarray(0, 4096).includes(0x00);
 }
 
+/**
+ * Whether these bytes are a BINARY workbook rather than delimited text.
+ *
+ * The distinction decides whether the report importer can read the file
+ * directly: it decodes text and splits on delimiters, and an .xlsx is a zip.
+ */
+export function isBinaryWorkbook(bytes: Buffer): boolean {
+  if (bytes.length < 4) return false;
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b; // xlsx, xlsm
+  const isOle =
+    bytes[0] === 0xd0 &&
+    bytes[1] === 0xcf &&
+    bytes[2] === 0x11 &&
+    bytes[3] === 0xe0; // xls
+  return isZip || isOle;
+}
+
+/**
+ * A workbook's first populated sheet as CSV, so the report importer can read it.
+ *
+ * For BINARY workbooks only. A .csv or .tsv must reach the importer as the
+ * bytes the seller downloaded: row identity is a hash of the raw columns, so
+ * round-tripping one through SheetJS would reformat its dates and numbers and
+ * the same export would store twice — once through here, once through the
+ * direct path — with every figure then doubled.
+ *
+ * Whole sheet, not a preview. This is the path that exists precisely because
+ * the preview is not enough.
+ */
+export function workbookAsCsv(bytes: Buffer): string {
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(bytes, {
+      type: 'buffer',
+      cellDates: true,
+      cellFormula: false,
+      cellStyles: false,
+    });
+  } catch (error) {
+    throw new SpreadsheetError(
+      error instanceof Error
+        ? `Could not read the workbook: ${error.message}`
+        : 'Could not read the workbook.'
+    );
+  }
+  const sheetName = firstPopulatedSheet(workbook);
+  if (!sheetName) throw new SpreadsheetError('That workbook has no sheets.');
+  return XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName], {
+    blankrows: false,
+  });
+}
+
+/**
+ * The first sheet with anything in it. A workbook whose first tab is a blank
+ * cover sheet is common enough that picking [0] blindly reads as "empty file".
+ */
+function firstPopulatedSheet(workbook: XLSX.WorkBook): string | undefined {
+  return (
+    workbook.SheetNames.find((name) => {
+      const sheet = workbook.Sheets[name];
+      return sheet && Object.keys(sheet).some((key) => !key.startsWith('!'));
+    }) ?? workbook.SheetNames[0]
+  );
+}
+
 export function readSpreadsheet(bytes: Buffer): SpreadsheetPreview {
   if (!looksLikeSpreadsheet(bytes)) {
     throw new SpreadsheetError(
@@ -106,13 +171,7 @@ export function readSpreadsheet(bytes: Buffer): SpreadsheetPreview {
     throw new SpreadsheetError('That workbook has no sheets in it.');
   }
 
-  // The first sheet with anything in it. A workbook whose first tab is a blank
-  // cover sheet is common enough that picking [0] blindly reads as "empty file".
-  const sheetName =
-    workbook.SheetNames.find((name) => {
-      const sheet = workbook.Sheets[name];
-      return sheet && Object.keys(sheet).some((key) => !key.startsWith('!'));
-    }) ?? workbook.SheetNames[0];
+  const sheetName = firstPopulatedSheet(workbook) as string;
 
   const table = XLSX.utils.sheet_to_json<unknown[]>(
     workbook.Sheets[sheetName],
@@ -152,7 +211,17 @@ export function readSpreadsheet(bytes: Buffer): SpreadsheetPreview {
  * A table rather than JSON: it is what the markdown renderer already displays
  * well, and the model reads a header row as column meaning without being told.
  */
-export function previewAsMarkdown(preview: SpreadsheetPreview): string {
+export function previewAsMarkdown(
+  preview: SpreadsheetPreview,
+  /**
+   * Set when the WHOLE file was ingested as a report. It changes the advice
+   * from "this is truncated, offer to import it" to "it is imported, go and
+   * total it" — the alternative this preview has always pointed at now exists,
+   * and telling the agent to offer an import that already happened is how a
+   * seller gets asked to do something twice.
+   */
+  imported?: { label: string; kind: string }
+): string {
   const escape = (cell: string) => cell.replace(/\|/g, '\\|');
   const lines = [
     `| ${preview.header.map(escape).join(' | ')} |`,
@@ -174,7 +243,17 @@ export function previewAsMarkdown(preview: SpreadsheetPreview): string {
       }: ${preview.sheetNames.join(', ')}.`
     );
   }
-  if (preview.truncated) {
+  if (imported) {
+    notes.push(
+      `All ${preview.totalRows} rows of this file are STORED as ${imported.label}` +
+        `${
+          preview.truncated
+            ? `; only the first ${preview.rows.length} are shown above`
+            : ''
+        }. Answer any total, count or breakdown with total-report-rows ` +
+        `(kind: ${imported.kind}) — never by adding up the rows shown here.`
+    );
+  } else if (preview.truncated) {
     notes.push(
       `Showing the first ${preview.rows.length} of ${preview.totalRows} rows — ` +
         'do not total a truncated preview; say it is truncated and offer to ' +

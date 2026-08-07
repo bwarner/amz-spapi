@@ -3,6 +3,7 @@ export type { SpCacheConfig } from './lib/sp-cache.js';
 export {
   REPORTS,
   REPORT_KINDS,
+  NUMERIC_FIELDS,
   reportByType,
   normalizeHeader,
 } from './lib/report-registry.js';
@@ -15,6 +16,8 @@ export {
   parseReport,
   decodeReportBuffer,
   detectReportKind,
+  readReportNumber,
+  remapStoredRow,
 } from './lib/report-ingest.js';
 export type { ReportRow, ParseResult } from './lib/report-ingest.js';
 export {
@@ -23,8 +26,11 @@ export {
   getCoverage,
   queryLedgerRows,
   queryReceiptAggregates,
+  queryReportAggregate,
+  migrateReportRows,
   deleteReportRows,
   deleteReportImports,
+  ReportQueryError,
   LEDGER_AUTHORITY,
 } from './lib/report-store.js';
 export type {
@@ -33,6 +39,8 @@ export type {
   Coverage,
   LedgerQuery,
   ReceiptAggregate,
+  ReportAggregate,
+  ReportAggregateGroup,
 } from './lib/report-store.js';
 export {
   ingestReportBuffer,
