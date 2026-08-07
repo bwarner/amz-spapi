@@ -5,7 +5,14 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
-import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useCallback,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -214,6 +221,12 @@ function isDocumentFile(file: File): boolean {
 
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
+/**
+ * How tall the composer may grow before it scrolls instead — roughly eight
+ * lines. Past that it starts eating the conversation it is being written about.
+ */
+const INPUT_MAX_HEIGHT = 200;
+
 type ChatSummary = {
   chatId: string;
   title: string;
@@ -234,6 +247,7 @@ export default function ChatPage() {
   const [uploadingCount, setUploadingCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatIdRef = useRef<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
@@ -564,10 +578,36 @@ export default function ChatPage() {
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      // Enter never inserts a newline here, streaming or not — Shift+Enter is
+      // the way to a second line, and having Enter mean two different things
+      // depending on whether an answer happens to be arriving is worse than
+      // having it mean one.
       e.preventDefault();
       handleSubmit();
     }
   };
+
+  /**
+   * Grow the box to fit what has been typed, to a point.
+   *
+   * It was pinned to one line — `h-11 max-h-11 overflow-hidden` — so a long
+   * prompt scrolled up out of sight as it was written and could not be read
+   * back or edited. Anything worth asking an agent runs to a paragraph.
+   *
+   * Keyed on the value rather than done in `onChange`, so it also follows text
+   * that arrives some other way: the suggestion buttons set the input directly,
+   * and sending clears it, and both need the height to follow.
+   *
+   * `useLayoutEffect` because a paint at the old height is a visible jump.
+   */
+  useLayoutEffect(() => {
+    const field = textareaRef.current;
+    if (!field) return;
+    // Collapse first: scrollHeight only ever reports content taller than the
+    // box, so measuring without this makes the field grow and never shrink.
+    field.style.height = 'auto';
+    field.style.height = `${Math.min(field.scrollHeight, INPUT_MAX_HEIGHT)}px`;
+  }, [input]);
 
   const handlePromptClick = (prompt: string) => {
     setInput(prompt);
@@ -745,7 +785,9 @@ export default function ChatPage() {
                 </div>
               </div>
             )}
-            <form onSubmit={handleSubmit} className="flex gap-2">
+            {/* `items-end` keeps the round buttons on the baseline as the box
+                grows, instead of stretching them to its height. */}
+            <form onSubmit={handleSubmit} className="flex items-end gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -759,19 +801,29 @@ export default function ChatPage() {
                 variant="ghost"
                 size="icon"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isStreaming}
                 className="h-11 w-11 shrink-0 rounded-full"
                 title="Attach product photos"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
+              {/* Never disabled while streaming. Waiting for an answer is
+                  exactly when the next question occurs to you, and a composer
+                  that goes dead for the length of a turn loses it. Sending is
+                  what has to wait, and the Stop button already says so. */}
               <Textarea
-                placeholder="Ask about listings, orders..."
+                ref={textareaRef}
+                placeholder={
+                  isStreaming
+                    ? 'Type your next question while this one answers...'
+                    : 'Ask about listings, orders...'
+                }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                disabled={isStreaming}
-                className="h-11 min-h-11 max-h-11 flex-1 resize-none overflow-hidden rounded-2xl py-2.5 text-base sm:text-sm"
+                // The cap lives in one place; the effect above measures against
+                // the same constant.
+                style={{ maxHeight: INPUT_MAX_HEIGHT }}
+                className="min-h-11 flex-1 resize-none overflow-y-auto rounded-2xl py-2.5 text-base sm:text-sm"
                 rows={1}
               />
               {isStreaming ? (
@@ -801,6 +853,16 @@ export default function ChatPage() {
                 </Button>
               )}
             </form>
+            {/* Enter cannot send mid-turn, and swallowing the keystroke without
+                saying why is the silence #72 was about. Shown only once there
+                is something waiting to be sent, so it is an answer to what the
+                reader just tried rather than standing advice. */}
+            {isStreaming && input.trim() && (
+              <p className="mt-1.5 px-1 text-xs text-muted-foreground">
+                Still answering — your draft is kept; send it when this
+                finishes, or press Stop to interrupt.
+              </p>
+            )}
           </div>
         </div>
       </SidebarInset>
