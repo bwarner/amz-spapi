@@ -115,13 +115,15 @@ describe('the Vercel role no longer decrypts credentials', () => {
 });
 
 /**
- * The migration scaffold that keeps the key-ARN export alive (#55, step 5).
+ * The stable named export, which is NOT a scaffold.
  *
- * Tested so that removing it is a deliberate act with a failing test attached,
- * rather than a tidy-up that silently breaks the next prod deploy. See the
- * comment on `exportValue` in the stack for the removal condition.
+ * The lambdas stack imports this by name to grant the credentials function
+ * decrypt. The auto-generated `ExportsOutputFnGetAtt…` export that used to sit
+ * beside it was a migration scaffold, kept alive only while a `vercel-access`
+ * stack deployed before #55 was still importing it; removed once
+ * `list-imports` reported it unused in every stage.
  */
-describe('the key-ARN export is published unconditionally', () => {
+describe('the key ARN is exported for the lambdas stack', () => {
   const template = () => {
     const app = new cdk.App();
     return Template.fromStack(
@@ -131,20 +133,6 @@ describe('the key-ARN export is published unconditionally', () => {
       })
     );
   };
-
-  it('publishes the auto-generated name the old consumer imports', () => {
-    // The NAME is the contract, and it is not ours to choose: CloudFormation
-    // matches imports by string. `vercel-access` stacks deployed before #55
-    // import exactly this, so a different name would leave the export they
-    // depend on unpublished — which is the failure this exists to prevent.
-    const exports = Object.values(template().toJSON().Outputs ?? {})
-      .map((output) => (output as { Export?: { Name?: string } }).Export?.Name)
-      .filter(Boolean);
-
-    expect(exports).toContain(
-      'sellavant-dev-credentials-key:ExportsOutputFnGetAttCredentialsKeyA24B74BFArn9B22653B'
-    );
-  });
 
   it('still publishes the stable named export as well', () => {
     // The one the lambdas stack imports by name. Unrelated to the scaffold, and
