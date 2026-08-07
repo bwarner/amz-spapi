@@ -88,3 +88,9 @@ sellavant-home-smoke.png
 
 # A+ design-preview renders (dev harness output)
 tools/render-out/
+
+# OpenCode agent config — a byte-identical copy of .github/skills that Nx
+# regenerates for a second agent tool. One copy in the repo is enough; two
+# would drift.
+.opencode/
+opencode.json
