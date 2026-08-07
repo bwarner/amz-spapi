@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { cellText, classifyCell } from './table-cells';
+import { cellClass, cellText, classifyCell } from './table-cells';
 
 describe('classifyCell', () => {
   it('keeps Amazon identifiers in one unbroken token', () => {
@@ -55,6 +55,23 @@ describe('classifyCell', () => {
   it('classifies an empty cell as prose rather than throwing', () => {
     expect(classifyCell('')).toBe('prose');
     expect(classifyCell('   ')).toBe('prose');
+  });
+});
+
+describe('cellClass', () => {
+  it('reserves width only for text long enough to need it', () => {
+    // Found by looking at the state gallery: a fulfilment centre code is five
+    // characters, one short of the identifier pattern, and was being given
+    // twelve rems — pushing the columns that mattered off the side.
+    expect(cellClass('prose', 'XAB40')).toBe('');
+    expect(
+      cellClass('prose', 'Gran Del Val Geisha Coffee Whole Beans – Washed')
+    ).toBe('min-w-[12rem]');
+  });
+
+  it('does not reserve width for identifiers or figures', () => {
+    expect(cellClass('identifier', 'B0FRD9RR2B')).not.toContain('min-w');
+    expect(cellClass('numeric', '$27.65')).toContain('text-right');
   });
 });
 

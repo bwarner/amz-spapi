@@ -98,10 +98,9 @@ export function MarkdownTableHead({ children }: { children?: ReactNode }) {
 }
 
 export function MarkdownTableCell({ children }: { children?: ReactNode }) {
+  const text = cellText(children);
   return (
-    <td
-      className={cn('align-top', cellClass(classifyCell(cellText(children))))}
-    >
+    <td className={cn('align-top', cellClass(classifyCell(text), text))}>
       {children}
     </td>
   );
