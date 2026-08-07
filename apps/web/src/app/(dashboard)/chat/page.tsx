@@ -18,7 +18,6 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Send,
   Sparkles,
-  Loader2,
   AlertCircle,
   Paperclip,
   X,
@@ -35,6 +34,7 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from '../../../components/ai-elements/conversation';
+import { Loader } from '@/components/ai-elements/loader';
 import { ConversationSidebar } from './conversation-sidebar';
 import { MessageBubble, type AppMessage } from './message-bubble';
 
@@ -779,7 +779,7 @@ export default function ChatPage() {
                   ))}
                   {uploadingCount > 0 && (
                     <div className="flex h-16 w-16 items-center justify-center rounded-md border">
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <Loader className="text-muted-foreground" />
                     </div>
                   )}
                 </div>

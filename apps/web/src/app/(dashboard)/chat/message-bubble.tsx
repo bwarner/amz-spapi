@@ -2,19 +2,12 @@
 
 import { memo } from 'react';
 
-import {
-  Bot,
-  User,
-  Loader2,
-  ChevronRight,
-  CircleSlash,
-  CircleDashed,
-} from 'lucide-react';
+import { Bot, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import type { UIMessage } from 'ai';
+import type { ToolUIPart, UIMessage } from 'ai';
 import { APlusDocumentSchema, type APlusDocument } from '@farvisionllc/models';
 import { APlusPreview } from '@/components/aplus-preview/aplus-preview';
 import {
@@ -23,6 +16,25 @@ import {
   MarkdownTableHead,
   MarkdownTableRow,
 } from './markdown-table';
+import { Loader } from '@/components/ai-elements/loader';
+import {
+  Tool,
+  ToolContent,
+  ToolHeader,
+  ToolInput,
+  ToolOutput,
+} from '@/components/ai-elements/tool';
+import { approvalSummary, isStalled, toolTitle } from './tool-presentation';
+import {
+  Confirmation,
+  ConfirmationAccepted,
+  ConfirmationAction,
+  ConfirmationActions,
+  ConfirmationRejected,
+  ConfirmationRequest,
+  ConfirmationTitle,
+  type ToolUIPartApproval,
+} from '@/components/ai-elements/confirmation';
 
 export type AppMessage = UIMessage;
 
@@ -31,8 +43,10 @@ const APLUS_TOOL_PART_TYPE = 'tool-generate-aplus-preview';
 type ToolPart = {
   type: string;
   state?: string;
+  input?: unknown;
   output?: unknown;
   errorText?: string;
+  approval?: ToolUIPartApproval;
 };
 
 function getToolName(partType: string): string | null {
@@ -72,123 +86,6 @@ const MARKDOWN_COMPONENTS: Components = {
   },
 };
 
-const TOOL_LABELS: Record<string, [string, string]> = {
-  'search-catalog': ['Searching catalog...', 'Catalog search complete'],
-  'get-listing': ['Fetching listing details...', 'Listing details retrieved'],
-  'get-orders': ['Fetching orders...', 'Orders retrieved'],
-  'get-order-details': ['Fetching order details...', 'Order details retrieved'],
-  'get-inventory': ['Checking inventory...', 'Inventory retrieved'],
-  'get-inbound-shipments': [
-    'Fetching inbound shipments...',
-    'Inbound shipments retrieved',
-  ],
-  'get-settlements': ['Fetching settlements...', 'Settlements retrieved'],
-  'get-financial-events': [
-    'Fetching financial events...',
-    'Financial events retrieved',
-  ],
-  'get-my-listing': ['Fetching your listing...', 'Your listing retrieved'],
-  'search-my-listings': [
-    'Searching your listings...',
-    'Your listings retrieved',
-  ],
-  'generate-image': ['Generating image...', 'Image generated'],
-  'propose-listing-photos': [
-    'Generating photo proposals...',
-    'Photo proposals ready',
-  ],
-  'crop-image': ['Cropping image...', 'Image cropped'],
-  'trim-image': ['Trimming empty space...', 'Image trimmed'],
-  'look-at-photo': ['Looking at the photo...', 'Photo reviewed'],
-  'check-image-compliance': [
-    'Checking image compliance...',
-    'Compliance check complete',
-  ],
-  'search-suppliers': ['Searching suppliers...', 'Suppliers found'],
-  'read-page': ['Reading page...', 'Page read'],
-  'compose-image': ['Compositing images...', 'Images composited'],
-  'generate-infographic': ['Rendering infographic...', 'Infographic rendered'],
-  'render-graphic': ['Rendering graphic...', 'Graphic rendered'],
-  'export-photo-set': ['Bundling photo set...', 'Photo set ready to download'],
-  'scale-image': ['Scaling image...', 'Image scaled'],
-  'remove-image-background': ['Removing background...', 'Background removed'],
-  'preview-listing-images': [
-    'Validating with Amazon (dry run)...',
-    'Amazon validation preview complete',
-  ],
-  'apply-listing-images': [
-    'Updating the live listing...',
-    'Listing update submitted',
-  ],
-  'revert-listing-images': [
-    'Reverting listing images...',
-    'Listing revert submitted',
-  ],
-  'check-listing-status': [
-    'Checking listing health...',
-    'Listing status retrieved',
-  ],
-  'save-vendor': ['Saving vendor...', 'Vendor saved'],
-  'set-buyer-profile': ['Saving buyer profile...', 'Buyer profile saved'],
-  'get-fc-address': ['Looking up Amazon FC...', 'FC lookup complete'],
-  'save-fc-address': ['Saving FC address...', 'FC address saved'],
-  'list-fc-addresses': ['Loading FC address book...', 'FC address book loaded'],
-  'get-buyer-profile': ['Loading buyer profile...', 'Buyer profile retrieved'],
-  'list-vendors': ['Loading vendors...', 'Vendors retrieved'],
-  'create-purchase-order': [
-    'Creating purchase order...',
-    'Purchase order created',
-  ],
-  'revise-purchase-order': [
-    'Revising purchase order...',
-    'Purchase order revised',
-  ],
-  'cancel-purchase-order': [
-    'Cancelling purchase order...',
-    'Purchase order cancelled',
-  ],
-  'render-purchase-order': [
-    'Rendering purchase order PDF...',
-    'Purchase order ready to download',
-  ],
-  'list-purchase-orders': [
-    'Loading purchase orders...',
-    'Purchase orders retrieved',
-  ],
-  'get-purchase-order': [
-    'Loading purchase order...',
-    'Purchase order retrieved',
-  ],
-};
-
-/** Human-readable descriptions for approval-gated (live write) tools. */
-const APPROVAL_TOOL_SUMMARIES: Record<string, string> = {
-  'apply-listing-images':
-    'Write these images to the LIVE Amazon listing (a snapshot is saved first)',
-  'revert-listing-images':
-    'Restore this listing’s images from the stored snapshot',
-  'create-purchase-order':
-    'Create this purchase order (a PO number is assigned and it becomes a business record)',
-  'revise-purchase-order':
-    'Revise this purchase order in place (revision increments; old downloads are invalidated)',
-  'cancel-purchase-order':
-    'Cancel this purchase order (it stays on the record but can no longer be revised or rendered)',
-};
-
-function approvalSummary(toolName: string, input: unknown): string {
-  const base = APPROVAL_TOOL_SUMMARIES[toolName] ?? `Run ${toolName}`;
-  const sku = (input as { sku?: string } | null)?.sku;
-  const count = (input as { imageAssetIds?: string[] } | null)?.imageAssetIds
-    ?.length;
-  return [
-    base,
-    sku ? `— SKU ${sku}` : '',
-    count ? `(${count} image${count === 1 ? '' : 's'})` : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
-}
-
 const LISTING_IMAGE_TOOL_TYPES = new Set([
   'tool-get-my-listing',
   'tool-search-my-listings',
@@ -217,15 +114,27 @@ const CATALOG_IMAGES_MAX = 8;
  */
 type MessageBlock =
   | { kind: 'text'; text: string }
-  | { kind: 'tool'; toolName: string; state: string }
-  | { kind: 'aplus'; doc: APlusDocument }
-  | { kind: 'images'; images: Array<{ url: string; label?: string }> }
   | {
-      kind: 'approval';
-      approvalId: string;
+      kind: 'tool';
       toolName: string;
+      type: string;
+      state: string;
       input: unknown;
-    };
+      output: unknown;
+      errorText?: string;
+      /**
+       * Carried on the tool block rather than as a block of its own.
+       *
+       * An approval is a property OF a call — the component decides what to
+       * show from the call's state and the decision recorded on it. Splitting
+       * them meant the approval could only be rendered while it was pending,
+       * because that was the only moment both were in hand, so answering one
+       * erased the question and the answer together.
+       */
+      approval?: ToolUIPartApproval;
+    }
+  | { kind: 'aplus'; doc: APlusDocument }
+  | { kind: 'images'; images: Array<{ url: string; label?: string }> };
 
 type CatalogImageEntry = { variant?: string; link?: string };
 type CatalogImageSet = { images?: CatalogImageEntry[] };
@@ -311,72 +220,56 @@ function extractListingToolImages(
   return collected;
 }
 
-const SETTLED_TOOL_STATES = new Set([
-  'output-available',
-  'output-error',
-  'output-denied',
-]);
-
 /**
- * A tool row.
+ * A tool call: one line, expandable to what it was asked for and what it
+ * returned.
  *
- * `state` alone cannot tell "running" from "never finished" — both are simply
- * "not settled". Before, anything unsettled span, so reopening a conversation
- * showed spinners for calls that had stopped days earlier and would never
- * complete. Seven of them, in the case that prompted this.
- *
- * `isActive` is the missing half: a call is only in flight if this is the last
- * message AND the conversation is streaming. Otherwise an unsettled call is
- * stale — the turn ended without it resolving — and saying so is the honest
- * thing. A spinner claims work is happening; there is no request.
+ * The parameters and result were previously unreachable — a call was a
+ * sentence, and "that number looks wrong" had nowhere to go. They are collapsed
+ * by default because a turn can hold a dozen calls and the prose is the point.
  */
 function ToolCallDisplay({
   toolName,
+  type,
   state,
+  input,
+  output,
+  errorText,
   isActive,
 }: {
   toolName: string;
+  type: string;
   state: string;
+  input: unknown;
+  output: unknown;
+  errorText?: string;
   /** This message is the last one and the conversation is streaming. */
   isActive: boolean;
 }) {
-  const settled = SETTLED_TOOL_STATES.has(state);
-  const awaitingApproval = state === 'approval-requested';
-  // Unsettled and nothing is running: it stopped, and will not resume on its own.
-  const stalled = !settled && !isActive && !awaitingApproval;
-  const running = !settled && isActive;
+  const stalled = isStalled(state, isActive);
+  const title = toolTitle(toolName, state);
 
-  const labels = TOOL_LABELS[toolName];
-  const label = labels ? (settled ? labels[1] : labels[0]) : toolName;
+  // Nothing to expand into until the call carries something. An empty body
+  // would offer a chevron that opens onto blank space.
+  const hasBody = input !== undefined || output !== undefined || errorText;
 
   return (
-    <div className="flex items-center gap-1.5 text-sm">
-      {running && (
-        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+    <Tool>
+      <ToolHeader
+        title={title}
+        type={type as ToolUIPart['type']}
+        state={state as ToolUIPart['state']}
+        stalled={stalled}
+      />
+      {hasBody && (
+        <ToolContent>
+          {input !== undefined && <ToolInput input={input} />}
+          {(output !== undefined || errorText) && (
+            <ToolOutput output={output} errorText={errorText} />
+          )}
+        </ToolContent>
       )}
-      {awaitingApproval && !isActive && (
-        <CircleDashed className="h-3 w-3 text-amber-600" />
-      )}
-      {stalled && <CircleSlash className="h-3 w-3 text-muted-foreground/60" />}
-      {settled && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-      <span
-        className={cn(
-          'text-muted-foreground',
-          running && 'animate-pulse',
-          stalled && 'text-muted-foreground/60 line-through'
-        )}
-      >
-        {label}
-      </span>
-      {stalled && (
-        <span className="text-xs text-muted-foreground/60">
-          didn&rsquo;t finish
-        </span>
-      )}
-      {awaitingApproval && !isActive && (
-        <span className="text-xs text-amber-600">awaiting approval</span>
-      )}
-    </div>
+    </Tool>
   );
 }
 
@@ -451,21 +344,16 @@ function MessageBubbleImpl({
       blocks.push({
         kind: 'tool',
         toolName,
+        type: part.type,
         state: part.state ?? 'input-streaming',
+        input: part.input,
+        output: part.output,
+        errorText: part.errorText,
+        // Whatever the state. A decision that has been made is part of the
+        // record, and the component decides whether to show it as a question,
+        // an approval or a refusal.
+        approval: part.approval?.id ? part.approval : undefined,
       });
-
-      if (part.state === 'approval-requested') {
-        const approval = (part as unknown as { approval?: { id?: string } })
-          .approval;
-        if (approval?.id) {
-          blocks.push({
-            kind: 'approval',
-            approvalId: approval.id,
-            toolName,
-            input: (part as unknown as { input?: unknown }).input,
-          });
-        }
-      }
 
       if (
         part.type === APLUS_TOOL_PART_TYPE &&
@@ -549,12 +437,61 @@ function MessageBubbleImpl({
 
             case 'tool':
               return (
-                <div key={index} className={cn(index > 0 && 'mt-2')}>
+                <div
+                  key={index}
+                  className={cn('space-y-2', index > 0 && 'mt-2')}
+                >
                   <ToolCallDisplay
                     toolName={block.toolName}
+                    type={block.type}
                     state={block.state}
+                    input={block.input}
+                    output={block.output}
+                    errorText={block.errorText}
                     isActive={Boolean(isLast && isStreaming)}
                   />
+                  <Confirmation
+                    approval={block.approval}
+                    state={block.state as ToolUIPart['state']}
+                    className="border-amber-400/60 bg-amber-50 dark:bg-amber-950/30"
+                  >
+                    <ConfirmationTitle>
+                      {approvalSummary(block.toolName, block.input)}
+                    </ConfirmationTitle>
+                    <ConfirmationRequest>
+                      <ConfirmationActions>
+                        <ConfirmationAction
+                          onClick={() =>
+                            block.approval &&
+                            onApprovalResponse?.(block.approval.id, true)
+                          }
+                        >
+                          Approve
+                        </ConfirmationAction>
+                        <ConfirmationAction
+                          variant="outline"
+                          onClick={() =>
+                            block.approval &&
+                            onApprovalResponse?.(block.approval.id, false)
+                          }
+                        >
+                          Reject
+                        </ConfirmationAction>
+                      </ConfirmationActions>
+                    </ConfirmationRequest>
+                    {/* The decision stays on the record once made. Before, both
+                        question and answer vanished the moment it was given. */}
+                    <ConfirmationAccepted>
+                      <p className="text-sm font-medium text-green-700 dark:text-green-500">
+                        You approved this
+                      </p>
+                    </ConfirmationAccepted>
+                    <ConfirmationRejected>
+                      <p className="text-sm font-medium text-muted-foreground">
+                        You rejected this — it was not run
+                      </p>
+                    </ConfirmationRejected>
+                  </Confirmation>
                 </div>
               );
 
@@ -588,45 +525,12 @@ function MessageBubbleImpl({
                   ))}
                 </div>
               );
-
-            case 'approval':
-              return (
-                <div
-                  key={index}
-                  className="mt-3 rounded-lg border border-amber-400/60 bg-amber-50 p-3 dark:bg-amber-950/30"
-                >
-                  <p className="text-sm font-medium">Approval required</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {approvalSummary(block.toolName, block.input)}
-                  </p>
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onApprovalResponse?.(block.approvalId, true)
-                      }
-                      className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onApprovalResponse?.(block.approvalId, false)
-                      }
-                      className="rounded-md border px-3 py-1.5 text-sm"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              );
           }
         })}
 
         {/* Streaming indicator */}
         {isLast && isStreaming && !hasText && !hasTool && (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          <Loader className="text-muted-foreground" />
         )}
       </div>
 
