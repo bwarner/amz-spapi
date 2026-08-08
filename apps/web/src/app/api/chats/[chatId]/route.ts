@@ -4,6 +4,8 @@ import {
   getChatMeta,
   isValidChatId,
   loadMessages,
+  normalizeChatTitle,
+  renameChat,
 } from '../../../../lib/chat-store';
 
 export async function GET(
@@ -46,6 +48,38 @@ export async function GET(
       messages,
     },
   });
+}
+
+/** Rename a conversation: `{ title }` → `{ chat: { chatId, title } }`. */
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ chatId: string }> }
+) {
+  const session = await auth0.getSession();
+  if (!session?.user?.sub) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { chatId } = await context.params;
+  if (!isValidChatId(chatId)) {
+    return Response.json({ error: 'Invalid chat id.' }, { status: 400 });
+  }
+
+  const body = (await request.json().catch(() => null)) as {
+    title?: unknown;
+  } | null;
+  // Validate before touching the store so an empty or whitespace-only title
+  // comes back as a 400 rather than an indistinguishable "not found".
+  const title = normalizeChatTitle(body?.title);
+  if (!title) {
+    return Response.json({ error: 'A title is required.' }, { status: 400 });
+  }
+
+  const saved = await renameChat({ userId: session.user.sub, chatId, title });
+  if (!saved) {
+    return Response.json({ error: 'Conversation not found.' }, { status: 404 });
+  }
+  return Response.json({ chat: { chatId, title: saved } });
 }
 
 export async function DELETE(

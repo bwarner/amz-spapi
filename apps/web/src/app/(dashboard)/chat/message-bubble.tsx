@@ -1,8 +1,16 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 
-import { Bot, User, Download } from 'lucide-react';
+import {
+  AlertCircle,
+  Bot,
+  Check,
+  Copy,
+  Download,
+  RotateCcw,
+  User,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -202,6 +210,113 @@ function ToolCallDisplay({
 }
 
 /**
+ * One hover action under a message.
+ *
+ * Always in the layout, revealed on hover, rather than mounted on hover — the
+ * transcript sticks to the bottom while streaming, and a control that adds a
+ * row when the pointer crosses a message would shove the conversation as you
+ * reached for it.
+ */
+function MessageAction({
+  icon,
+  label,
+  isUser,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  isUser: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={onClick}
+      aria-label={label}
+      className={cn(
+        'h-6 gap-1.5 px-2 text-xs opacity-0 transition-opacity',
+        // Keyboard users never trigger the hover, so the focus ring would
+        // otherwise land on something invisible.
+        'focus-visible:opacity-100 group-hover/message:opacity-100',
+        isUser
+          ? 'text-primary-foreground/70 hover:bg-primary-foreground/10 hover:text-primary-foreground'
+          : 'text-muted-foreground hover:text-foreground'
+      )}
+    >
+      {icon}
+      {label}
+    </Button>
+  );
+}
+
+/**
+ * Copy this message's prose.
+ *
+ * Text blocks only, joined the way they were written. Not what a selection
+ * would give you: the tool cards render their name, arguments and output as
+ * text, so dragging across a tool-heavy answer picks up a transcript of the
+ * machinery around the answer. What people want out of a message is the part
+ * addressed to them.
+ */
+function CopyMessageButton({
+  text,
+  isUser,
+}: {
+  text: string;
+  isUser: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  // A pending reset outliving the component would set state on an unmounted
+  // one; conversations get swapped out from under these buttons.
+  const resetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (resetRef.current) clearTimeout(resetRef.current);
+    },
+    []
+  );
+
+  const copy = async () => {
+    // Absent outside a secure context, which local development over plain HTTP
+    // is — failing silently would look like a dead button.
+    if (!navigator?.clipboard?.writeText) {
+      setFailed(true);
+      resetRef.current = setTimeout(() => setFailed(false), 2000);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      resetRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setFailed(true);
+      resetRef.current = setTimeout(() => setFailed(false), 2000);
+    }
+  };
+
+  return (
+    <MessageAction
+      isUser={isUser}
+      onClick={() => void copy()}
+      icon={
+        failed ? (
+          <AlertCircle className="size-3.5" />
+        ) : copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )
+      }
+      label={failed ? 'Copy failed' : copied ? 'Copied' : 'Copy'}
+    />
+  );
+}
+
+/**
  * One message, memoized.
  *
  * The chat input's state lives in the page component that renders this list, so
@@ -224,11 +339,18 @@ function MessageBubbleImpl({
   isLast,
   isStreaming,
   onApprovalResponse,
+  onRewind,
 }: {
   message: AppMessage;
   isLast: boolean;
   isStreaming: boolean;
   onApprovalResponse?: (id: string, approved: boolean) => void;
+  /**
+   * Cut the conversation back to just before this message and reopen it in the
+   * composer. Offered on your own messages only — rewinding to an assistant
+   * message would leave the question that prompted it with nothing to answer.
+   */
+  onRewind?: (messageId: string) => void;
 }) {
   const isUser = message.role === 'user';
 
@@ -318,10 +440,17 @@ function MessageBubbleImpl({
   );
   const hasTool = blocks.some((block) => block.kind === 'tool');
 
+  const copyableText = blocks
+    .filter((block): block is Extract<MessageBlock, { kind: 'text' }> =>
+      Boolean(block.kind === 'text' && block.text.trim())
+    )
+    .map((block) => block.text.trim())
+    .join('\n\n');
+
   return (
     <div
       className={cn(
-        'flex gap-2 sm:gap-3',
+        'group/message flex gap-2 sm:gap-3',
         isUser ? 'justify-end' : 'justify-start'
       )}
     >
@@ -520,6 +649,26 @@ function MessageBubbleImpl({
         {/* Streaming indicator */}
         {isLast && isStreaming && !hasText && !hasTool && (
           <Loader className="text-muted-foreground" />
+        )}
+
+        {/*
+          Not while this message is still being written: the text is
+          incomplete, so a copy taken then is a copy of a fragment.
+        */}
+        {!(isLast && isStreaming) && (copyableText || (isUser && onRewind)) && (
+          <div className="mt-1.5 flex justify-end gap-1">
+            {isUser && onRewind && (
+              <MessageAction
+                icon={<RotateCcw className="size-3.5" />}
+                label="Retry from here"
+                isUser={isUser}
+                onClick={() => onRewind(message.id)}
+              />
+            )}
+            {copyableText && (
+              <CopyMessageButton text={copyableText} isUser={isUser} />
+            )}
+          </div>
         )}
       </div>
 
