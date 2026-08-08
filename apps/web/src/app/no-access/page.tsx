@@ -6,7 +6,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 
 export const metadata: Metadata = {
@@ -36,9 +35,13 @@ export default async function NoAccessPage({
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="text-2xl">
+          {/* A real `h1`, not `CardTitle`, which renders a plain div. This is a
+              standalone page whose card title IS its main heading, so without
+              this the page has no heading at all — invisible to a screen reader
+              skimming structure, and to anything else that looks for one. */}
+          <h1 className="text-2xl leading-none font-semibold">
             {unavailable ? 'We could not verify your access' : 'Invite only'}
-          </CardTitle>
+          </h1>
           <CardDescription>
             {unavailable
               ? 'Something on our side is not responding, so we cannot tell ' +

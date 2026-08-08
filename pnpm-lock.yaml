@@ -374,6 +374,9 @@ importers:
       '@nx/web':
         specifier: 21.6.11
         version: 21.6.11(@babel/traverse@7.29.7)(@swc-node/register@1.10.10(@swc/core@1.12.14(@swc/helpers@0.5.23))(@swc/types@0.1.27)(typescript@5.8.3))(@swc/core@1.12.14(@swc/helpers@0.5.23))(nx@21.2.1(@swc-node/register@1.10.10(@swc/core@1.12.14(@swc/helpers@0.5.23))(@swc/types@0.1.27)(typescript@5.8.3))(@swc/core@1.12.14(@swc/helpers@0.5.23)))(verdaccio@6.7.4(encoding@0.1.13)(typanion@3.14.0))
+      '@panva/hkdf':
+        specifier: ^1.2.1
+        version: 1.2.1
       '@playwright/test':
         specifier: ^1.36.0
         version: 1.61.1
@@ -458,6 +461,9 @@ importers:
       jiti:
         specifier: 2.4.2
         version: 2.4.2
+      jose:
+        specifier: ^6.2.8
+        version: 6.2.8
       jsonc-eslint-parser:
         specifier: ^2.1.0
         version: 2.4.2
@@ -13043,10 +13049,10 @@ packages:
         integrity: sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==,
       }
 
-  jose@6.2.3:
+  jose@6.2.8:
     resolution:
       {
-        integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==,
+        integrity: sha512-Bsdjwm3Qsd/P0jR+BHDe3LytDfY7WBq2HmCCLIwuVRHMuEC9ae7/R474GIUdF1NgCyZjzVo/A9DOiOBtXq8ZoQ==,
       }
 
   joycon@3.1.1:
@@ -19403,7 +19409,7 @@ snapshots:
     dependencies:
       '@edge-runtime/cookies': 5.0.2
       '@panva/hkdf': 1.2.1
-      jose: 6.2.3
+      jose: 6.2.8
       next: 15.5.19(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-macros@3.1.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(sass@1.101.0)
       oauth4webapi: 3.8.6
       openid-client: 6.8.4
@@ -28758,7 +28764,7 @@ snapshots:
 
   jose@5.10.0: {}
 
-  jose@6.2.3: {}
+  jose@6.2.8: {}
 
   joycon@3.1.1: {}
 
@@ -30126,7 +30132,7 @@ snapshots:
 
   openid-client@6.8.4:
     dependencies:
-      jose: 6.2.3
+      jose: 6.2.8
       oauth4webapi: 3.8.6
 
   optionator@0.9.4:
