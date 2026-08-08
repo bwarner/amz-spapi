@@ -16,3 +16,4 @@ export * from './lib/document-recognize.js';
 export * from './lib/fba-box-label.js';
 export * from './lib/design-revisions.js';
 export * from './lib/title-compliance.js';
+export * from './lib/identity.js';

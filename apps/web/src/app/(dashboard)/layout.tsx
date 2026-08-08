@@ -2,6 +2,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { redirect } from 'next/navigation';
 import { auth0 } from '../../lib/auth0';
+import { resolveAccess } from '../../lib/access';
 import { DashboardNav } from '@/components/dashboard-nav';
 import { PostHogProvider } from '@/components/posthog-provider';
 
@@ -14,6 +15,24 @@ export default async function DashboardLayout({
 
   if (!session?.user) {
     redirect('/login');
+  }
+
+  /**
+   * Invite-only. Signing in is not the same as being allowed in: Auth0 will
+   * create an account for anyone, and this is where that account stops unless
+   * somebody invited it. Also the provisioning point — a platform owner or an
+   * invitee gets their workspace and membership created here, on first landing.
+   */
+  const access = await resolveAccess({
+    userId: session.user.sub,
+    email: session.user.email ?? undefined,
+  });
+  if (!access.allowed) {
+    redirect(
+      access.reason === 'lookup-failed'
+        ? '/no-access?reason=unavailable'
+        : '/no-access'
+    );
   }
 
   return (

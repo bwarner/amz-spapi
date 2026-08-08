@@ -15,6 +15,7 @@ import {
   type APlusGeneratedModule,
 } from '@farvisionllc/models';
 import { auth0 } from '../../../../lib/auth0';
+import { denyIfWithoutAccess } from '../../../../lib/access';
 import { aplusGenerateInputSchema } from '../../../../lib/aplus-generate-request';
 import {
   FACT_CONSISTENCY_RULE,
@@ -77,6 +78,11 @@ export async function POST(request: Request) {
   if (!session?.user?.sub) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  // Authenticated is not authorised: this route spends money, so the
+  // invite gate is enforced here and not only in the UI that leads to it.
+  const denied = await denyIfWithoutAccess(session);
+  if (denied) return denied;
 
   let body: z.infer<typeof requestSchema>;
   try {
