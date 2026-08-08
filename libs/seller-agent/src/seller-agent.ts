@@ -420,6 +420,22 @@ export type DocumentReading = {
    * apart is whether we have bought from this vendor before.
    */
   vendorIsKnownSupplier: boolean;
+  /**
+   * What the document actually says.
+   *
+   * The pipeline was built for invoices, so it recognised a kind, pulled typed
+   * cost lines out of the cost-bearing kinds, and discarded the prose — which
+   * made `read-document` unable to read a document that was not a bill. A
+   * report, an analysis, a supplier's terms: all returned their file name and
+   * nothing else, and the only account of the failure available to the model
+   * was that no cost figures were found.
+   *
+   * Clamped; `textTruncated` says when there is more.
+   */
+  text?: string;
+  textTruncated?: boolean;
+  /** Characters of extracted text before clamping. */
+  textLength?: number;
   extraction?: {
     vendorName: string;
     documentDate?: string;
@@ -2508,6 +2524,42 @@ function getWebTools(webOps: SellerWebOps) {
 }
 
 /**
+ * What Amazon actually said, not just what the HTTP client said about it.
+ *
+ * An axios rejection stringifies to "Request failed with status code 400",
+ * which names the category and withholds the cause — Amazon puts the cause in
+ * the response body. A model handed only the status has nothing to correct and
+ * will theorise instead: a 400 on the Reporting API has been reported to users
+ * as a missing permission, which is a different problem with a different and
+ * useless remedy. A 400 means the request was understood and rejected on its
+ * contents; permissions fail as 401 or 403.
+ */
+function describeHttpError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  const response = (
+    error as { response?: { status?: number; data?: unknown } } | undefined
+  )?.response;
+  if (!response) return message;
+
+  let detail: string;
+  try {
+    detail =
+      typeof response.data === 'string'
+        ? response.data
+        : JSON.stringify(response.data);
+  } catch {
+    // Circular, or a Buffer — the status is still worth reporting.
+    detail = '';
+  }
+  if (!detail || detail === '{}' || detail === 'null') return message;
+
+  // Long enough for Amazon's field-level complaints, short enough that a stray
+  // HTML error page cannot crowd out the rest of the turn.
+  const clamped = detail.length > 600 ? `${detail.slice(0, 600)}…` : detail;
+  return `${message} — Amazon said: ${clamped}`;
+}
+
+/**
  * Read-only Amazon Ads tools (#86).
  *
  * The prompt discipline that matters here: these read STRUCTURE. None of them
@@ -2526,6 +2578,55 @@ function getAdsTools(adsOps: SellerAdsOps) {
         'they mean rather than picking one.'
     );
   const maxResults = z.number().int().min(1).max(500).optional();
+
+  /**
+   * Check a report window before spending a round trip to be told "400".
+   *
+   * The model supplies these dates and has no reliable idea what today is, so
+   * the failure this catches is not a typo — it is a window in the wrong YEAR,
+   * which Amazon rejects as a bare 400 that reads identically to a malformed
+   * request. Returning the arithmetic ("start is 421 days ago") gives the model
+   * something to correct; the status alone gives it something to speculate
+   * about.
+   *
+   * Only rules worth being certain of are enforced here. Amazon's other limits
+   * are its own to state, now that it can be heard.
+   */
+  function checkReportWindow(
+    startDate: string,
+    endDate: string,
+    today: string
+  ): string | null {
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    if (!iso.test(startDate) || !iso.test(endDate)) {
+      return `Dates must be YYYY-MM-DD; got ${startDate} to ${endDate}.`;
+    }
+    if (startDate > endDate) {
+      return `startDate ${startDate} is after endDate ${endDate}.`;
+    }
+    if (endDate > today) {
+      return (
+        `endDate ${endDate} is in the future — today is ${today}. Amazon ` +
+        'reports only closed days.'
+      );
+    }
+    // Ads keeps roughly 95 days of reportable history. Beyond that the report
+    // is accepted-shaped and refused, which is the failure that looks like a
+    // permissions problem.
+    const days = Math.round(
+      (Date.parse(`${today}T00:00:00Z`) -
+        Date.parse(`${startDate}T00:00:00Z`)) /
+        86_400_000
+    );
+    if (days > 95) {
+      return (
+        `startDate ${startDate} is ${days} days before today (${today}). ` +
+        'Amazon Ads keeps about 95 days of reportable history, so this window ' +
+        'has no data to return. Re-request inside the last 95 days.'
+      );
+    }
+    return null;
+  }
 
   async function run<T extends object>(work: () => Promise<T>) {
     try {
@@ -2554,7 +2655,7 @@ function getAdsTools(adsOps: SellerAdsOps) {
     } catch (error) {
       return {
         success: false as const,
-        error: error instanceof Error ? error.message : 'Ads request failed.',
+        error: describeHttpError(error, 'Ads request failed.'),
       };
     }
   }
@@ -2699,6 +2800,14 @@ function getAdsTools(adsOps: SellerAdsOps) {
         attribution?: '1d' | '7d' | '14d' | '30d';
       }) =>
         run(async () => {
+          const today = new Date().toISOString().slice(0, 10);
+          const problem = checkReportWindow(
+            input.startDate,
+            input.endDate,
+            today
+          );
+          if (problem) throw new Error(problem);
+
           const started = await adsOps.requestPerformanceReport(input);
           return {
             ...started,
@@ -3408,8 +3517,18 @@ function getDocumentTools(documentOps: SellerDocumentOps) {
   return {
     'read-document': {
       description:
-        'Read an uploaded document (invoice, receipt, waybill, proof of delivery) ' +
-        'and return what it says, WITHOUT filing it. Use this to answer a question ' +
+        'Read ANY uploaded document and return what it says, WITHOUT filing it. ' +
+        'Works on reports, analyses, terms and letters as well as invoices, ' +
+        'receipts, waybills and proofs of delivery: `text` holds the document’s ' +
+        'own words, and cost-bearing kinds additionally get typed figures in ' +
+        '`extraction`. A document with no `extraction` has NOT failed to read — ' +
+        'invoices are the only kind with cost lines to pull. Answer from `text`. ' +
+        'Only when `text` is absent is there nothing to read, and the note says ' +
+        'why (a scan or artwork, which needs a visual read instead). Never ask ' +
+        'the user to paste in a document you were given: read it. ' +
+        'When `textTruncated` is true you have the first `text` characters of ' +
+        '`textLength` — say so before drawing conclusions about the whole. ' +
+        'Use this to answer a question ' +
         'from a document the user just attached — landed cost, what a supplier ' +
         'charged, what a carrier weighed. ' +
         'Reading does NOT keep the document. If it is business evidence worth ' +
@@ -4477,6 +4596,10 @@ PPC PERFORMANCE ANSWERS:
     ? `You are Sellavant, an expert Amazon Seller Assistant.
 You help Amazon sellers understand their business, optimize listings, and grow sales.
 
+Today is ${new Date().toISOString().slice(0, 10)} (UTC). Compute every date you
+send to a tool from that, never from memory — a window in the wrong year is
+accepted by the schema and refused by Amazon, and the refusal does not say why.
+
 AVAILABLE TOOLS:
 - search-catalog: Find products by keywords, ASIN, or brand. Use this first when looking for a listing.
 - get-listing: Get full listing details (title, bullets, description, images, product type, sales rank).
@@ -4625,6 +4748,10 @@ When suggesting A+ Content copy, image briefs, or module direction, NEVER includ
 `
     : `You are Sellavant, an expert Amazon Seller Assistant.
 You help Amazon sellers understand their business, optimize listings, and grow sales.
+
+Today is ${new Date().toISOString().slice(0, 10)} (UTC). Compute every date you
+send to a tool from that, never from memory — a window in the wrong year is
+accepted by the schema and refused by Amazon, and the refusal does not say why.
 
 NOTE: Your Amazon account is not yet connected. You can still:
 - Answer general questions about Amazon selling best practices

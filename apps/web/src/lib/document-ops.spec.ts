@@ -161,6 +161,69 @@ describe('readDocument', () => {
     expect(extractDocument).not.toHaveBeenCalled();
   });
 
+  /**
+   * The bug this guards: the pipeline was built for invoices, so a document
+   * that was not cost-bearing returned its file name, a kind, and a note about
+   * having found no cost figures — with the extracted prose discarded. Asked to
+   * read a market analysis, the agent could only report that it had not found
+   * an invoice, and asked the user to paste the document back in.
+   */
+  it('returns the text of a document that carries no cost figures', async () => {
+    recognizeDocument.mockReturnValue({
+      kind: 'other',
+      confidence: 0.4,
+      needsUserChoice: false,
+      alternatives: [],
+      signals: [],
+    });
+    extractPdfText.mockResolvedValue({
+      text: 'Water Bottle Niche Analysis\nThe category is dominated by...',
+      pages: ['Water Bottle Niche Analysis'],
+      looksScannedOrArtwork: false,
+    });
+
+    const reading = await (await ops()).readDocument({ assetId: 'asset-1' });
+
+    expect(extractDocument).not.toHaveBeenCalled();
+    expect(reading.text).toContain('Water Bottle Niche Analysis');
+    expect(reading.textTruncated).toBe(false);
+  });
+
+  it('declares truncation rather than letting a partial read look complete', async () => {
+    recognizeDocument.mockReturnValue({
+      kind: 'other',
+      confidence: 0.4,
+      needsUserChoice: false,
+      alternatives: [],
+      signals: [],
+    });
+    const long = 'x'.repeat(30_000);
+    extractPdfText.mockResolvedValue({
+      text: long,
+      pages: [long],
+      looksScannedOrArtwork: false,
+    });
+
+    const reading = await (await ops()).readDocument({ assetId: 'asset-1' });
+
+    expect(reading.textTruncated).toBe(true);
+    expect(reading.textLength).toBe(30_000);
+    expect(reading.text?.length).toBe(24_000);
+  });
+
+  it('offers no text for a scan, so the model reports a scan and not a bad read', async () => {
+    extractPdfText.mockResolvedValue({
+      text: '',
+      pages: [],
+      looksScannedOrArtwork: true,
+    });
+
+    const reading = await (await ops()).readDocument({ assetId: 'asset-1' });
+
+    expect(reading.text).toBeUndefined();
+    expect(reading.note).toContain('scanned');
+  });
+
   it('flags a document already filed, so saving again is known to be a no-op', async () => {
     getStoredDocument.mockResolvedValue({
       documentId: 'auth0|seller::asset-1',

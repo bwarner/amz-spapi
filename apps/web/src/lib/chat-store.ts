@@ -109,6 +109,56 @@ export function deriveChatTitle(messages: ChatUIMessage[]): string {
   return 'New chat';
 }
 
+/**
+ * Clamp a user-supplied title to what the sidebar can hold. Newlines collapse
+ * to spaces — the title renders on one line, and a pasted paragraph would
+ * otherwise arrive with invisible breaks in it. Returns null when nothing is
+ * left, which the caller treats as a rejected rename rather than a blank title.
+ */
+export function normalizeChatTitle(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return null;
+  return collapsed.length > TITLE_MAX
+    ? `${collapsed.slice(0, TITLE_MAX - 1)}…`
+    : collapsed;
+}
+
+/**
+ * Rename a conversation. Returns the stored title, or null when the
+ * conversation does not exist (or belongs to someone else).
+ *
+ * `updatedAt` is deliberately untouched: the sidebar orders by it, and having a
+ * conversation jump to the top because it was renamed loses the user's place.
+ * Nothing regenerates `title` after the first turn — `deriveChatTitle` only
+ * runs on INSERT — so a rename is permanent without needing a "user set this"
+ * flag to defend it.
+ */
+export async function renameChat(params: {
+  userId: string;
+  chatId: string;
+  title: string;
+}): Promise<string | null> {
+  const title = normalizeChatTitle(params.title);
+  if (!title) return null;
+
+  const result = await executeQuery<string>(
+    SCOPE,
+    `UPDATE \`${collectionName(SCOPE, META_COLLECTION)}\` USE KEYS $key
+     SET title = $title
+     WHERE userId = $userId
+     RETURNING RAW title`,
+    {
+      parameters: {
+        key: metaDocKey(params.userId, params.chatId),
+        title,
+        userId: params.userId,
+      },
+    }
+  );
+  return result.rows.length > 0 ? result.rows[0] : null;
+}
+
 export async function listChats(userId: string): Promise<ChatSummary[]> {
   const result = await executeQuery<ChatSummary>(
     SCOPE,
@@ -387,6 +437,70 @@ export async function saveChatTurn(params: {
       )
     )
   );
+}
+
+/**
+ * Cut a conversation back to just before one of its messages.
+ *
+ * What this is for: a tool that answered wrongly poisons everything after it.
+ * The model re-reads its own failed conclusion each turn and repeats it, so a
+ * fixed tool changes nothing until the failure leaves the transcript — and the
+ * only cure used to be abandoning the conversation, its attachments and its
+ * setup along with the three bad turns.
+ *
+ * Addressed by message id, not by seq: the server assigns seqs and never tells
+ * the client (see `saveChatTurn`), so a message from the live session has no
+ * seq the browser could name. The stored document is the authority on where a
+ * message sits, exactly as it is when counting them.
+ *
+ * `messageCount` is reset rather than left high so the next turn resumes at the
+ * cut instead of writing past a gap.
+ *
+ * Returns null when the message is not stored — an unsaved turn, or another
+ * user's. There is nothing to delete, which is not an error: the caller has
+ * already dropped it locally.
+ */
+export async function rewindChat(params: {
+  userId: string;
+  chatId: string;
+  messageId: string;
+}): Promise<{ deleted: number; fromSeq: number } | null> {
+  const { userId, chatId, messageId } = params;
+
+  const anchor = await getDocument<StoredChatMessage>(
+    SCOPE,
+    MESSAGES_COLLECTION,
+    messageDocKey(userId, chatId, messageId)
+  );
+  if (!anchor || anchor.userId !== userId || anchor.chatId !== chatId) {
+    return null;
+  }
+  const fromSeq = anchor.seq;
+
+  const deleted = await executeQuery<number>(
+    SCOPE,
+    `DELETE FROM \`${collectionName(SCOPE, MESSAGES_COLLECTION)}\`
+     WHERE userId = $userId AND chatId = $chatId AND seq >= $fromSeq
+     RETURNING RAW seq`,
+    { parameters: { userId, chatId, fromSeq } }
+  );
+
+  await executeQuery(
+    SCOPE,
+    `UPDATE \`${collectionName(SCOPE, META_COLLECTION)}\` USE KEYS $key
+     SET messageCount = $fromSeq, updatedAt = $now
+     WHERE userId = $userId`,
+    {
+      parameters: {
+        key: metaDocKey(userId, chatId),
+        fromSeq,
+        now: Date.now(),
+        userId,
+      },
+    }
+  );
+
+  return { deleted: deleted.rows.length, fromSeq };
 }
 
 export async function deleteChat(params: {

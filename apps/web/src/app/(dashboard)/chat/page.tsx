@@ -221,6 +221,9 @@ function isDocumentFile(file: File): boolean {
 
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
+/** The scrolling transcript, so Cmd/Ctrl+A can be aimed at it. */
+const TRANSCRIPT_ID = 'chat-transcript';
+
 /**
  * How tall the composer may grow before it scrolls instead — roughly eight
  * lines. Past that it starts eating the conversation it is being written about.
@@ -282,6 +285,15 @@ export default function ChatPage() {
   });
 
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // The current messages, for callbacks that must not re-create themselves as
+  // the conversation changes: the document-level select-all listener is
+  // registered once, and `rewindToMessage` is passed to a memoized bubble. A
+  // `messages` dependency on either would fire on every streamed chunk.
+  const messagesRef = useRef(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Resume the last conversation from the server (browser only remembers its id).
   useEffect(() => {
@@ -375,6 +387,50 @@ export default function ChatPage() {
     [setMessages, clearComposer]
   );
 
+  /**
+   * Rename a conversation. Applied locally first so the sidebar reacts to the
+   * keystroke rather than to the round trip, and rolled back if the server
+   * disagrees — the list is also re-fetched after every completed turn, so a
+   * failure that was left showing would silently revert later anyway.
+   */
+  const renameChatById = useCallback(async (chatId: string, title: string) => {
+    let previous: string | undefined;
+    setChatList((current) =>
+      current.map((chat) => {
+        if (chat.chatId !== chatId) return chat;
+        previous = chat.title;
+        return { ...chat, title };
+      })
+    );
+
+    try {
+      const res = await fetch(`/api/chats/${chatId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+      // The server clamps the title; show what it actually stored.
+      const data = (await res.json()) as { chat?: { title?: string } };
+      const stored = data.chat?.title;
+      if (stored && stored !== title) {
+        setChatList((current) =>
+          current.map((chat) =>
+            chat.chatId === chatId ? { ...chat, title: stored } : chat
+          )
+        );
+      }
+    } catch {
+      if (previous === undefined) return;
+      const restored = previous;
+      setChatList((current) =>
+        current.map((chat) =>
+          chat.chatId === chatId ? { ...chat, title: restored } : chat
+        )
+      );
+    }
+  }, []);
+
   const deleteChatById = useCallback(
     async (chatId: string) => {
       try {
@@ -395,6 +451,55 @@ export default function ChatPage() {
   useEffect(() => {
     if (!isStreaming) void refreshChatList();
   }, [isStreaming, refreshChatList]);
+
+  /**
+   * Cmd/Ctrl+A selects the conversation, not the page.
+   *
+   * The browser's select-all takes the whole document, so what lands on the
+   * clipboard is the conversation wrapped in the sidebar's list of every other
+   * conversation, the header, and the suggested prompts. On a page that is
+   * mostly one long transcript, "select all" plainly means the transcript.
+   *
+   * Deliberately not scoped to focus: the transcript holds no focusable text,
+   * so after scrolling with the wheel the focused element is still the body,
+   * and requiring focus would mean the shortcut only worked if you had first
+   * clicked something. Anything the user could be typing into keeps the native
+   * behaviour, where Cmd+A already means "this field".
+   */
+  useEffect(() => {
+    function handleSelectAll(event: KeyboardEvent) {
+      if (event.key !== 'a' && event.key !== 'A') return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable]')
+      ) {
+        return;
+      }
+
+      // With no messages the only text in there is the empty-state blurb and
+      // the suggested prompts, which nobody means to select. Leave the native
+      // behaviour alone.
+      if (messagesRef.current.length === 0) return;
+
+      const transcript = document.getElementById(TRANSCRIPT_ID);
+      if (!transcript) return;
+
+      const selection = window.getSelection();
+      if (!selection) return;
+
+      event.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(transcript);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    document.addEventListener('keydown', handleSelectAll);
+    return () => document.removeEventListener('keydown', handleSelectAll);
+  }, []);
 
   const suggestedPrompts = [
     'Critique my tea infusion listing',
@@ -570,6 +675,54 @@ export default function ChatPage() {
     [addToolApprovalResponse]
   );
 
+  /**
+   * Cut the conversation back to just before one of your own messages, and put
+   * its text back in the composer to re-send.
+   *
+   * The case this exists for: a tool answers wrongly, and every later turn is
+   * reasoning from that wrong answer. Fixing the tool changes nothing while the
+   * failure is still in the transcript — the model re-reads its own conclusion
+   * and repeats it. Before this the only cure was a new chat, which threw away
+   * the attachments and the setup along with the three bad turns.
+   *
+   * Local state goes first so the conversation visibly cuts on click. The
+   * server call is best-effort: if it fails, the worst case is orphaned message
+   * documents beyond the cut, and the next save reassigns those positions
+   * anyway.
+   */
+  const rewindToMessage = useCallback(
+    async (messageId: string) => {
+      const chatId = chatIdRef.current;
+      const current = messagesRef.current;
+      const index = current.findIndex((message) => message.id === messageId);
+      if (index === -1) return;
+
+      const text = current[index].parts
+        .filter((part) => part.type === 'text')
+        .map((part) => (part as { text: string }).text)
+        .join('')
+        .trim();
+
+      setMessages(current.slice(0, index));
+      // Deliberately not clearing pending attachments: they belong to what is
+      // about to be re-sent, not to what was just removed.
+      setInput(text);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+
+      if (!chatId) return;
+      try {
+        await fetch(`/api/chats/${chatId}/rewind`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messageId }),
+        });
+      } catch {
+        // Best-effort; the view is already correct.
+      }
+    },
+    [setMessages]
+  );
+
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim();
@@ -645,6 +798,7 @@ export default function ChatPage() {
         activeChatId={activeChatId}
         isStreaming={isStreaming}
         onSelect={(chatId) => void selectChat(chatId)}
+        onRename={(chatId, title) => void renameChatById(chatId, title)}
         onDelete={(chatId) => void deleteChatById(chatId)}
         onNewChat={handleNewChat}
       />
@@ -667,7 +821,10 @@ export default function ChatPage() {
         {/* Messages area. Scroll behaviour is `use-stick-to-bottom`'s — see the
             note on the removed effects above. */}
         <Conversation className="min-h-0 flex-1">
-          <ConversationContent className="mx-auto w-full max-w-3xl xl:max-w-5xl 2xl:max-w-6xl gap-0 px-4 py-6">
+          <ConversationContent
+            id={TRANSCRIPT_ID}
+            className="mx-auto w-full max-w-3xl xl:max-w-5xl 2xl:max-w-6xl gap-0 px-4 py-6"
+          >
             {messages.length === 0 ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
                 <div className="rounded-full bg-primary/10 p-4">
@@ -702,6 +859,7 @@ export default function ChatPage() {
                     message={message}
                     isLast={index === messages.length - 1}
                     isStreaming={isStreaming}
+                    onRewind={rewindToMessage}
                     onApprovalResponse={handleApprovalResponse}
                   />
                 ))}
