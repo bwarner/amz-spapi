@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/out-tsc/libs/identity",
+    "declaration": true,
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../packages/models/tsconfig.lib.json"
+    },
+    {
+      "path": "../couchbase-utils/tsconfig.lib.json"
+    }
+  ]
+}

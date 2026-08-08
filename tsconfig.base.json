@@ -38,6 +38,7 @@
       "@amz-spapi/amazon-sp-schema": ["packages/amazon-sp-schema/src/index.ts"],
       "@amz-spapi/aws-secrets": ["libs/aws-secrets/src/index.ts"],
       "@amz-spapi/couchbase-utils": ["libs/couchbase-utils/src/index.ts"],
+      "@amz-spapi/identity": ["libs/identity/src/index.ts"],
       "@amz-spapi/seller-agent": ["libs/seller-agent/src/index.ts"],
       "@amz-spapi/sp-cache": ["packages/sp-cache/src/index.ts"],
       "@amz-spapi/sp-sync": ["packages/sp-sync/src/index.ts"],

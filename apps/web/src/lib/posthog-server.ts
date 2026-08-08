@@ -42,6 +42,54 @@ export function getPostHog(): PostHog | null {
 }
 
 /**
+ * Report a server-side exception to PostHog error tracking, never throwing.
+ *
+ * The gap this fills: exceptions on the server reached nobody. Pino writes them
+ * to stdout, which on Vercel is a short-retention log with no alerting, so a
+ * failing agent turn was invisible unless somebody happened to be tailing.
+ * PostHog is already here for analytics and does error tracking too — one
+ * fewer vendor than adding Sentry alongside it.
+ *
+ * `captureExceptionImmediate` rather than `captureException` for the same
+ * reason `captureServerEvent` flushes explicitly: the serverless process can be
+ * frozen the moment a response is sent, and a buffered exception is a lost one.
+ *
+ * `distinctId` is optional because the most valuable reports — a failure in
+ * auth, or before the session is read — are exactly the ones with no user yet.
+ * PostHog groups those separately rather than dropping them.
+ */
+export async function captureServerException(
+  error: unknown,
+  params: {
+    distinctId?: string;
+    properties?: Record<string, unknown>;
+  } = {}
+): Promise<void> {
+  const posthog = getPostHog();
+  if (!posthog) return;
+
+  try {
+    await posthog.captureExceptionImmediate(
+      error,
+      params.distinctId,
+      params.properties
+    );
+  } catch (reportingError) {
+    // Losing the report must not escalate into a second failure on a path that
+    // is already handling one.
+    log.error(
+      {
+        error:
+          reportingError instanceof Error
+            ? reportingError.message
+            : reportingError,
+      },
+      'exception capture failed'
+    );
+  }
+}
+
+/**
  * Send one event, never throwing.
  *
  * `capture` is fire-and-forget in posthog-node; the explicit flush is what

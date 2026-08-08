@@ -34,6 +34,14 @@ import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
 import { createAdsOps } from '../../../lib/ads-ops';
 import { recordModelUsage } from '../../../lib/model-usage';
+import {
+  assertChatTurnWithinBudget,
+  BudgetExceededError,
+} from '../../../lib/cost-ledger';
+import { captureServerException } from '../../../lib/posthog-server';
+import { denyIfWithoutAccess } from '../../../lib/access';
+import { after } from 'next/server';
+import { flushLogs } from '../../../lib/otel-logs';
 import { meterImageGenerator } from '../../../lib/metered-image-generator';
 import { createListingWrites } from '../../../lib/listing-writes';
 import {
@@ -104,10 +112,22 @@ function collectPhotoRegistry(messages: UIMessage[]): Map<string, string> {
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
+  // Drain buffered log records once the response is done. For a streaming
+  // route "done" means after the stream closes, which is exactly right: the
+  // records worth having — the mid-stream failure, the metering result — are
+  // written long after the headers went out, and would otherwise sit in the
+  // batch buffer when the instance freezes.
+  after(() => flushLogs());
+
   const session = await auth0.getSession();
   if (!session?.user) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  // Authenticated is not authorised. This route spends on the first message, so
+  // the invite gate is enforced here and not only in the UI that leads to it.
+  const denied = await denyIfWithoutAccess(session);
+  if (denied) return denied;
 
   let body: { id?: unknown; messages?: unknown };
   try {
@@ -127,6 +147,26 @@ export async function POST(request: Request) {
       { error: 'messages array is required' },
       { status: 400 }
     );
+  }
+
+  /**
+   * Refuse the turn if the user is already at their daily spend ceiling.
+   *
+   * Checked here rather than deeper in: everything below this point costs money
+   * or sets up something that will, and the cheapest refusal is the one that
+   * happens before any of it. 402 rather than 429 — the user is not rate
+   * limited, they have exhausted a budget, and the two want different UI.
+   *
+   * `assertWithinBudget` fails OPEN on a storage error, so a Couchbase outage
+   * degrades to the old uncapped behaviour instead of taking chat down.
+   */
+  try {
+    await assertChatTurnWithinBudget(session.user.sub);
+  } catch (error) {
+    if (error instanceof BudgetExceededError) {
+      return Response.json({ error: error.message }, { status: 402 });
+    }
+    throw error;
   }
 
   const models = {
@@ -417,8 +457,26 @@ export async function POST(request: Request) {
       abortSignal: request.signal,
     });
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return Response.json({ error: errorMessage }, { status: 500 });
+    // Reported, not just returned. This used to hand the raw message to the
+    // client and tell nobody — so a misconfigured gateway or a bad model id
+    // surfaced as a mystery error in the UI and left no trace on our side.
+    log.error(
+      {
+        chatId,
+        error: err instanceof Error ? `${err.name}: ${err.message}` : err,
+      },
+      'agent stream failed to start'
+    );
+    await captureServerException(err, {
+      distinctId: chatUserId,
+      properties: { feature: 'chat', phase: 'stream-start', chatId },
+    });
+    // Generic text to the client: the underlying message can name internal
+    // hosts, model ids and gateway details, none of which help a seller.
+    return Response.json(
+      { error: 'The assistant could not start. Please try again.' },
+      { status: 500 }
+    );
   }
 
   const stream = createUIMessageStream({
@@ -471,9 +529,33 @@ export async function POST(request: Request) {
       }
     },
     onError: (error) => {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return errorMessage;
+      // The blind spot this closes: a turn that dies mid-stream has already
+      // sent its 200 and its headers, so nothing downstream records it as a
+      // failure. Vercel counts a success, the seller sees a half-written
+      // answer, and the only trace was a string handed to the browser.
+      log.error(
+        {
+          chatId,
+          error:
+            error instanceof Error ? `${error.name}: ${error.message}` : error,
+        },
+        'agent stream failed mid-turn'
+      );
+      // Fire-and-forget: onError is synchronous, and the stream must not wait
+      // on telemetry. captureServerException never throws, so a floating
+      // rejection is not possible.
+      void captureServerException(error, {
+        distinctId: chatUserId,
+        properties: { feature: 'chat', phase: 'mid-stream', chatId },
+      });
+
+      // The budget message is written for the seller and names no internals,
+      // so it passes through intact — being told the cap is reached is
+      // actionable in a way that "something went wrong" is not. Tools reach
+      // this path through `withPaidCall` after the stream has opened.
+      if (error instanceof BudgetExceededError) return error.message;
+
+      return 'The assistant hit an error partway through this answer. Please try again.';
     },
   });
 

@@ -85,6 +85,13 @@ export const SOURCES: Source[] = [
   { domain: 'purchases', collection: 'vendor-records' },
   { domain: 'purchases', collection: 'buyer-records' },
   { domain: 'purchases', collection: 'fc-records' },
+  // Who may use the product, and whose data they see. Its own domain because
+  // it answers a question asked BEFORE any other collection is read: a request
+  // with no membership never reaches catalog, chat or credentials at all.
+  ...['workspaces', 'members', 'invitations'].map((c) => ({
+    domain: 'identity',
+    collection: c,
+  })),
   // Scheduled sync (#34). `cursors` is the high-water mark per user x seller x
   // domain and is the only record of what has been fetched — a gap behind it is
   // indistinguishable from a quiet period, which is why it is stored rather
@@ -125,6 +132,32 @@ export const INDEXES: IndexSpec[] = [
     collection: 'ops_cost_ledger',
     name: 'idx_cost_ledger_user_day',
     keys: ['`userId`', '`day`'],
+  },
+  // Every authenticated request asks "which workspaces is this user in?" before
+  // it does anything else, so this one is on the hot path for the whole app.
+  {
+    collection: 'identity_members',
+    name: 'idx_members_user',
+    keys: ['`userId`', '`workspaceId`'],
+  },
+  // The members list for one workspace, for the settings page.
+  {
+    collection: 'identity_members',
+    name: 'idx_members_workspace',
+    keys: ['`workspaceId`', '`role`'],
+  },
+  // Sign-in looks an invitation up by EMAIL, not by id: the gate has to answer
+  // "was this person invited?" for someone who arrived without a link.
+  {
+    collection: 'identity_invitations',
+    name: 'idx_invitations_email_status',
+    keys: ['`email`', '`status`'],
+  },
+  // The pending list for one workspace, and the uniqueness check before issuing.
+  {
+    collection: 'identity_invitations',
+    name: 'idx_invitations_workspace_status',
+    keys: ['`workspaceId`', '`status`', '`createdAt`'],
   },
   {
     collection: 'reports_rows',

@@ -96,6 +96,44 @@ function defaultCallCostUsd(): number {
   return readFloatEnv('COST_DEFAULT_CALL_USD') ?? 0.02;
 }
 
+/**
+ * What one chat turn is assumed to cost, for the PRE-FLIGHT cap check only.
+ *
+ * A turn's real cost is not knowable before it runs — it depends on how many
+ * tool steps the agent takes and how much history it re-reads, which is why
+ * `recordModelUsage` prices it afterwards from actual token counts. This figure
+ * exists so the cap has something to add before saying yes.
+ *
+ * Its job is therefore NOT accuracy. It is to stop a user who is already at the
+ * ceiling from starting another turn: the pre-flight check refuses at
+ * `spent + estimate > cap`, so any non-zero value closes the hole, and a small
+ * one avoids refusing a turn that would in fact have fit. A user can still
+ * finish a single turn that carries them past the cap — bounded overshoot,
+ * accepted deliberately, because killing a stream mid-answer to save a few
+ * cents is a worse product than letting the last one land.
+ */
+function chatTurnEstimateUsd(): number {
+  return readFloatEnv('COST_CHAT_TURN_ESTIMATE_USD') ?? 0.05;
+}
+
+/**
+ * Refuse a chat turn when the user is already at their daily ceiling.
+ *
+ * Model tokens were metered but never capped: `withPaidCall` guards scrapers,
+ * image generation and document extraction, while chat — the most expensive
+ * path, and the product itself — ran unbounded against the AI Gateway balance.
+ * This closes that, reusing the same counter so one ceiling governs everything
+ * a user can spend rather than each vendor having its own.
+ */
+export async function assertChatTurnWithinBudget(
+  userId: string
+): Promise<void> {
+  await assertWithinBudget({
+    userId,
+    estimatedCostUsd: chatTurnEstimateUsd(),
+  });
+}
+
 function readFloatEnv(name: string): number | undefined {
   const raw = process.env[name];
   if (!raw) return undefined;
