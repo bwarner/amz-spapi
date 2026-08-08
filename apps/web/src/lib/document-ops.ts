@@ -92,6 +92,8 @@ async function readAndExtract(
   modelId?: string;
   note?: string;
   boxLabels?: BoxLabelSummary;
+  /** The document's own text, for callers that need to READ it, not bill it. */
+  text: string;
 }> {
   const loaded = await loadAssetBytes({ userId, assetId });
   if (!loaded) {
@@ -151,9 +153,14 @@ async function readAndExtract(
       boxLabels,
       issues: [],
       needsReview: false,
+      text,
       note: noExtractableText
         ? 'This looks scanned or is artwork — there is no text to read. Say so rather than guessing at figures.'
-        : `Recognised as ${verdict.kind}; no cost figures are extracted from that kind.`,
+        : // The old wording stopped at "no cost figures", which reads as a
+          // failure to read the document when the document was never a bill.
+          // The text is right there; say that it is.
+          `Recognised as ${verdict.kind}. No cost figures are extracted from ` +
+          'that kind, but the document text is in `text` — answer from it.',
     };
   }
 
@@ -171,6 +178,7 @@ async function readAndExtract(
     issues: extraction.issues,
     needsReview: extraction.needsReview,
     modelId: extraction.modelId,
+    text,
   };
 }
 
@@ -245,10 +253,24 @@ export function createDocumentOps(params: {
         await getStoredDocument(userId, `${userId}::${assetId}`)
       );
 
+      // Enough for a report worth asking about, short of pasting a book into
+      // the turn. Truncation is declared rather than silent: a model that has
+      // read the first half of an analysis and believes it read all of it will
+      // state its conclusions with unearned confidence.
+      const text = result.text.trim();
+      const MAX_TEXT = 24_000;
+
       return {
         assetId,
         fileName: result.fileName,
         boxLabels: result.boxLabels,
+        ...(text
+          ? {
+              text: text.slice(0, MAX_TEXT),
+              textTruncated: text.length > MAX_TEXT,
+              textLength: text.length,
+            }
+          : {}),
         kind: result.recognition.kind,
         confidence: result.recognition.confidence,
         needsUserChoice: result.recognition.needsUserChoice,
