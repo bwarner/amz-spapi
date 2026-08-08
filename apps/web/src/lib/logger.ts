@@ -1,5 +1,7 @@
 import { trace } from '@opentelemetry/api';
 import pino from 'pino';
+import { initLogs } from './otel-logs';
+import { createOtelLogStream } from './pino-otel-stream';
 
 /**
  * The web app's logger.
@@ -78,21 +80,55 @@ function traceContext(): Record<string, string> {
   return { trace_id: traceId, span_id: spanId };
 }
 
-export const logger = pino({
+const options = {
   level: process.env.LOG_LEVEL || 'info',
   mixin: traceContext,
   redact: {
     paths: [...REDACTED, ...REDACTED.map((field) => `*.${field}`)],
     censor: '[redacted]',
   },
-  // Pretty in a terminal, JSON everywhere else. Vercel ingests stdout, and
-  // structured JSON is what makes a log searchable there — so anything that is
-  // not an interactive shell gets the machine-readable form.
-  transport:
-    process.env.NO_PRETTY || process.env.NODE_ENV === 'production'
-      ? undefined
-      : { target: 'pino-pretty', options: { colorize: true } },
-});
+};
+
+const pretty = !process.env.NO_PRETTY && process.env.NODE_ENV !== 'production';
+
+/**
+ * Where records go.
+ *
+ * Pretty in a terminal, and in every other case a multistream carrying stdout
+ * AND PostHog Logs. Both, not either: stdout is what `vercel logs` tails while
+ * you are watching a deploy, and PostHog is what still exists tomorrow when you
+ * need to work out what happened. Dropping stdout to save a write would trade a
+ * live debugging tool for nothing.
+ *
+ * `pino.multistream` rather than `transport`, because a transport runs in a
+ * worker thread that cannot see the OTel provider registered in
+ * `instrumentation.ts` — see `pino-otel-stream.ts`. That also means the pretty
+ * path and the production path are mutually exclusive, which they already were.
+ *
+ * The OTel stream is added only when a provider was actually installed;
+ * `initLogs()` returns false when no PostHog key is configured, and serialising
+ * records for a pipeline that will discard them is pure cost.
+ */
+function destination() {
+  if (pretty) return undefined;
+
+  const streams: pino.StreamEntry[] = [
+    { level: 'trace', stream: process.stdout },
+  ];
+
+  if (initLogs()) {
+    streams.push({ level: 'trace', stream: createOtelLogStream() });
+  }
+
+  return pino.multistream(streams);
+}
+
+export const logger = pretty
+  ? pino({
+      ...options,
+      transport: { target: 'pino-pretty', options: { colorize: true } },
+    })
+  : pino(options, destination());
 
 /**
  * A logger tagged with the area it came from.
