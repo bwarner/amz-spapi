@@ -20,7 +20,14 @@ export const metadata: Metadata = {
  * second one — there is no natural key to collapse duplicates on afterwards,
  * and each carries its own Stripe customer.
  */
-export default async function OnboardingPage() {
+export default async function OnboardingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ token?: string }>;
+}) {
+  // Carried from `/start` when somebody picked a plan before signing up, so the
+  // purchase can resume once the workspace exists.
+  const { token } = await searchParams;
   const session = await auth0.getSession();
   if (!session?.user?.sub) redirect('/login');
 
@@ -60,7 +67,7 @@ export default async function OnboardingPage() {
           A workspace holds your Amazon connections, products and content. You
           can invite colleagues or a contractor to it later.
         </p>
-        <OnboardingForm suggestion={suggestion} />
+        <OnboardingForm suggestion={suggestion} token={token} />
       </div>
     </div>
   );

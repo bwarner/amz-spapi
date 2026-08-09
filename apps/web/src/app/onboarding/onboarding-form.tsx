@@ -30,7 +30,13 @@ function SubmitButton() {
  * person; the server re-checks membership for the same reason, because a
  * disabled button is a courtesy and not a guarantee.
  */
-export function OnboardingForm({ suggestion }: { suggestion: string }) {
+export function OnboardingForm({
+  suggestion,
+  token,
+}: {
+  suggestion: string;
+  token?: string;
+}) {
   const [state, formAction] = useActionState<OnboardingState, FormData>(
     createMyWorkspace,
     {}
@@ -38,6 +44,9 @@ export function OnboardingForm({ suggestion }: { suggestion: string }) {
 
   return (
     <form action={formAction} className="mt-8 space-y-4">
+      {/* Round-trips the plan they chose before signing up. A hidden field
+          rather than a URL parameter so it survives the form POST. */}
+      {token ? <input type="hidden" name="token" value={token} /> : null}
       <div className="space-y-2">
         <label htmlFor="name" className="text-sm font-medium">
           Workspace name

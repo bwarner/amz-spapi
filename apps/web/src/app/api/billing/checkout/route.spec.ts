@@ -30,6 +30,8 @@ const getSession = vi.fn();
 const currentWorkspace = vi.fn();
 const createCheckoutSession = vi.fn();
 const createPortalSession = vi.fn();
+const findPromotionCode = vi.fn();
+const cookieStore = { get: vi.fn() };
 
 vi.mock('@amz-spapi/billing', async () => {
   const actual = await vi.importActual<typeof import('@amz-spapi/billing')>(
@@ -40,8 +42,13 @@ vi.mock('@amz-spapi/billing', async () => {
     createCheckoutSession: (...args: unknown[]) =>
       createCheckoutSession(...args),
     createPortalSession: (...args: unknown[]) => createPortalSession(...args),
+    findPromotionCode: (...args: unknown[]) => findPromotionCode(...args),
   };
 });
+
+vi.mock('next/headers', () => ({
+  cookies: async () => cookieStore,
+}));
 
 vi.mock('../../../../lib/auth0', () => ({
   auth0: { getSession: (...args: unknown[]) => getSession(...args) },
@@ -95,8 +102,14 @@ function request(body: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env['STRIPE_PRICE_PILOT'] = 'price_pilot';
-  process.env['STRIPE_PRICE_SCALE'] = 'price_scale';
+  // `clearAllMocks` forgets CALLS but keeps implementations, so a cookie set by
+  // one test would otherwise still be returned in the next.
+  cookieStore.get.mockReturnValue(undefined);
+  findPromotionCode.mockResolvedValue(null);
+  process.env['STRIPE_PRICE_PILOT_MONTHLY'] = 'price_pilot_m';
+  process.env['STRIPE_PRICE_PILOT_YEARLY'] = 'price_pilot_y';
+  process.env['STRIPE_PRICE_SCALE_MONTHLY'] = 'price_scale_m';
+  process.env['STRIPE_PRICE_SCALE_YEARLY'] = 'price_scale_y';
   getSession.mockResolvedValue({ user: { sub: USER, email: 'o@example.com' } });
   currentWorkspace.mockResolvedValue(contextWithRole('owner'));
   createCheckoutSession.mockResolvedValue({
@@ -153,11 +166,137 @@ describe('checkout authorization', () => {
     });
     expect(createCheckoutSession).toHaveBeenCalledWith({
       customerId: CUSTOMER,
-      priceId: 'price_pilot',
+      priceId: 'price_pilot_m',
       workspaceId: WORKSPACE,
       successUrl: 'https://sellavant.com/billing?subscribed=1',
       cancelUrl: 'https://sellavant.com/billing',
+      trialDays: 7,
     });
+  });
+});
+
+describe('interval', () => {
+  it('defaults to MONTHLY when the client sends none', async () => {
+    // An older client that omits the field must not be silently sold a year.
+    await checkout(request({ plan: 'pilot' }));
+
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceId: 'price_pilot_m' })
+    );
+  });
+
+  it('sells the yearly price when asked', async () => {
+    await checkout(request({ plan: 'scale', interval: 'year' }));
+
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceId: 'price_scale_y' })
+    );
+  });
+
+  it('rejects an interval Stripe does not have a price for', async () => {
+    const response = await checkout(
+      request({ plan: 'pilot', interval: 'week' })
+    );
+
+    expect(response.status).toBe(400);
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('trial', () => {
+  it('offers the trial to a workspace that has never subscribed', async () => {
+    await checkout(request({ plan: 'pilot' }));
+
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ trialDays: 7 })
+    );
+  });
+
+  it('refuses a SECOND trial to a workspace that has subscribed before', async () => {
+    // Otherwise cancel-and-resubscribe is an unlimited supply of free weeks,
+    // each one real money against the gateway.
+    const context = contextWithRole('owner');
+    (
+      context.workspace as unknown as { stripeSubscriptionId: string }
+    ).stripeSubscriptionId = 'sub_old';
+    currentWorkspace.mockResolvedValue(context);
+
+    await checkout(request({ plan: 'pilot' }));
+
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ trialDays: 0 })
+    );
+  });
+});
+
+describe('promotion codes', () => {
+  it('applies a code carried in the request body', async () => {
+    findPromotionCode.mockResolvedValue({
+      promotionCodeId: 'promo_1',
+      code: 'LAUNCH50',
+      description: '50% off',
+    });
+
+    await checkout(request({ plan: 'pilot', promo: 'LAUNCH50' }));
+
+    expect(findPromotionCode).toHaveBeenCalledWith('LAUNCH50');
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ promotionCodeId: 'promo_1' })
+    );
+  });
+
+  it('falls back to the cookie the ad click left behind', async () => {
+    cookieStore.get.mockReturnValue({ value: 'ADWORDS20' });
+    findPromotionCode.mockResolvedValue({
+      promotionCodeId: 'promo_2',
+      code: 'ADWORDS20',
+      description: '20% off',
+    });
+
+    await checkout(request({ plan: 'pilot' }));
+
+    expect(findPromotionCode).toHaveBeenCalledWith('ADWORDS20');
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ promotionCodeId: 'promo_2' })
+    );
+  });
+
+  it('prefers a typed code over a stale cookie', async () => {
+    // The cookie may be months old; what they just typed is the current intent.
+    cookieStore.get.mockReturnValue({ value: 'OLDCODE' });
+    findPromotionCode.mockResolvedValue({
+      promotionCodeId: 'promo_3',
+      code: 'FRESH',
+      description: '10% off',
+    });
+
+    await checkout(request({ plan: 'pilot', promo: 'FRESH' }));
+
+    expect(findPromotionCode).toHaveBeenCalledWith('FRESH');
+  });
+
+  /**
+   * The one that protects revenue: a finished campaign must not block a sale.
+   */
+  it('still sells when the code does not resolve', async () => {
+    findPromotionCode.mockResolvedValue(null);
+
+    const response = await checkout(
+      request({ plan: 'pilot', promo: 'EXPIRED' })
+    );
+
+    expect(response.status).toBe(200);
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ promotionCodeId: expect.anything() })
+    );
+  });
+
+  it('ignores a malformed code without looking it up', async () => {
+    // Arrives from a query string, so it is attacker-controlled.
+    await checkout(request({ plan: 'pilot', promo: 'not a code!!' }));
+
+    expect(findPromotionCode).not.toHaveBeenCalled();
+    expect(createCheckoutSession).toHaveBeenCalled();
   });
 });
 
@@ -179,7 +318,7 @@ describe('checkout input and configuration', () => {
   it('refuses to sell the free tier', async () => {
     // A checkout for the default tier charges somebody for the allowance they
     // already have.
-    const response = await checkout(request({ plan: 'trial' }));
+    const response = await checkout(request({ plan: 'free' }));
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
@@ -192,7 +331,7 @@ describe('checkout input and configuration', () => {
     // Configuration, not user error — and the one recovery that must never
     // happen is inferring an amount, because that charges the wrong money
     // silently.
-    delete process.env['STRIPE_PRICE_PILOT'];
+    delete process.env['STRIPE_PRICE_PILOT_MONTHLY'];
 
     const response = await checkout(request({ plan: 'pilot' }));
 
@@ -202,7 +341,7 @@ describe('checkout input and configuration', () => {
 
   it('treats an EMPTY price variable as unconfigured, not as a blank price', async () => {
     // A trailing `=` in an env file must not reach Stripe as a line item.
-    process.env['STRIPE_PRICE_PILOT'] = '';
+    process.env['STRIPE_PRICE_PILOT_MONTHLY'] = '';
 
     const response = await checkout(request({ plan: 'pilot' }));
 

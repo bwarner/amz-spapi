@@ -126,5 +126,13 @@ export async function createMyWorkspace(
 
   // Outside the try: `redirect` works by throwing, and catching it here would
   // turn a success into the error message above.
+  //
+  // A `token` means they arrived mid-purchase from a pricing link. Handing it
+  // back to `/start` resumes the checkout they already chose, rather than
+  // dropping them in chat to find the billing page and decide all over again.
+  const token = formData.get('token');
+  if (typeof token === 'string' && token) {
+    redirect(`/start?token=${encodeURIComponent(token)}`);
+  }
   redirect('/chat');
 }

@@ -1,10 +1,22 @@
-import { PLANS, planIdSchema } from '@farvisionllc/models';
-import { createCheckoutSession, priceIdFor } from '@amz-spapi/billing';
+import { cookies } from 'next/headers';
+import {
+  PLANS,
+  TRIAL_DAYS,
+  billingIntervalSchema,
+  planIdSchema,
+  priceEnvVarFor,
+} from '@farvisionllc/models';
+import {
+  createCheckoutSession,
+  findPromotionCode,
+  priceIdFor,
+} from '@amz-spapi/billing';
 import { auth0 } from '../../../../lib/auth0';
 import { currentWorkspace } from '../../../../lib/workspace-context';
 import { appBaseUrl } from '../../../../lib/config';
 import { loggerFor } from '../../../../lib/logger';
 import { captureServerException } from '../../../../lib/posthog-server';
+import { promoCodeSchema, readPromoCookie } from '../../../../lib/promo';
 
 const log = loggerFor('billing-checkout');
 
@@ -26,7 +38,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { plan?: unknown };
+  let body: { plan?: unknown; interval?: unknown; promo?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -38,9 +50,19 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unknown plan.' }, { status: 400 });
   }
 
-  const priceEnvVar = PLANS[plan.data].priceEnvVar;
+  // Defaults to monthly so an older client that sends no interval still works
+  // rather than silently being sold a year.
+  const interval = billingIntervalSchema.safeParse(body.interval ?? 'month');
+  if (!interval.success) {
+    return Response.json(
+      { error: 'Unknown billing interval.' },
+      { status: 400 }
+    );
+  }
+
+  const priceEnvVar = priceEnvVarFor(PLANS[plan.data], interval.data);
   if (!priceEnvVar) {
-    // The default tier is what you get without paying; a checkout for it would
+    // The free tier is what you get without paying; a checkout for it would
     // charge somebody for their existing allowance.
     return Response.json(
       { error: 'That plan is not for sale.' },
@@ -74,6 +96,24 @@ export async function POST(request: Request) {
   }
 
   try {
+    // The body wins over the cookie: the customer may have typed a code on the
+    // pricing page, and that is a more recent statement of intent than whatever
+    // link brought them here weeks ago.
+    const fromBody = promoCodeSchema.safeParse(body.promo);
+    const code =
+      (fromBody.success ? fromBody.data : null) ??
+      readPromoCookie(await cookies());
+    const promotion = code ? await findPromotionCode(code) : null;
+    if (code && !promotion) {
+      // Expired campaign, typo, or a code someone invented. Not a reason to
+      // refuse the sale — checkout continues and Stripe's own field is offered.
+      log.info({ code }, 'promotion code did not resolve; continuing without');
+    }
+
+    // A trial is for people who have never subscribed. Without this check,
+    // cancelling and resubscribing is an unlimited supply of free weeks.
+    const trialDays = context.workspace.stripeSubscriptionId ? 0 : TRIAL_DAYS;
+
     const base = appBaseUrl();
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
@@ -83,6 +123,8 @@ export async function POST(request: Request) {
       // Back to where they started, not to the dashboard — a cancelled
       // checkout should feel like closing a dialog, not like being logged out.
       cancelUrl: `${base}/billing`,
+      trialDays,
+      ...(promotion ? { promotionCodeId: promotion.promotionCodeId } : {}),
     });
     return Response.json({ url });
   } catch (error) {
