@@ -28,7 +28,7 @@ export function Footer() {
             <Image
               src="/brand/sellavant-logo-horizontal.svg"
               alt="Sellavant"
-              width={148}
+              width={133}
               height={32}
               loading="lazy"
             />

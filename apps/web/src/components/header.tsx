@@ -31,7 +31,7 @@ export function Header() {
           <Image
             src="/brand/sellavant-logo-horizontal.svg"
             alt="Sellavant"
-            width={132}
+            width={117}
             height={28}
             priority
           />
