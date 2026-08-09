@@ -124,3 +124,59 @@ Nothing here implements workspace or invitation rules. They live in
 `libs/identity` (`@amz-spapi/identity`), which the web app imports too — one
 implementation, so a CLI grant and a UI invitation cannot drift into disagreeing
 about expiry, role or uniqueness.
+
+## Data-subject requests (GDPR)
+
+The privacy policy offers both export and deletion. These are how they are
+answered. Ownership of every collection is declared in `libs/data-rights`, and a
+test cross-checks that list against the DDL schema — so a collection added later
+cannot be silently missed by either operation.
+
+### Export (Art. 15 / 20)
+
+```bash
+./admincli.sh users export --sub 'auth0|abc123' --out subject.json
+```
+
+Machine-readable JSON. Object storage is listed by reference rather than
+inlined — a real account is hundreds of images, and base64 in a JSON file is not
+"commonly used" in the Art. 20 sense.
+
+The stored Amazon credential (`encrypted_secrets`) is redacted. It concerns the
+subject, but an export travels by email and lands in a downloads folder;
+answering an access request must not create a credential disclosure.
+
+Trading data is exported for **every** seller account they hold, including ones
+shared with another user. Exclusivity constrains deletion, not access.
+
+### Erasure (Art. 17)
+
+```bash
+# Always look first. This is the default.
+./admincli.sh users purge --sub 'auth0|abc123'
+
+# Then, deliberately:
+./admincli.sh users purge --sub 'auth0|abc123' \
+  --email 'them@example.com' --apply --confirm 'auth0|abc123'
+```
+
+Hard delete — a `deletedAt` flag is not erasure. `--apply` additionally requires
+`--confirm` to repeat the subject exactly, because the realistic mistake is not
+a mistyped flag but the right command aimed at the wrong person.
+
+Covers the three things a naive sweep misses: `reports_*` and `sync_*` are keyed
+by Amazon **seller id**, not by subject; `ops_spend_counters` has no queryable
+field at all (the subject is hashed into the key); and `media_assets` rows are
+metadata whose **bytes live in S3**.
+
+`--email` also revokes pending invitations to that address — otherwise a live
+grant would re-admit the person the moment they signed up again.
+
+**Shared seller accounts are never purged.** If two users hold credentials for
+the same Amazon account — an owner and their agency — that trading data belongs
+to both, and erasing it for one would destroy the other's records. Those seller
+ids are reported and skipped, and the erasure must be treated as partial until
+the shared access is resolved.
+
+Exits non-zero if any stored file could not be deleted. An erasure that half
+worked must not look like one that worked.

@@ -18,7 +18,14 @@ import {
   workspaceRoleSchema,
   type WorkspaceRole,
 } from '@farvisionllc/models';
+import {
+  exportUserData,
+  purgeUserData,
+  revokeInvitationsFor,
+} from '@amz-spapi/data-rights';
+import { writeFile } from 'node:fs/promises';
 import { renderTable } from './format.js';
+import { createS3ObjectStore } from './object-store.js';
 
 /**
  * Sellavant admin CLI.
@@ -387,6 +394,143 @@ invitations
     } catch (error) {
       if (error instanceof InvitationError) fail(error.message, error);
       fail(`Could not accept the invitation: ${describe(error)}`, error);
+    }
+  });
+
+// ── data-subject requests ───────────────────────────────────────────────────
+
+const users = program
+  .command('users')
+  .description('Answer a data-subject request: export or erase a person');
+
+/**
+ * GDPR Art. 15 / 20.
+ *
+ * Writes to a file rather than stdout by default. An export of a real account
+ * is megabytes of JSON containing order history, and the one thing you must not
+ * do with it is lose it in a terminal scrollback.
+ */
+users
+  .command('export')
+  .description('Export everything held about a person, as JSON')
+  .requiredOption('--sub <sub>', 'Auth0 subject')
+  .option('-o, --out <file>', 'write here instead of stdout')
+  .action(async (options) => {
+    assertConnection();
+    try {
+      const result = await exportUserData({ userId: options.sub });
+
+      const json = JSON.stringify(result, null, 2);
+      if (options.out) {
+        await writeFile(options.out, json + '\n', 'utf8');
+        // Summary to STDERR so `--out -` style piping stays clean.
+        process.stderr.write(
+          `Wrote ${options.out}: ${Object.keys(result.records).length} ` +
+            `collections, ${Object.values(result.records).reduce(
+              (n, rows) => n + rows.length,
+              0
+            )} records, ${result.objects.length} stored files.\n`
+        );
+      } else {
+        process.stdout.write(json + '\n');
+      }
+    } catch (error) {
+      fail(`Export failed: ${describe(error)}`, error);
+    }
+  });
+
+/**
+ * GDPR Art. 17.
+ *
+ * Dry run unless `--apply`, and `--apply` additionally demands the subject be
+ * repeated back via `--confirm`. Two gates for one action is usually cargo
+ * cult; here the action is an unrecoverable delete across twenty-odd
+ * collections and an object store, and the realistic mistake is not a typo in
+ * the flag but the right command aimed at the wrong person.
+ */
+users
+  .command('purge')
+  .description('Erase everything held about a person (Art. 17)')
+  .requiredOption('--sub <sub>', 'Auth0 subject')
+  .option(
+    '--email <email>',
+    'also revoke any pending invitations to this address'
+  )
+  .option('--apply', 'actually delete; without this it only reports')
+  .option('--confirm <sub>', 'repeat --sub exactly, required with --apply')
+  .addOption(formatOption)
+  .action(async (options) => {
+    assertConnection();
+
+    const apply = Boolean(options.apply);
+    if (apply && options.confirm !== options.sub) {
+      fail(
+        'Refusing to delete.\n' +
+          `  --apply requires --confirm '${options.sub}'\n` +
+          '  Run without --apply first and read what it plans to remove.'
+      );
+    }
+
+    try {
+      const plan = await purgeUserData({
+        userId: options.sub,
+        objectStore: createS3ObjectStore(),
+        dryRun: !apply,
+      });
+
+      const invitations = options.email
+        ? await revokeInvitationsFor({
+            email: options.email,
+            dryRun: !apply,
+          })
+        : 0;
+
+      const rows = Object.entries(plan.deleted).map(([collection, count]) => ({
+        collection,
+        records: count,
+      }));
+      rows.push({ collection: '(stored files)', records: plan.objectsDeleted });
+      if (options.email) {
+        rows.push({
+          collection: '(invitations revoked)',
+          records: invitations,
+        });
+      }
+
+      emit(
+        options.format === 'json' ? { ...plan, invitations } : rows,
+        options.format
+      );
+
+      // Anything partial goes to stderr, where it cannot be lost in a pipe.
+      if (plan.retainedForSharedSellers.length > 0) {
+        process.stderr.write(
+          '\nNOT erased — these Amazon seller accounts are also held by ' +
+            'another user, so their trading data belongs to more than one ' +
+            'person:\n' +
+            plan.retainedForSharedSellers
+              .map((s) => `  ${s.sellerId} (held by ${s.heldBy.join(', ')})`)
+              .join('\n') +
+            `\nCollections left untouched: ${plan.skippedCollections.join(
+              ', '
+            )}\n` +
+            'Resolve the shared access before treating this erasure as complete.\n'
+        );
+      }
+      if (plan.objectsFailed.length > 0) {
+        process.stderr.write(
+          `\n${plan.objectsFailed.length} stored files could NOT be deleted. ` +
+            'The erasure is incomplete; re-run after fixing access.\n'
+        );
+        process.exitCode = 1;
+      }
+      if (!apply) {
+        process.stderr.write(
+          `\nDry run — nothing was deleted. Re-run with: --apply --confirm '${options.sub}'\n`
+        );
+      }
+    } catch (error) {
+      fail(`Purge failed: ${describe(error)}`, error);
     }
   });
 
