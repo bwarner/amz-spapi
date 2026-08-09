@@ -338,6 +338,71 @@ describe('provisionBilling', () => {
     expect(result.env['STRIPE_ENDPOINT_SECRET']).toBeUndefined();
   });
 
+  it('adopts an endpoint that differs only by a bypass token in the query', async () => {
+    // Reaching a protected preview deployment means putting the token in the
+    // query string. Matching on the full URL would mint a SECOND endpoint:
+    // every event delivered twice, against a secret that fits only one.
+    const bare = 'https://staging.sellavant.com/api/billing/webhook';
+    const fake = fakeStripe({
+      webhooks: [
+        {
+          id: 'we_with_token',
+          url: `${bare}?x-vercel-protection-bypass=tok`,
+        } as Partial<Stripe.WebhookEndpoint>,
+      ],
+    });
+    await withStripe(fake);
+
+    const result = await provisionBilling({ ...params, webhookUrl: bare });
+
+    expect(fake.webhookEndpoints.create).not.toHaveBeenCalled();
+    expect(result.webhook?.id).toBe('we_with_token');
+  });
+
+  it('does not strip an existing bypass token when given a bare URL', async () => {
+    // The silent-failure case: stripping it makes every delivery bounce off
+    // the protection redirect, and Stripe reports a 302 as a retryable failure.
+    const bare = 'https://staging.sellavant.com/api/billing/webhook';
+    const withTok = `${bare}?x-vercel-protection-bypass=tok`;
+    const fake = fakeStripe({
+      webhooks: [
+        {
+          id: 'we_with_token',
+          url: withTok,
+        } as Partial<Stripe.WebhookEndpoint>,
+      ],
+    });
+    await withStripe(fake);
+
+    const result = await provisionBilling({ ...params, webhookUrl: bare });
+
+    const body = fake.webhookEndpoints.update.mock.calls[0]?.[1] as {
+      url?: string;
+    };
+    expect(body.url).toBeUndefined();
+    expect(result.webhook?.url).toBe(withTok);
+  });
+
+  it('moves the URL when the caller supplies a query string', async () => {
+    const bare = 'https://staging.sellavant.com/api/billing/webhook';
+    const withTok = `${bare}?x-vercel-protection-bypass=tok`;
+    const fake = fakeStripe({
+      webhooks: [
+        { id: 'we_bare', url: bare } as Partial<Stripe.WebhookEndpoint>,
+      ],
+    });
+    await withStripe(fake);
+
+    const result = await provisionBilling({ ...params, webhookUrl: withTok });
+
+    expect(fake.webhookEndpoints.create).not.toHaveBeenCalled();
+    const body = fake.webhookEndpoints.update.mock.calls[0]?.[1] as {
+      url?: string;
+    };
+    expect(body.url).toBe(withTok);
+    expect(result.webhook?.url).toBe(withTok);
+  });
+
   it('leaves the webhook alone when no URL is given', async () => {
     const fake = fakeStripe();
     await withStripe(fake);

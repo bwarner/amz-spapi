@@ -334,6 +334,28 @@ async function ensurePortalConfiguration(
   return { configurationId: created.id, created: true };
 }
 
+/**
+ * An endpoint's identity, ignoring its query string.
+ *
+ * A protected preview deployment is reached by putting a bypass token in the
+ * QUERY STRING (`?x-vercel-protection-bypass=…`), because Stripe cannot send
+ * custom headers. Matching endpoints on the full URL would then treat
+ * `…/webhook` and `…/webhook?x-vercel-protection-bypass=abc` as different
+ * endpoints and create a second one — two deliveries of every event, and a
+ * signing secret that only matches one of them.
+ *
+ * Falls back to the raw string for anything unparseable rather than throwing;
+ * an odd URL in someone else's endpoint must not break provisioning.
+ */
+function endpointIdentity(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return url;
+  }
+}
+
 async function ensureWebhook(
   stripe: Stripe,
   url: string,
@@ -342,20 +364,30 @@ async function ensureWebhook(
   const endpoints = await listAll<Stripe.WebhookEndpoint>((startingAfter) =>
     stripe.webhookEndpoints.list({ limit: 100, starting_after: startingAfter })
   );
-  const existing = endpoints.find((e) => e.url === url);
+  const wanted = endpointIdentity(url);
+  const existing = endpoints.find((e) => endpointIdentity(e.url) === wanted);
 
   if (dryRun) {
     return { id: existing?.id ?? '(would create)', url, created: !existing };
   }
 
   if (existing) {
+    // Only move the URL when the caller supplied a query string. Otherwise a
+    // routine `provision --webhook-url <bare url>` would STRIP an existing
+    // bypass token, and every delivery would start bouncing off the
+    // deployment-protection redirect — silently, since Stripe treats a 302 as
+    // a failure it will simply retry.
+    const callerSpecifiedQuery = url.includes('?');
+    const keepUrl = callerSpecifiedQuery ? url : existing.url;
+
     const updated = await stripe.webhookEndpoints.update(existing.id, {
       enabled_events: WEBHOOK_EVENTS,
       disabled: false,
+      ...(keepUrl !== existing.url ? { url: keepUrl } : {}),
     });
     // No secret: Stripe returns it only at creation. An existing endpoint's
     // secret has to come from the dashboard, or the endpoint be recreated.
-    return { id: updated.id, url, created: false };
+    return { id: updated.id, url: keepUrl, created: false };
   }
 
   const created = await stripe.webhookEndpoints.create({
