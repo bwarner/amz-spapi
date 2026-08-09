@@ -76,6 +76,18 @@ export async function createWorkspace(params: {
   name: string;
   ownerUserId: string;
   ownerEmail: string;
+  /**
+   * The Stripe customer to bill, created by the CALLER before it gets here.
+   *
+   * Passed in rather than created here so this library never learns that Stripe
+   * exists — identity is about who may do what, and coupling it to a payment
+   * processor would make every test of a membership rule need a billing stub.
+   *
+   * Required, not optional. An optional field would be satisfied by forgetting
+   * it, and the thing being prevented is a workspace that can spend and can
+   * never be charged.
+   */
+  stripeCustomerId: string;
 }): Promise<Workspace> {
   const now = Date.now();
   const workspace = workspaceSchema.parse({
@@ -83,6 +95,7 @@ export async function createWorkspace(params: {
     type: 'workspace',
     name: params.name,
     ownerUserId: params.ownerUserId,
+    stripeCustomerId: params.stripeCustomerId,
     createdAt: now,
     updatedAt: now,
   });

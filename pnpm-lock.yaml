@@ -28,6 +28,9 @@ importers:
       '@amz-spapi/aws-secrets':
         specifier: 0.0.1
         version: link:libs/aws-secrets
+      '@amz-spapi/billing':
+        specifier: 0.0.1
+        version: link:libs/billing
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:libs/couchbase-utils
@@ -313,6 +316,9 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      stripe:
+        specifier: ^22.4.0
+        version: 22.4.0(@types/node@24.12.4)
       tailwind-merge:
         specifier: ^3.3.1
         version: 3.6.0
@@ -526,6 +532,18 @@ importers:
       '@aws-sdk/client-secrets-manager':
         specifier: ^3.1102.0
         version: 3.1102.0
+
+  libs/billing:
+    dependencies:
+      '@farvisionllc/models':
+        specifier: 0.0.1
+        version: link:../../packages/models
+      stripe:
+        specifier: ^22.4.0
+        version: 22.4.0(@types/node@24.12.4)
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
 
   libs/couchbase-utils: {}
 
@@ -17745,6 +17763,18 @@ packages:
         integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==,
       }
 
+  stripe@22.4.0:
+    resolution:
+      {
+        integrity: sha512-LVJ+tcSYeqOSnXr3i+Kz2tZ7y0crLLdP2uwD/4wccrmEVyn0g/Heo0pF7as7rxS/sOjJzrb1lxgZY0Y0Dx1pSA==,
+      }
+    engines: { node: '>=18' }
+    peerDependencies:
+      '@types/node': '>=18'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
+
   strtok3@10.3.5:
     resolution:
       {
@@ -31898,6 +31928,10 @@ snapshots:
   strip-literal@3.1.0:
     dependencies:
       js-tokens: 9.0.1
+
+  stripe@22.4.0(@types/node@24.12.4):
+    optionalDependencies:
+      '@types/node': 24.12.4
 
   strtok3@10.3.5:
     dependencies:

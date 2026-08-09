@@ -37,6 +37,7 @@
       ],
       "@amz-spapi/amazon-sp-schema": ["packages/amazon-sp-schema/src/index.ts"],
       "@amz-spapi/aws-secrets": ["libs/aws-secrets/src/index.ts"],
+      "@amz-spapi/billing": ["libs/billing/src/index.ts"],
       "@amz-spapi/couchbase-utils": ["libs/couchbase-utils/src/index.ts"],
       "@amz-spapi/data-rights": ["libs/data-rights/src/index.ts"],
       "@amz-spapi/identity": ["libs/identity/src/index.ts"],

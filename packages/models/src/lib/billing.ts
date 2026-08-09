@@ -151,7 +151,11 @@ export function dailySpendCeilingUsd(params: {
   const plan = effectivePlan(params);
   const env = params.env ?? process.env;
   const raw = env[`SELLAVANT_DAILY_SPEND_${plan.id.toUpperCase()}`];
-  const override = raw === undefined ? NaN : Number(raw);
+  // An EMPTY value means "declared but not set", not zero. `Number('')` is 0,
+  // so without this an env file listing the variable without a value would
+  // silently freeze all spending on that tier — a total outage produced by a
+  // trailing `=` in a config file.
+  const override = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
   return Number.isFinite(override) && override >= 0
     ? override
     : plan.dailySpendUsd;

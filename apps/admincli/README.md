@@ -8,12 +8,11 @@ and nothing about Amazon.
 
 ## Why it exists
 
-The web UI at `/team` can only be used by somebody already inside a workspace,
-and the invite gate has exactly one bootstrap route: the
-`PLATFORM_OWNER_EMAILS` environment variable. That is fine until it is wrong. A
-typo, an Auth0 account under a different address, or a process that has not been
-restarted since the variable was added, and nobody can get in — including the
-person who would fix it.
+Signup is open and new accounts provision their own workspace at `/onboarding`,
+so nobody is locked out by default. What this exists for is everything the web
+UI deliberately will not do: create a workspace on somebody's behalf, grant
+membership without an invitation round trip, repair a workspace that predates a
+schema change, and answer data-subject requests.
 
 `admincli` reaches Couchbase directly, so it works when nothing else does. It is
 the escape hatch first and a batch tool second: inviting twenty pilot sellers is
@@ -45,10 +44,8 @@ Start here. `check` reports what the gate would decide and why:
 ./admincli.sh check --sub 'auth0|abc123' --email 'someone@example.com'
 ```
 
-`ownerListConfigured: false` means the running app process predates
-`PLATFORM_OWNER_EMAILS` — restart it. `matchesOwnerList: false` with the list
-populated means the address is wrong. The two have identical symptoms in the
-browser and completely different fixes.
+`hasWorkspace: false` means the account exists but has not completed
+onboarding — it is not stuck, it just has not created a workspace yet.
 
 To find a user's subject when you only know they have used the app:
 
