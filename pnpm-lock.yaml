@@ -31,6 +31,9 @@ importers:
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:libs/couchbase-utils
+      '@amz-spapi/data-rights':
+        specifier: 0.0.1
+        version: link:libs/data-rights
       '@amz-spapi/identity':
         specifier: 0.0.1
         version: link:libs/identity
@@ -519,6 +522,15 @@ importers:
         version: 3.1102.0
 
   libs/couchbase-utils: {}
+
+  libs/data-rights:
+    dependencies:
+      '@amz-spapi/couchbase-utils':
+        specifier: 0.0.1
+        version: link:../couchbase-utils
+      tslib:
+        specifier: ^2.3.0
+        version: 2.8.1
 
   libs/identity:
     dependencies:

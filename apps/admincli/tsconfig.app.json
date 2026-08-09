@@ -13,6 +13,9 @@
       "path": "../../libs/identity/tsconfig.lib.json"
     },
     {
+      "path": "../../libs/data-rights/tsconfig.lib.json"
+    },
+    {
       "path": "../../packages/models/tsconfig.lib.json"
     }
   ]
