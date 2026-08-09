@@ -1,0 +1,19 @@
+{
+  "name": "data-rights",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/data-rights/src",
+  "projectType": "library",
+  "tags": [],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/libs/data-rights",
+        "main": "libs/data-rights/src/index.ts",
+        "tsConfig": "libs/data-rights/tsconfig.lib.json",
+        "assets": ["libs/data-rights/*.md"]
+      }
+    }
+  }
+}

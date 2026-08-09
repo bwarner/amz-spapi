@@ -30,6 +30,7 @@
     "@amz-spapi/ai-provider": "0.0.1",
     "@amz-spapi/aws-secrets": "0.0.1",
     "@amz-spapi/couchbase-utils": "0.0.1",
+    "@amz-spapi/data-rights": "0.0.1",
     "@amz-spapi/identity": "0.0.1",
     "@amz-spapi/seller-agent": "0.0.1",
     "@amz-spapi/sp-cache": "0.0.1",
