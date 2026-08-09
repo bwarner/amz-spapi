@@ -27,6 +27,7 @@ import { writeFile } from 'node:fs/promises';
 import {
   createBillingCustomer,
   linkCustomerToWorkspace,
+  provisionBilling,
 } from '@amz-spapi/billing';
 import { renderTable } from './format.js';
 import {
@@ -640,6 +641,156 @@ users
       }
     } catch (error) {
       fail(`Purge failed: ${describe(error)}`, error);
+    }
+  });
+
+// ── Stripe account provisioning ─────────────────────────────────────────────
+
+const billing = program
+  .command('billing')
+  .description('Provision the Stripe objects the app needs');
+
+/**
+ * Create the products, prices, portal configuration and webhook endpoint.
+ *
+ * Not a Couchbase command — `assertConnection` is deliberately NOT called, so
+ * this works before the database exists, which is the order things actually
+ * happen in when standing up a new environment.
+ *
+ * ## The dangerous part is which account it writes to
+ *
+ * A test key and a live key differ by four characters and the API accepts both
+ * without comment. So the account is printed before anything is written, live
+ * mode requires `--live` as well as `--apply`, and the default is a dry run.
+ *
+ * ## The webhook secret is printed once
+ *
+ * Stripe returns a signing secret only at the moment an endpoint is created;
+ * there is no API to read it back. If it is not captured here it has to be
+ * fetched from the dashboard. It is written to STDERR, not stdout, so that
+ * `--format json | jq` does not put it somewhere it will be committed.
+ */
+billing
+  .command('provision')
+  .description('Create/update Stripe products, prices, portal and webhook')
+  .option('--apply', 'actually write; without this it only reports')
+  .option('--live', 'permit writing to a live-mode account')
+  .option(
+    '--webhook-url <url>',
+    'public URL of POST /api/billing/webhook; omit for local dev (use `stripe listen`)'
+  )
+  .option(
+    '--base-url <url>',
+    'public origin, for the portal return and policy URLs',
+    process.env['APP_BASE_URL'] || 'https://sellavant.com'
+  )
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to provision against.');
+    }
+
+    const base = String(options.baseUrl).replace(/\/$/, '');
+    const apply = Boolean(options.apply);
+
+    const result = await provisionBilling({
+      dryRun: !apply,
+      returnUrl: `${base}/billing`,
+      privacyPolicyUrl: `${base}/privacy`,
+      termsOfServiceUrl: `${base}/terms`,
+      ...(options.webhookUrl ? { webhookUrl: options.webhookUrl } : {}),
+    });
+
+    // Checked AFTER the call because the dry run is what tells you the account
+    // is wrong. Refusing before reporting would leave you guessing.
+    if (result.livemode && apply && !options.live) {
+      fail(
+        `Refusing to write to LIVE account ${result.accountId} without --live.`
+      );
+    }
+
+    process.stderr.write(
+      `Stripe account ${result.accountId} (${
+        result.livemode ? 'LIVE' : 'test'
+      } mode)\n`
+    );
+
+    for (const p of result.plans) {
+      if (p.amountMismatch) {
+        process.stderr.write(
+          `WARNING: ${p.planId} price ${p.priceId} charges ` +
+            `$${(p.amountMismatch.existingCents / 100).toFixed(2)}, but ` +
+            `PLAN_PRICE_CENTS says $${(
+              p.amountMismatch.expectedCents / 100
+            ).toFixed(
+              2
+            )}. Stripe prices are immutable — re-price deliberately ` +
+            `in the dashboard.\n`
+        );
+        process.exitCode = 1;
+      }
+    }
+
+    const rows = result.plans.map((p) => ({
+      plan: p.planId,
+      product: p.productId,
+      price: p.priceId,
+      monthly: `$${(p.amountCents / 100).toFixed(2)}`,
+      created: p.created.product || p.created.price ? 'yes' : 'no',
+    }));
+
+    if (options.format === 'json') {
+      // The whole result, so `| jq` can reach the portal id and the secret.
+      emit(
+        {
+          account: result.accountId,
+          livemode: result.livemode,
+          plans: rows,
+          portalConfiguration: result.portal.configurationId,
+          webhook: result.webhook ?? null,
+          env: result.env,
+        },
+        'json'
+      );
+    } else {
+      // Only the plans. Nesting an array inside a table cell renders it as raw
+      // JSON on one enormous line, which is how the useful columns become
+      // unreadable; the scalars go to stderr below instead.
+      emit(rows, 'table');
+      process.stderr.write(
+        `\nportal configuration: ${result.portal.configurationId}` +
+          ` (${result.portal.created ? 'created' : 'existing'})\n` +
+          `webhook: ${
+            result.webhook
+              ? `${result.webhook.id} (${
+                  result.webhook.created ? 'created' : 'updated'
+                })`
+              : 'none — local dev forwards with `stripe listen`'
+          }\n`
+      );
+    }
+
+    if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
+      );
+      return;
+    }
+
+    process.stderr.write('\nSet these in the environment:\n');
+    for (const [key, value] of Object.entries(result.env)) {
+      const shown =
+        key === 'STRIPE_ENDPOINT_SECRET'
+          ? `${value}   ← shown ONCE; Stripe will not return it again`
+          : value;
+      process.stderr.write(`  ${key}=${shown}\n`);
+    }
+    if (result.webhook && !result.webhook.created) {
+      process.stderr.write(
+        '\nThe webhook endpoint already existed, so its signing secret was not\n' +
+          'reissued. Keep the STRIPE_ENDPOINT_SECRET you already have, or roll it\n' +
+          'from the endpoint page in the Stripe dashboard.\n'
+      );
     }
   });
 

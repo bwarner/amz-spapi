@@ -62,6 +62,15 @@ export async function createCheckoutSession(params: {
  * Hosted rather than rebuilt: card capture, dunning, proration, tax and
  * invoice history are a large surface with real compliance weight, and none of
  * it is where this product competes.
+ *
+ * `STRIPE_PORTAL_CONFIGURATION_ID` names OUR configuration explicitly. Omitting
+ * it falls back to the account's default one, which is a shared, dashboard-
+ * editable object — and this Stripe account is shared with other products, so
+ * the default can change what our customers are offered without anyone touching
+ * this repository. Worse, a default with `subscription_update` enabled lists
+ * every active price in the account: a Sellavant customer could be shown an
+ * unrelated product's plan and switch to it. `admincli billing provision`
+ * creates the configuration and prints the id.
  */
 export async function createPortalSession(params: {
   customerId: string;
@@ -70,9 +79,12 @@ export async function createPortalSession(params: {
   const stripe = stripeClient();
   if (!stripe) throw new BillingNotConfiguredError();
 
+  const configuration = process.env['STRIPE_PORTAL_CONFIGURATION_ID']?.trim();
+
   const session = await stripe.billingPortal.sessions.create({
     customer: params.customerId,
     return_url: params.returnUrl,
+    ...(configuration ? { configuration } : {}),
   });
   return { url: session.url };
 }

@@ -100,6 +100,68 @@ it yourself. Use `--base-url` to override the host (defaults to `APP_BASE_URL`).
 user's behalf, for the support case where they cannot. The email is still
 checked against the invitation unless you pass `--force`.
 
+## Stripe provisioning
+
+Billing needs four things to exist in Stripe before it works: a product and a
+recurring price per purchasable plan, a customer portal configuration, and a
+webhook endpoint. `billing provision` creates whatever is missing and prints the
+environment variables to set.
+
+```bash
+# Always look first. This is the default.
+./admincli.sh billing provision
+
+# Then, for a real environment:
+./admincli.sh billing provision --apply \
+  --base-url https://sellavant.com \
+  --webhook-url https://sellavant.com/api/billing/webhook
+```
+
+Idempotent — it matches on `metadata.product = sellavant` plus
+`metadata.planId`, not on names, so re-running adopts what already exists and
+creates nothing twice. That matters because this Stripe account is shared with
+other products.
+
+Unlike the rest of this CLI it needs **no Couchbase connection**, only
+`STRIPE_SECRET_KEY` — so it works when standing up a new environment before the
+database exists.
+
+Three things to know:
+
+- **The account is printed before anything is written.** A test key and a live
+  key differ by four characters, so live mode also requires `--live` on top of
+  `--apply`.
+- **The webhook signing secret is shown once.** Stripe returns it only at
+  creation and has no API to read it back. If the endpoint already exists it is
+  not reissued — keep the `STRIPE_ENDPOINT_SECRET` you have, or roll it from the
+  endpoint's page in the dashboard.
+- **It never re-prices.** Stripe prices are immutable in amount, and the
+  workaround — mint a new price, deactivate the old — does not move existing
+  subscribers, so it looks successful while changing nobody's bill. A price
+  that disagrees with `PLAN_PRICE_CENTS` is reported and the command exits
+  non-zero.
+
+Omit `--webhook-url` for local development: Stripe cannot reach
+`local.sellavant.com`, so forward deliveries instead, and use the secret it
+prints rather than a dashboard one.
+
+```bash
+stripe listen --forward-to https://local.sellavant.com/api/billing/webhook
+```
+
+**Check which account the CLI is on first.** `stripe config --list` reports it,
+and it is not necessarily the account `STRIPE_SECRET_KEY` belongs to — the
+sandbox the app uses is a separate account from the parent org. A `stripe
+listen` on the wrong one forwards the wrong account's events and prints a
+signing secret that will never verify, which surfaces as
+`rejected an unverifiable webhook` and looks like a code bug. Either
+`stripe login` into the right account, or pin it per invocation:
+
+```bash
+stripe listen --api-key "$STRIPE_SECRET_KEY" \
+  --forward-to https://local.sellavant.com/api/billing/webhook
+```
+
 ## Output
 
 `--format table` (default) for reading, `--format json` for piping. Epoch
