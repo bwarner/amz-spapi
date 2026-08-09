@@ -14,6 +14,7 @@ import {
   FileSpreadsheet,
   Scale,
   Users,
+  CreditCard,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -32,6 +33,7 @@ const navItems = [
   { href: '/reconciliation', label: 'Reconcile', icon: Scale },
   { href: '/connections', label: 'Connections', icon: Activity },
   { href: '/team', label: 'Team', icon: Users },
+  { href: '/billing', label: 'Billing', icon: CreditCard },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
