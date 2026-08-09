@@ -1,9 +1,10 @@
 import type Stripe from 'stripe';
+import { PLANS, purchasablePlans } from '@farvisionllc/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetStripeClient } from './customers.js';
 import {
-  PLAN_PRICE_CENTS,
   WEBHOOK_EVENTS,
+  deactivateStalePrices,
   provisionBilling,
 } from './provision.js';
 
@@ -12,11 +13,11 @@ import {
  *
  * The first is DUPLICATION. This runs against a Stripe account shared with
  * other products, and it runs more than once — every environment, and again
- * whenever a plan is added. A second "Sellavant Pilot" product with its own
- * price is not an error anybody sees: checkout keeps working against whichever
- * price id happens to be in the environment, and the duplicate sits there until
- * somebody reconciles an invoice. So the tests that matter here assert that a
- * second run creates NOTHING.
+ * whenever a plan or an interval is added. A second "Sellavant Pilot" product
+ * with its own price is not an error anybody sees: checkout keeps working
+ * against whichever price id happens to be in the environment, and the
+ * duplicate sits there until somebody reconciles an invoice. So the tests that
+ * matter here assert that a second run creates NOTHING.
  *
  * The second is RE-PRICING. Stripe prices are immutable in amount, so the only
  * way to "change" one is to create another — which does not move existing
@@ -60,7 +61,7 @@ function fakeStripe(
     },
     prices: {
       list: vi.fn(async (q: Stripe.PriceListParams) =>
-        list(prices.filter((p) => p.product === q.product))
+        list(q.product ? prices.filter((p) => p.product === q.product) : prices)
       ),
       create: vi.fn(async (body: Stripe.PriceCreateParams) => {
         const created = {
@@ -72,6 +73,10 @@ function fakeStripe(
         prices.push(created as unknown as Stripe.Price);
         return created;
       }),
+      update: vi.fn(async (pid: string, body: object) => ({
+        id: pid,
+        ...body,
+      })),
     },
     billingPortal: {
       configurations: {
@@ -119,6 +124,8 @@ const params = {
   termsOfServiceUrl: 'https://sellavant.com/terms',
 };
 
+const PAID = purchasablePlans().length;
+
 beforeEach(() => {
   resetStripeClient();
   process.env[KEY] = 'sk_test_x';
@@ -131,21 +138,24 @@ afterEach(() => {
 });
 
 describe('provisionBilling', () => {
-  it('creates a product and a monthly price for every purchasable plan', async () => {
+  it('creates a product and BOTH interval prices for every purchasable plan', async () => {
     const fake = fakeStripe();
     await withStripe(fake);
 
     const result = await provisionBilling(params);
 
-    expect(result.plans.map((p) => p.planId).sort()).toEqual([
-      'pilot',
-      'scale',
-    ]);
-    expect(fake.products.create).toHaveBeenCalledTimes(2);
-    expect(fake.prices.create).toHaveBeenCalledTimes(2);
+    expect(result.plans).toHaveLength(PAID);
+    expect(fake.products.create).toHaveBeenCalledTimes(PAID);
+    expect(fake.prices.create).toHaveBeenCalledTimes(PAID * 2);
 
-    // The trial plan is not for sale and must never get a price.
-    expect(result.plans.some((p) => p.planId === 'trial')).toBe(false);
+    for (const plan of result.plans) {
+      expect(plan.prices.map((p) => p.interval).sort()).toEqual([
+        'month',
+        'year',
+      ]);
+    }
+    // The free plan is not for sale and must never get a product or price.
+    expect(result.plans.some((p) => p.planId === 'free')).toBe(false);
   });
 
   it('puts planId in the PRICE metadata — the field entitlement is read from', async () => {
@@ -157,19 +167,23 @@ describe('provisionBilling', () => {
     for (const call of fake.prices.create.mock.calls) {
       const body = call[0] as Stripe.PriceCreateParams;
       expect(body.metadata?.['planId']).toMatch(/^(pilot|scale)$/);
-      expect(body.recurring?.interval).toBe('month');
+      expect(body.metadata?.['interval']).toMatch(/^(month|year)$/);
       expect(body.currency).toBe('usd');
     }
   });
 
-  it('charges the amounts in PLAN_PRICE_CENTS', async () => {
+  it('charges the amounts in the plan table', async () => {
     const fake = fakeStripe();
     await withStripe(fake);
 
     const result = await provisionBilling(params);
 
-    for (const p of result.plans) {
-      expect(p.amountCents).toBe(PLAN_PRICE_CENTS[p.planId]);
+    for (const provisioned of result.plans) {
+      const plan = PLANS[provisioned.planId];
+      const monthly = provisioned.prices.find((p) => p.interval === 'month');
+      const yearly = provisioned.prices.find((p) => p.interval === 'year');
+      expect(monthly?.amountCents).toBe(plan.monthlyCents);
+      expect(yearly?.amountCents).toBe(plan.yearlyCents);
     }
   });
 
@@ -189,6 +203,43 @@ describe('provisionBilling', () => {
     expect(fake.billingPortal.configurations.create).not.toHaveBeenCalled();
     // And it adopts the same objects, so the env it prints stays stable.
     expect(second.env).toEqual(first.env);
+  });
+
+  it('adds only the MISSING interval to a product that has one price', async () => {
+    // The upgrade path from the single-interval era: the monthly price exists
+    // and must be adopted, not duplicated, while yearly gets created.
+    const fake = fakeStripe({
+      products: [
+        {
+          id: 'prod_pilot',
+          active: true,
+          metadata: { product: 'sellavant', planId: 'pilot' },
+        } as Partial<Stripe.Product>,
+      ],
+      prices: [
+        {
+          id: 'price_pilot_monthly',
+          product: 'prod_pilot',
+          active: true,
+          type: 'recurring',
+          unit_amount: PLANS.pilot.monthlyCents,
+          recurring: { interval: 'month' },
+          metadata: { planId: 'pilot' },
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    const result = await provisionBilling(params);
+    const pilot = result.plans.find((p) => p.planId === 'pilot');
+
+    expect(pilot?.productId).toBe('prod_pilot');
+    expect(pilot?.prices.find((p) => p.interval === 'month')?.priceId).toBe(
+      'price_pilot_monthly'
+    );
+    expect(pilot?.prices.find((p) => p.interval === 'year')?.created).toBe(
+      true
+    );
   });
 
   it('ignores another product in the same account', async () => {
@@ -217,10 +268,12 @@ describe('provisionBilling', () => {
     await withStripe(fake);
 
     const result = await provisionBilling(params);
-
     const pilot = result.plans.find((p) => p.planId === 'pilot');
+
     expect(pilot?.productId).not.toBe('prod_someone_else');
-    expect(pilot?.priceId).not.toBe('price_someone_else');
+    expect(pilot?.prices.map((p) => p.priceId)).not.toContain(
+      'price_someone_else'
+    );
   });
 
   it('reports a price whose amount has drifted, and never re-prices it', async () => {
@@ -238,7 +291,7 @@ describe('provisionBilling', () => {
           product: 'prod_pilot',
           active: true,
           type: 'recurring',
-          unit_amount: 19_900,
+          unit_amount: PLANS.pilot.monthlyCents + 20_000,
           recurring: { interval: 'month' },
           metadata: { planId: 'pilot' },
         } as unknown as Partial<Stripe.Price>,
@@ -247,20 +300,26 @@ describe('provisionBilling', () => {
     await withStripe(fake);
 
     const result = await provisionBilling(params);
-    const pilot = result.plans.find((p) => p.planId === 'pilot');
+    const monthly = result.plans
+      .find((p) => p.planId === 'pilot')
+      ?.prices.find((p) => p.interval === 'month');
 
-    expect(pilot?.priceId).toBe('price_pilot_old');
-    expect(pilot?.amountMismatch).toEqual({
-      existingCents: 19_900,
-      expectedCents: PLAN_PRICE_CENTS.pilot,
+    expect(monthly?.priceId).toBe('price_pilot_old');
+    expect(monthly?.amountMismatch).toEqual({
+      existingCents: PLANS.pilot.monthlyCents + 20_000,
+      expectedCents: PLANS.pilot.monthlyCents,
     });
-    // The whole point: no second price was minted to "fix" it.
-    expect(fake.prices.create).not.toHaveBeenCalledWith(
-      expect.objectContaining({ product: 'prod_pilot' })
+    expect(result.mismatches.join(' ')).toContain('pilot/month');
+    // The whole point: no second monthly price was minted to "fix" it.
+    const monthlyCreates = fake.prices.create.mock.calls.filter(
+      (c) =>
+        (c[0] as Stripe.PriceCreateParams).recurring?.interval === 'month' &&
+        (c[0] as Stripe.PriceCreateParams).product === 'prod_pilot'
     );
+    expect(monthlyCreates).toHaveLength(0);
   });
 
-  it('limits the portal to our own plans', async () => {
+  it('offers every plan AND every interval in the portal', async () => {
     const fake = fakeStripe();
     await withStripe(fake);
 
@@ -272,16 +331,21 @@ describe('provisionBilling', () => {
     // it, and unset is exactly the state this test exists to rule out.
     const offered = body.features?.subscription_update?.products;
     expect(Array.isArray(offered)).toBe(true);
-    const products =
+    const productList =
       offered as Stripe.BillingPortal.ConfigurationCreateParams.Features.SubscriptionUpdate.Product[];
-    expect(products).toHaveLength(2);
-    expect(products.map((p) => p.product).sort()).toEqual(
+
+    expect(productList).toHaveLength(PAID);
+    for (const entry of productList) {
+      // Both intervals, so the portal is also how monthly becomes yearly.
+      expect(entry.prices).toHaveLength(2);
+    }
+    expect(productList.map((p) => p.product).sort()).toEqual(
       result.plans.map((p) => p.productId).sort()
     );
     expect(body.features?.subscription_cancel?.mode).toBe('at_period_end');
   });
 
-  it('returns the portal configuration id as an env var to set', async () => {
+  it('returns an env var for every price and the portal', async () => {
     const fake = fakeStripe();
     await withStripe(fake);
 
@@ -290,8 +354,10 @@ describe('provisionBilling', () => {
     expect(result.env['STRIPE_PORTAL_CONFIGURATION_ID']).toBe(
       result.portal.configurationId
     );
-    expect(result.env['STRIPE_PRICE_PILOT']).toBeDefined();
-    expect(result.env['STRIPE_PRICE_SCALE']).toBeDefined();
+    expect(result.env['STRIPE_PRICE_PILOT_MONTHLY']).toBeDefined();
+    expect(result.env['STRIPE_PRICE_PILOT_YEARLY']).toBeDefined();
+    expect(result.env['STRIPE_PRICE_SCALE_MONTHLY']).toBeDefined();
+    expect(result.env['STRIPE_PRICE_SCALE_YEARLY']).toBeDefined();
   });
 
   it('subscribes the webhook to exactly the events the route handles', async () => {
@@ -459,7 +525,7 @@ describe('provisionBilling', () => {
     const result = await provisionBilling(params);
 
     expect(result.accountId).toMatch(/unknown/);
-    expect(fake.products.create).toHaveBeenCalledTimes(2);
+    expect(fake.products.create).toHaveBeenCalledTimes(PAID);
     // The guard that actually matters survives the degraded path.
     expect(result.livemode).toBe(true);
   });
@@ -473,5 +539,159 @@ describe('provisionBilling', () => {
 
     process.env[KEY] = 'rk_test_x';
     expect((await provisionBilling(params)).livemode).toBe(false);
+  });
+});
+
+/** Our product, as `ensureProduct` would have created it. */
+const ourProduct = (planId: string, id = `prod_${planId}`) =>
+  ({
+    id,
+    active: true,
+    metadata: { product: 'sellavant', planId },
+  } as Partial<Stripe.Product>);
+
+describe('deactivateStalePrices', () => {
+  it('retires a price whose amount left the plan table', async () => {
+    const fake = fakeStripe({
+      products: [ourProduct('pilot')],
+      prices: [
+        {
+          id: 'price_old',
+          product: 'prod_pilot',
+          active: true,
+          type: 'recurring',
+          unit_amount: 99_999,
+          recurring: { interval: 'month' },
+          metadata: { product: 'sellavant', planId: 'pilot' },
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    const stale = await deactivateStalePrices({});
+
+    expect(stale.map((s) => s.priceId)).toEqual(['price_old']);
+    expect(fake.prices.update).toHaveBeenCalledWith('price_old', {
+      active: false,
+    });
+  });
+
+  /**
+   * Found by running it: `provision` reported two mismatched prices while this
+   * reported nothing to do, forever. Ownership must be decided the same way in
+   * both — by the PRODUCT — or prices predating the price-level tag are
+   * invisible to exactly the function meant to retire them.
+   */
+  it('retires a stale price on our product even without the price-level tag', async () => {
+    const fake = fakeStripe({
+      products: [ourProduct('pilot')],
+      prices: [
+        {
+          id: 'price_untagged',
+          product: 'prod_pilot',
+          active: true,
+          type: 'recurring',
+          unit_amount: 29_900,
+          recurring: { interval: 'month' },
+          metadata: { planId: 'pilot' },
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    const stale = await deactivateStalePrices({});
+
+    expect(stale.map((s) => s.priceId)).toEqual(['price_untagged']);
+  });
+
+  it('retires a stale price carrying no metadata at all, via its product', async () => {
+    const fake = fakeStripe({
+      products: [ourProduct('scale')],
+      prices: [
+        {
+          id: 'price_bare',
+          product: 'prod_scale',
+          active: true,
+          type: 'recurring',
+          unit_amount: 99_900,
+          recurring: { interval: 'month' },
+          metadata: {},
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    expect((await deactivateStalePrices({})).map((s) => s.priceId)).toEqual([
+      'price_bare',
+    ]);
+  });
+
+  it('leaves a current price alone', async () => {
+    const fake = fakeStripe({
+      products: [ourProduct('pilot')],
+      prices: [
+        {
+          id: 'price_current',
+          product: 'prod_pilot',
+          active: true,
+          type: 'recurring',
+          unit_amount: PLANS.pilot.monthlyCents,
+          recurring: { interval: 'month' },
+          metadata: { product: 'sellavant', planId: 'pilot' },
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    expect(await deactivateStalePrices({})).toEqual([]);
+    expect(fake.prices.update).not.toHaveBeenCalled();
+  });
+
+  it('never touches another product in the shared account', async () => {
+    const fake = fakeStripe({
+      products: [
+        {
+          id: 'prod_theirs',
+          active: true,
+          metadata: { planId: 'pilot' },
+        } as Partial<Stripe.Product>,
+      ],
+      prices: [
+        {
+          id: 'price_theirs',
+          product: 'prod_theirs',
+          active: true,
+          type: 'recurring',
+          unit_amount: 12_345,
+          recurring: { interval: 'month' },
+          metadata: { planId: 'pilot' },
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    expect(await deactivateStalePrices({})).toEqual([]);
+    expect(fake.prices.update).not.toHaveBeenCalled();
+  });
+
+  it('reports without writing on a dry run', async () => {
+    const fake = fakeStripe({
+      products: [ourProduct('scale')],
+      prices: [
+        {
+          id: 'price_old',
+          product: 'prod_scale',
+          active: true,
+          type: 'recurring',
+          unit_amount: 1,
+          recurring: { interval: 'month' },
+          metadata: { product: 'sellavant', planId: 'scale' },
+        } as unknown as Partial<Stripe.Price>,
+      ],
+    });
+    await withStripe(fake);
+
+    expect(await deactivateStalePrices({ dryRun: true })).toHaveLength(1);
+    expect(fake.prices.update).not.toHaveBeenCalled();
   });
 });

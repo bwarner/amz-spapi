@@ -26,8 +26,10 @@ import {
 import { writeFile } from 'node:fs/promises';
 import {
   createBillingCustomer,
+  deactivateStalePrices,
   linkCustomerToWorkspace,
   provisionBilling,
+  verifyConfiguredPrices,
 } from '@amz-spapi/billing';
 import { renderTable } from './format.js';
 import {
@@ -715,29 +717,27 @@ billing
       } mode)\n`
     );
 
-    for (const p of result.plans) {
-      if (p.amountMismatch) {
-        process.stderr.write(
-          `WARNING: ${p.planId} price ${p.priceId} charges ` +
-            `$${(p.amountMismatch.existingCents / 100).toFixed(2)}, but ` +
-            `PLAN_PRICE_CENTS says $${(
-              p.amountMismatch.expectedCents / 100
-            ).toFixed(
-              2
-            )}. Stripe prices are immutable — re-price deliberately ` +
-            `in the dashboard.\n`
-        );
-        process.exitCode = 1;
-      }
+    for (const mismatch of result.mismatches) {
+      process.stderr.write(
+        `WARNING: ${mismatch}. Stripe prices are immutable in amount — ` +
+          `re-pricing means minting a new price, which does NOT move existing ` +
+          `subscribers. Use \`billing retire-prices\` deliberately.\n`
+      );
+      process.exitCode = 1;
     }
 
-    const rows = result.plans.map((p) => ({
-      plan: p.planId,
-      product: p.productId,
-      price: p.priceId,
-      monthly: `$${(p.amountCents / 100).toFixed(2)}`,
-      created: p.created.product || p.created.price ? 'yes' : 'no',
-    }));
+    // One row per PRICE, not per plan: a plan now has a monthly and a yearly,
+    // and collapsing them loses the id you actually need to paste.
+    const rows = result.plans.flatMap((p) =>
+      p.prices.map((price) => ({
+        plan: p.planId,
+        interval: price.interval,
+        product: p.productId,
+        price: price.priceId,
+        amount: `$${(price.amountCents / 100).toFixed(2)}`,
+        created: price.created || p.productCreated ? 'yes' : 'no',
+      }))
+    );
 
     if (options.format === 'json') {
       // The whole result, so `| jq` can reach the portal id and the secret.
@@ -791,6 +791,104 @@ billing
           'reissued. Keep the STRIPE_ENDPOINT_SECRET you already have, or roll it\n' +
           'from the endpoint page in the Stripe dashboard.\n'
       );
+    }
+  });
+
+/**
+ * Stop selling a price whose amount has left the plan table.
+ *
+ * Separate from `provision`, which is safe to re-run and must never change what
+ * anybody is charged. This is still NOT a re-price: Stripe subscriptions
+ * reference a price object, so existing subscribers keep paying what they
+ * agreed to. All this does is take the old amount off the shelf.
+ */
+billing
+  .command('retire-prices')
+  .description(
+    'Deactivate our Stripe prices that no longer match the plan table'
+  )
+  .option('--apply', 'actually write; without this it only reports')
+  .option('--live', 'permit writing to a live-mode account')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to retire.');
+    }
+    const apply = Boolean(options.apply);
+    const live = !/^(sk|rk)_test_/.test(process.env['STRIPE_SECRET_KEY'] ?? '');
+    if (live && apply && !options.live) {
+      fail('Refusing to write to a LIVE account without --live.');
+    }
+
+    const retired = await deactivateStalePrices({ dryRun: !apply });
+    emit(retired, options.format);
+
+    if (retired.length === 0) {
+      process.stderr.write('Every price matches the plan table.\n');
+    } else if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
+      );
+    } else {
+      process.stderr.write(
+        `\n${retired.length} price(s) deactivated. Existing subscribers are ` +
+          'UNAFFECTED — they keep the price they signed up to.\n'
+      );
+    }
+  });
+
+/**
+ * Check that what we CHARGE matches what the pricing page ADVERTISES.
+ *
+ * Distinct from `provision`, which compares the plan table against a price it
+ * finds by metadata and never reads the env vars at all. This starts from the
+ * env var — the only starting point that follows the path a real payment takes
+ * — so it is the one that catches a deployment wired to a retired price.
+ *
+ * Read-only, needs no Couchbase, and exits non-zero on any problem. Safe to run
+ * on a schedule against every environment, which is the point: a price id is
+ * hand-copied into several places, and it is wrong exactly when nobody looks.
+ */
+billing
+  .command('verify')
+  .description('Check the configured Stripe prices against the plan table')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to verify against.');
+    }
+
+    const result = await verifyConfiguredPrices();
+
+    emit(
+      result.findings.map((f) => ({
+        plan: f.planId,
+        interval: f.interval,
+        price: f.priceId ?? '(unset)',
+        status: f.problems.length === 0 ? 'ok' : 'PROBLEM',
+        detail: f.problems.join('; ') || '',
+      })),
+      options.format
+    );
+
+    for (const orphan of result.unexpected) {
+      process.stderr.write(
+        `note: ${orphan.priceId} ($${(orphan.amountCents / 100).toFixed(2)} ` +
+          `${orphan.interval}, planId=${orphan.planId}) is active on one of our ` +
+          `products but is not configured anywhere.\n`
+      );
+    }
+
+    if (result.ok) {
+      process.stderr.write(
+        '\nEvery configured price matches the plan table.\n'
+      );
+    } else {
+      process.stderr.write(
+        '\nMISMATCH: the page and the checkout disagree. Customers are being ' +
+          'quoted one amount and charged another.\n'
+      );
+      process.exitCode = 1;
     }
   });
 

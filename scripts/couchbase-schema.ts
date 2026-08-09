@@ -92,6 +92,11 @@ export const SOURCES: Source[] = [
     domain: 'identity',
     collection: c,
   })),
+  // The Stripe price catalogue. A projection of Stripe, not a second source of
+  // truth: it answers "which price id is plan X at interval Y" without a
+  // network call, so the pricing page and checkout read the same row and a
+  // Stripe outage cannot take the pricing page down.
+  { domain: 'billing', collection: 'prices' },
   // Scheduled sync (#34). `cursors` is the high-water mark per user x seller x
   // domain and is the only record of what has been fetched — a gap behind it is
   // indistinguishable from a quiet period, which is why it is stored rather
