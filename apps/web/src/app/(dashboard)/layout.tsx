@@ -56,7 +56,7 @@ export default async function DashboardLayout({
               <Image
                 src="/brand/sellavant-logo-horizontal.svg"
                 alt="Sellavant"
-                width={160}
+                width={150}
                 height={36}
                 className="hidden sm:block h-9 w-auto"
               />

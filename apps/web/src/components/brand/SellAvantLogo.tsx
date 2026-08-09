@@ -9,7 +9,7 @@ type Props = {
 export function SellAvantLogo({
   className,
   variant = 'horizontal',
-  alt = 'SellAvant',
+  alt = 'Sellavant',
 }: Props) {
   const src =
     variant === 'small'

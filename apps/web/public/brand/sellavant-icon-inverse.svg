@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
-  <rect width="256" height="256" rx="42" fill="#0B1F3B"/>
-  <path d="M114 54c-30 0-53 16-53 39 0 17 10 28 33 36l28 10c16 6 23 12 23 21 0 12-13 21-31 21-19 0-34-8-45-21l-20 24c16 17 38 27 65 27 40 0 68-20 68-51 0-24-14-38-44-48l-25-9c-12-4-17-9-17-16 0-10 11-17 27-17 15 0 29 6 40 16l16-27c-15-12-37-20-65-20z" fill="white"/>
-  <path d="M72 188c39-4 69-20 95-58 13-19 26-47 31-74l26 7c-8 35-23 64-42 89-29 37-64 54-110 58v-22z" fill="#C89B3C"/>
-  <path d="M196 42l31 72-61-18 30-54z" fill="#C89B3C"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" fill="none">
+  <rect x="1" y="1" width="70" height="70" rx="18" fill="#152A4A" stroke="#F3E4C0" stroke-width="1.5" stroke-opacity="0.35"/>
+  <rect x="19" y="40" width="8" height="16" rx="2.5" fill="#D9A441"/>
+  <rect x="32" y="30" width="8" height="26" rx="2.5" fill="#D9A441"/>
+  <rect x="45" y="18" width="8" height="38" rx="2.5" fill="#D9A441"/>
+  <polyline points="23,40 36,30 49,18" stroke="#F3E4C0" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
 </svg>
