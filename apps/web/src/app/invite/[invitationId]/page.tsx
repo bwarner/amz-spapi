@@ -14,7 +14,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 
 export const metadata: Metadata = {
@@ -35,7 +34,9 @@ function Shell({
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="text-2xl">{title}</CardTitle>
+          {/* See `no-access/page.tsx`: `CardTitle` is a div, and this is the
+              page's only title, so it has to be a real heading. */}
+          <h1 className="text-2xl leading-none font-semibold">{title}</h1>
           <CardDescription>{description}</CardDescription>
         </CardHeader>
         {children ? <CardContent>{children}</CardContent> : null}
