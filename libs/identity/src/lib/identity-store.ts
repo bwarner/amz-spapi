@@ -7,6 +7,8 @@ import {
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
 import {
+  effectivePlan,
+  seatLimitReached,
   invitationSchema,
   isInvitationOpen,
   workspaceMemberSchema,
@@ -207,6 +209,7 @@ export class InvitationError extends Error {
       | 'REVOKED'
       | 'EMAIL_MISMATCH'
       | 'ALREADY_MEMBER'
+      | 'SEATS_EXCEEDED'
   ) {
     super(message);
     this.name = 'InvitationError';
@@ -228,6 +231,79 @@ export async function getInvitation(
  * two pending invitations could coexist for one address, revoking the one an
  * admin can see would leave the other still redeemable.
  */
+/**
+ * Seats already committed: members plus invitations still outstanding.
+ *
+ * Pending invitations count. They are a promise of a seat, and ignoring them
+ * lets an owner on a three-seat plan issue thirty invitations and have all of
+ * them accept — the limit would then be discovered only by the people who
+ * cannot get in.
+ */
+async function committedSeats(
+  workspaceId: string,
+  /**
+   * The address about to occupy a seat it is already counted in — the invitee
+   * on a re-invite, or the acceptor of a pending invitation. Excluded so a
+   * replacement is not mistaken for an addition, which would refuse a
+   * legitimate re-invite on a full-but-not-over workspace.
+   */
+  excludeEmail?: string
+): Promise<number> {
+  const [members, invitations] = await Promise.all([
+    listMembers(workspaceId),
+    listInvitations(workspaceId),
+  ]);
+  const exclude = excludeEmail ? normaliseEmail(excludeEmail) : undefined;
+
+  const pending = invitations.filter(
+    (i) => i.status === 'pending' && (!exclude || i.email !== exclude)
+  ).length;
+  const seated = members.filter(
+    (m) => !exclude || normaliseEmail(m.email) !== exclude
+  ).length;
+
+  return seated + pending;
+}
+
+/**
+ * Refuse to commit a seat the plan does not have.
+ *
+ * Checked when an invitation is ISSUED and again when it is ACCEPTED. Both are
+ * necessary: seats can fill between the two, and a plan can be downgraded or
+ * lapse while an invitation sits in somebody's inbox.
+ *
+ * Fails OPEN if the workspace cannot be read. This gates collaboration, not
+ * spend — the money is bounded by the daily ceiling regardless — so a Couchbase
+ * blip should not stop a team adding a colleague.
+ */
+async function assertSeatAvailable(
+  workspaceId: string,
+  forEmail: string
+): Promise<void> {
+  let plan;
+  try {
+    const workspace = await getWorkspace(workspaceId);
+    if (!workspace) return;
+    plan = effectivePlan({
+      plan: workspace.plan,
+      subscriptionStatus: workspace.subscriptionStatus,
+    });
+  } catch {
+    return;
+  }
+
+  const used = await committedSeats(workspaceId, forEmail);
+  if (seatLimitReached(plan, used)) {
+    throw new InvitationError(
+      `The ${plan.label} plan includes ${plan.seats} seat${
+        plan.seats === 1 ? '' : 's'
+      } and ${used} ${used === 1 ? 'is' : 'are'} already in use. ` +
+        'Upgrade the plan or remove a member first.',
+      'SEATS_EXCEEDED'
+    );
+  }
+}
+
 export async function createInvitation(params: {
   workspaceId: string;
   email: string;
@@ -235,6 +311,8 @@ export async function createInvitation(params: {
   invitedBy: string;
 }): Promise<Invitation> {
   const email = normaliseEmail(params.email);
+
+  await assertSeatAvailable(params.workspaceId, email);
 
   for (const existing of await listPendingInvitationsForEmail(
     email,
@@ -373,6 +451,13 @@ export async function acceptInvitation(params: {
       'EMAIL_MISMATCH'
     );
   }
+
+  // Re-checked here and not only at issue time. An invitation can sit in an
+  // inbox for days, during which the last seat can be taken by someone else or
+  // the subscription can lapse and drop the workspace to the free tier. Letting
+  // it through would put the workspace over the plan it is paying for, with no
+  // later moment that would ever notice.
+  await assertSeatAvailable(invitation.workspaceId, invitation.email);
 
   const member = await putMember({
     workspaceId: invitation.workspaceId,
