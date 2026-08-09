@@ -535,9 +535,6 @@ importers:
 
   libs/billing:
     dependencies:
-      '@farvisionllc/models':
-        specifier: 0.0.1
-        version: link:../../packages/models
       stripe:
         specifier: ^22.4.0
         version: 22.4.0(@types/node@24.12.4)
