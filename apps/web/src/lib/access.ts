@@ -1,7 +1,6 @@
 import type { WorkspaceMember } from '@farvisionllc/models';
 import {
   acceptInvitation,
-  createWorkspace,
   listMembershipsForUser,
   listPendingInvitationsForEmail,
 } from '@amz-spapi/identity';
@@ -10,72 +9,73 @@ import { loggerFor } from './logger';
 const log = loggerFor('access');
 
 /**
- * Who is allowed to use Sellavant.
+ * Who is allowed to use Sellavant, and whether they have somewhere to work yet.
  *
- * ## The hole this closes
+ * ## Two questions, deliberately separated
  *
- * Auth0 signup was open. Anyone who created an account reached an authenticated
- * chat, and chat spends real money against the AI Gateway on the first message.
- * That is the whole exposure, and it is worth being precise about why it is
- * only that: every collection is keyed on the Auth0 `sub`, so an uninvited
- * account can read nothing but its own empty data. There is no other tenant's
- * information to reach. What it can do is cost money.
+ * ADMISSION — may this person use the product? Signup is open, so the answer is
+ * yes for anyone who authenticated. This is not a gate any more.
  *
- * So the gate is applied in two places rather than everywhere:
+ * PROVISIONING — do they have a workspace? A brand-new account does not, and
+ * gets `needs-onboarding` rather than a refusal. Conflating these was the
+ * previous design's mistake: it had no way to give somebody a workspace, so it
+ * grew `PLATFORM_OWNER_EMAILS` — an environment variable listing the people
+ * allowed to have one. That is a stand-in for a flow, and this is the flow.
  *
- *  - the signed-in layout, so an uninvited account sees a dead end instead of
- *    a product;
- *  - every route that spends, so the dead end cannot be walked around with
- *    curl.
+ * ## Provisioning is never a side effect
  *
- * Read-only routes are deliberately not gated. They would return an uninvited
- * user their own empty results, and threading a check through forty-odd
- * handlers to achieve that is cost without a corresponding risk. When documents
- * are re-keyed from `userId` to `workspaceId` that calculus changes, and the
- * check moves into the data layer where it belongs.
+ * `resolveAccess` does NOT create a workspace, even though it now could for
+ * anyone. Creating one happens only when somebody submits the onboarding form.
+ *
+ * The difference matters because this function runs on API routes too. If it
+ * provisioned, a curl to `/api/chat` from any fresh Auth0 account would silently
+ * mint a workspace and start spending, and the first record of the account would
+ * be its bill. Reads decide; the deliberate act writes.
+ *
+ * ## What still refuses
+ *
+ * Routes that spend money refuse until the caller has a workspace. With open
+ * signup that is no longer an admission control — it is a consistency one: an
+ * account mid-onboarding, or one whose provisioning failed, has nowhere to bill
+ * the work to.
+ *
+ * Read-only routes stay ungated. Every collection is keyed on the Auth0 `sub`,
+ * so a caller without a workspace reads their own empty data and nothing else.
+ * That changes when documents re-key to `workspaceId`, and the check moves into
+ * the data layer then.
  *
  * ## Fails closed
  *
- * A Couchbase error denies access. This is the opposite of the spend cap, which
- * fails open on purpose — an outage that stops chat is an outage, and an outage
- * that admits everybody is a breach.
+ * A Couchbase error is `lookup-failed`, not "no workspace". The distinction is
+ * the difference between sending an existing customer to a form that would
+ * create them a SECOND workspace, and telling them to try again.
  */
 
 export type AccessDecision =
   | { allowed: true; memberships: WorkspaceMember[] }
-  | { allowed: false; reason: 'not-invited' | 'lookup-failed' };
+  /** Authenticated, entitled to be here, but has no workspace yet. */
+  | { allowed: false; reason: 'needs-onboarding' }
+  /** We could not tell. Never treated as "no workspace" — see the note above. */
+  | { allowed: false; reason: 'lookup-failed' };
 
 /**
- * Addresses that get a workspace on first sign-in, comma-separated.
+ * Where this user stands. Reads only — see the module note on why nothing here
+ * writes.
  *
- * The bootstrap problem: invitations can only be sent by a member, so without
- * this the very first account has nobody to invite it and the product is
- * unreachable. Kept as an env var rather than a database row so that recovering
- * from an empty or broken `identity` scope does not itself require database
- * access.
- */
-function platformOwnerEmails(): string[] {
-  return (process.env['PLATFORM_OWNER_EMAILS'] ?? '')
-    .split(',')
-    .map((value) => value.toLowerCase().trim())
-    .filter(Boolean);
-}
-
-/**
- * Resolve what this user may do, provisioning on first sign-in where the rules
- * say to.
+ * Two ways to already have a workspace, checked in order:
  *
- * Three ways in, checked in order:
+ *  1. They are a member of one. The common path, and one query.
+ *  2. They hold a pending invitation for their email — accept it.
  *
- *  1. They are already a member of something. The common path, one query.
- *  2. They are a platform owner — bootstrap them a workspace.
- *  3. They hold a pending invitation for their verified email — accept it.
+ * Case 2 accepts without the user clicking the emailed link, which is the one
+ * write this function does make. It is not provisioning: the workspace already
+ * exists and its owner already decided to admit them. Turning somebody away
+ * because they typed the address instead of clicking the link would be a
+ * support ticket, not a security control. The session email is still checked
+ * against the invitation.
  *
- * Case 3 accepts without the user clicking the emailed link. The link exists so
- * an invitee can be told what they are joining, but an invitation is a decision
- * the *inviter* already made, and refusing entry to someone who was invited
- * merely because they navigated to the site directly is a support ticket, not
- * a security control. The email is still checked against the invitation.
+ * Anyone left over gets `needs-onboarding` — they are entitled to be here and
+ * simply have nowhere to work yet.
  */
 export async function resolveAccess(params: {
   userId: string;
@@ -88,28 +88,11 @@ export async function resolveAccess(params: {
     if (memberships.length > 0) return { allowed: true, memberships };
 
     if (!email) {
-      // No email claim means neither remaining route can be evaluated: both key
-      // on the address. Denied rather than guessed.
+      // An invitation can only be matched by address. Without one there is
+      // nothing to look up, so they go and create their own workspace — which
+      // needs no email.
       log.warn({ userId: params.userId }, 'session carries no email claim');
-      return { allowed: false, reason: 'not-invited' };
-    }
-
-    const owners = platformOwnerEmails();
-
-    if (owners.includes(email)) {
-      const workspace = await createWorkspace({
-        name: 'Sellavant',
-        ownerUserId: params.userId,
-        ownerEmail: email,
-      });
-      log.info(
-        { workspaceId: workspace.workspaceId },
-        'bootstrapped platform owner workspace'
-      );
-      return {
-        allowed: true,
-        memberships: await listMembershipsForUser(params.userId),
-      };
+      return { allowed: false, reason: 'needs-onboarding' };
     }
 
     const pending = await listPendingInvitationsForEmail(email);
@@ -117,7 +100,7 @@ export async function resolveAccess(params: {
       // The list arrives newest-first, so the last element is the oldest. If
       // several workspaces invited the same contractor, the one that has been
       // waiting longest is the one they were most likely coming here for. The
-      // rest stay pending and can still be accepted by link.
+      // rest stay pending and are surfaced on the Team page.
       const invitation = pending[pending.length - 1];
       await acceptInvitation({
         invitationId: invitation.invitationId,
@@ -130,31 +113,14 @@ export async function resolveAccess(params: {
       };
     }
 
-    /**
-     * Say WHY, at warn level.
-     *
-     * Written after locking the product's owner out of their own dev
-     * environment and having nothing in the logs to explain it. A refusal is
-     * the single most confusing outcome this function has — the person is
-     * signed in, so from their side everything worked — and it was the one
-     * outcome that produced no record at all.
-     *
-     * `ownerListConfigured` is the field that actually resolves it. An empty
-     * list almost always means the process predates the environment variable
-     * rather than that the address is wrong, and those two have identical
-     * symptoms and completely different fixes.
-     */
-    log.warn(
-      {
-        userId: params.userId,
-        email,
-        ownerListConfigured: owners.length > 0,
-        matchesOwnerList: owners.includes(email),
-        pendingInvitations: pending.length,
-      },
-      'access denied — signed in, but no membership, owner entry or invitation'
+    // Info, not warn. Under open signup this is the ordinary first minute of a
+    // new account, not a problem — logging it at warn would train everyone to
+    // ignore the level.
+    log.info(
+      { userId: params.userId },
+      'no workspace yet — sending to onboarding'
     );
-    return { allowed: false, reason: 'not-invited' };
+    return { allowed: false, reason: 'needs-onboarding' };
   } catch (error) {
     // Fails CLOSED. See the module note: the failure mode of guessing "allowed"
     // here is unbounded.
@@ -171,7 +137,16 @@ export async function resolveAccess(params: {
 }
 
 /**
- * The access check for routes that spend money.
+ * The check for routes that spend money.
+ *
+ * Under open signup this is no longer an admission control — anyone may have a
+ * workspace. It is a consistency one: work that costs money has to belong to a
+ * workspace, and an account mid-onboarding does not have one to bill it to.
+ *
+ * It is also what stops provisioning becoming a side effect. Because
+ * `resolveAccess` deliberately does not create anything, a fresh Auth0 account
+ * pointed straight at `/api/chat` is refused rather than quietly given a
+ * workspace and a bill.
  *
  * Returns null when the caller may proceed, or the `Response` to return when
  * they may not — shaped that way so a handler adds two lines rather than a
@@ -203,8 +178,11 @@ export async function denyIfWithoutAccess(session: {
   return Response.json(
     {
       error:
-        'Sellavant is currently invite-only. Ask your workspace owner for an ' +
-        'invitation, or contact us to request access.',
+        'Finish setting up your workspace before using this. Open Sellavant ' +
+        'and complete onboarding.',
+      // Machine-readable, so a client can route to onboarding rather than
+      // pattern-matching prose that will be reworded.
+      reason: 'needs-onboarding',
     },
     { status: 403 }
   );
