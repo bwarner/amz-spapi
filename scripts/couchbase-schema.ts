@@ -133,6 +133,17 @@ export const INDEXES: IndexSpec[] = [
     name: 'idx_cost_ledger_user_day',
     keys: ['`userId`', '`day`'],
   },
+  // The Stripe webhook's fallback lookup. A subscription created in the Stripe
+  // dashboard carries none of our metadata, so `workspaceId` has to be
+  // recovered from the customer id — and without this the query falls back to a
+  // sequential scan of every workspace on each delivery. It does not FAIL
+  // (Couchbase 7.6 scans without a primary index), which is precisely why it
+  // would go unnoticed until the collection is large and Stripe is retrying.
+  {
+    collection: 'identity_workspaces',
+    name: 'idx_workspaces_stripe_customer',
+    keys: ['`stripeCustomerId`'],
+  },
   // Every authenticated request asks "which workspaces is this user in?" before
   // it does anything else, so this one is on the hot path for the whole app.
   {
