@@ -7,6 +7,7 @@
       "@/lib/*": ["src/lib/*"],
       "@/hooks/*": ["src/hooks/*"],
       "@amz-spapi/ai-provider": ["../../libs/ai-provider/src/index.ts"],
+      "@amz-spapi/billing": ["../../libs/billing/src/index.ts"],
       "@amz-spapi/couchbase-utils": ["../../libs/couchbase-utils/src/index.ts"],
       "@amz-spapi/identity": ["../../libs/identity/src/index.ts"],
       "@amz-spapi/sp-cache": ["../../packages/sp-cache/src/index.ts"],

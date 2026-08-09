@@ -9,70 +9,50 @@ import {
 } from '@/components/ui/card';
 
 export const metadata: Metadata = {
-  title: 'Access required',
+  title: 'Access unavailable',
   robots: { index: false, follow: false },
 };
 
 /**
- * Where a signed-in account with no workspace lands.
+ * Shown when we could not determine what someone has access to.
  *
- * Deliberately not an error page. The person reading it did nothing wrong —
- * they created an account for a product that is invite-only — so it explains
- * the situation and gives them the two ways forward rather than apologising.
+ * This page used to do two jobs, and only one of them survives. It was the dead
+ * end for an uninvited account, back when signup was gated; signup is open now
+ * and a new account goes to `/onboarding` to create a workspace instead. What
+ * is left is the outage case: the membership lookup failed, so we genuinely do
+ * not know whether this person has a workspace.
  *
- * Outside the `(dashboard)` group, because that group's layout is what
- * redirects here; nesting it there would loop.
+ * That distinction is the reason this is not merged into the onboarding page.
+ * Offering the create-a-workspace form during a Couchbase outage would hand an
+ * existing customer a SECOND workspace, with its own Stripe customer and no key
+ * to collapse them on afterwards.
+ *
+ * Outside the `(dashboard)` group, because that group's layout is what redirects
+ * here; nesting it there would loop.
  */
-export default async function NoAccessPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ reason?: string }>;
-}) {
-  const { reason } = await searchParams;
-  const unavailable = reason === 'unavailable';
-
+export default function NoAccessPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          {/* A real `h1`, not `CardTitle`, which renders a plain div. This is a
-              standalone page whose card title IS its main heading, so without
-              this the page has no heading at all — invisible to a screen reader
-              skimming structure, and to anything else that looks for one. */}
+          {/* A real `h1`, not `CardTitle`, which renders a plain div — this is a
+              standalone page whose card title IS its main heading. */}
           <h1 className="text-2xl leading-none font-semibold">
-            {unavailable ? 'We could not verify your access' : 'Invite only'}
+            We could not verify your access
           </h1>
           <CardDescription>
-            {unavailable
-              ? 'Something on our side is not responding, so we cannot tell ' +
-                'which workspaces you belong to. Your account is fine — please ' +
-                'try again in a moment.'
-              : 'Sellavant is in a limited pilot. Your account exists, but it ' +
-                'is not part of a workspace yet.'}
+            Something on our side is not responding, so we cannot tell which
+            workspaces you belong to. Your account is fine, and nothing has been
+            lost — please try again in a moment.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {unavailable ? (
-            <Button asChild className="w-full">
-              <Link href="/chat">Try again</Link>
-            </Button>
-          ) : (
-            <>
-              <p className="text-sm leading-6 text-muted-foreground">
-                If a colleague or client invited you, sign in with the exact
-                email address the invitation was sent to — an invitation is tied
-                to that address, not to the link.
-              </p>
-              <div className="flex flex-col gap-2">
-                <Button asChild className="w-full">
-                  <Link href="/contact">Request access</Link>
-                </Button>
-                <Button variant="outline" asChild className="w-full">
-                  <a href="/auth/logout">Sign in as someone else</a>
-                </Button>
-              </div>
-            </>
-          )}
+        <CardContent className="space-y-3">
+          <Button asChild className="w-full">
+            <Link href="/chat">Try again</Link>
+          </Button>
+          <Button variant="outline" asChild className="w-full">
+            <a href="/auth/logout">Sign out</a>
+          </Button>
         </CardContent>
       </Card>
     </div>

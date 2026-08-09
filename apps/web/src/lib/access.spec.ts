@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Who gets in.
@@ -67,8 +67,6 @@ function invitation(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const originalOwners = process.env['PLATFORM_OWNER_EMAILS'];
-
 beforeEach(() => {
   // `resetAllMocks`, not `clearAllMocks`. Clear only drops recorded calls and
   // leaves both implementations AND the `mockResolvedValueOnce` queue in place,
@@ -76,7 +74,6 @@ beforeEach(() => {
   // way, say — leaks the remainder into the next test. That produced a cascade
   // where a later case was silently admitted by a leftover membership.
   vi.resetAllMocks();
-  delete process.env['PLATFORM_OWNER_EMAILS'];
   listMembershipsForUser.mockResolvedValue([]);
   listPendingInvitationsForEmail.mockResolvedValue([]);
   // The real one returns the created workspace and the caller reads its id.
@@ -84,11 +81,6 @@ beforeEach(() => {
     workspaceId: 'ws_aaaaaaaaaaaaaaaaaaaaa',
   });
   acceptInvitation.mockResolvedValue({});
-});
-
-afterEach(() => {
-  if (originalOwners === undefined) delete process.env['PLATFORM_OWNER_EMAILS'];
-  else process.env['PLATFORM_OWNER_EMAILS'] = originalOwners;
 });
 
 describe('resolveAccess', () => {
@@ -110,36 +102,6 @@ describe('resolveAccess', () => {
     listMembershipsForUser.mockResolvedValue([membership()]);
 
     const decision = await resolveAccess({ userId: USER });
-
-    expect(decision.allowed).toBe(true);
-  });
-
-  it('provisions a workspace for a platform owner on first sign-in', async () => {
-    process.env['PLATFORM_OWNER_EMAILS'] = `other@example.com, ${EMAIL}`;
-    listMembershipsForUser
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([membership({ role: 'owner' })]);
-
-    const decision = await resolveAccess({ userId: USER, email: EMAIL });
-
-    expect(decision.allowed).toBe(true);
-    expect(createWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerUserId: USER, ownerEmail: EMAIL })
-    );
-  });
-
-  it('matches the owner list case-insensitively and ignores surrounding space', async () => {
-    // The list is hand-edited in an env file, where a stray space after a comma
-    // is the normal state of affairs rather than an error.
-    process.env['PLATFORM_OWNER_EMAILS'] = '  SomeOne@Example.COM  ';
-    listMembershipsForUser
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([membership({ role: 'owner' })]);
-
-    const decision = await resolveAccess({
-      userId: USER,
-      email: '  SOMEONE@example.com ',
-    });
 
     expect(decision.allowed).toBe(true);
   });
@@ -179,46 +141,24 @@ describe('resolveAccess', () => {
     );
   });
 
-  it('refuses someone with no membership, no owner entry and no invitation', async () => {
+  it('sends a brand-new account to onboarding rather than refusing it', async () => {
+    // Signup is open, so having no workspace is the ordinary first minute of
+    // an account — not a rejection.
     const decision = await resolveAccess({ userId: USER, email: EMAIL });
 
-    expect(decision).toEqual({ allowed: false, reason: 'not-invited' });
+    expect(decision).toEqual({ allowed: false, reason: 'needs-onboarding' });
   });
 
-  it('refuses when the session carries no email and no membership', async () => {
-    // Both remaining routes in are keyed on the address, so there is nothing
-    // left to evaluate. Denied rather than guessed.
-    process.env['PLATFORM_OWNER_EMAILS'] = EMAIL;
-
+  it('sends someone with no email claim to onboarding', async () => {
+    // An invitation can only be matched by address, so there is nothing to look
+    // up — but creating your own workspace needs no email, so they are not stuck.
     const decision = await resolveAccess({ userId: USER });
 
-    expect(decision).toEqual({ allowed: false, reason: 'not-invited' });
-    expect(createWorkspace).not.toHaveBeenCalled();
-  });
-
-  it('does not treat an empty owner list as matching everyone', async () => {
-    // `''.split(',')` yields `['']`, so a missing variable becomes a list
-    // containing the empty string. An email that is somehow also empty would
-    // then match it and be handed a workspace.
-    process.env['PLATFORM_OWNER_EMAILS'] = '';
-
-    const decision = await resolveAccess({ userId: USER, email: '' });
-
-    expect(decision.allowed).toBe(false);
-    expect(createWorkspace).not.toHaveBeenCalled();
+    expect(decision).toEqual({ allowed: false, reason: 'needs-onboarding' });
   });
 
   it('fails CLOSED when the membership lookup throws', async () => {
     listMembershipsForUser.mockRejectedValue(new Error('cluster unreachable'));
-
-    const decision = await resolveAccess({ userId: USER, email: EMAIL });
-
-    expect(decision).toEqual({ allowed: false, reason: 'lookup-failed' });
-  });
-
-  it('fails CLOSED when provisioning throws', async () => {
-    process.env['PLATFORM_OWNER_EMAILS'] = EMAIL;
-    createWorkspace.mockRejectedValue(new Error('write refused'));
 
     const decision = await resolveAccess({ userId: USER, email: EMAIL });
 
@@ -253,14 +193,14 @@ describe('denyIfWithoutAccess', () => {
     expect(denied?.status).toBe(401);
   });
 
-  it('answers 403 for an authenticated but uninvited caller', async () => {
+  it('answers 403 until the caller has finished onboarding', async () => {
     const denied = await denyIfWithoutAccess({
       user: { sub: USER, email: EMAIL },
     });
 
     expect(denied?.status).toBe(403);
     await expect(denied?.json()).resolves.toEqual(
-      expect.objectContaining({ error: expect.stringContaining('invite-only') })
+      expect.objectContaining({ reason: 'needs-onboarding' })
     );
   });
 

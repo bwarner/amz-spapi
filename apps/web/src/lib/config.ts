@@ -1,3 +1,23 @@
+/**
+ * Where this deployment is reachable, for URLs a third party will send a
+ * browser back to.
+ *
+ * `APP_BASE_URL` first, because it is the one value that is deliberately
+ * correct: it is what Auth0 already redirects to, and locally it is PORTLESS
+ * on purpose — a proxy maps 443 to the dev server, so "fixing" it by appending
+ * a port breaks the callback.
+ *
+ * Distinct from `getBaseUrl()` below, which prefers `VERCEL_URL`. That is right
+ * for a preview deployment talking about itself, and wrong here: a Stripe
+ * redirect has to land on the stable host the user actually signed in on.
+ */
+export function appBaseUrl(): string {
+  const configured = process.env.APP_BASE_URL;
+  if (configured) return configured.replace(/\/$/, '');
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return 'https://local.sellavant.com';
+}
+
 // Dynamic URL detection for different environments
 function getBaseUrl() {
   // Vercel automatically sets VERCEL_URL for all deployments

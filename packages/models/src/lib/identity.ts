@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { planIdSchema, subscriptionStatusSchema } from './billing.js';
 
 /**
  * Workspaces, membership and invitations — who may use Sellavant, and whose
@@ -65,14 +66,72 @@ export type InvitableRole = z.infer<typeof invitableRoleSchema>;
  */
 const emailField = z.string().trim().toLowerCase().email();
 
+/**
+ * Workspace-name validation. Permissive on purpose.
+ *
+ *   ✓ Letters in any script (`\p{L}`) — sellers are not all anglophone
+ *   ✓ Digits (`\p{N}`), which real trading names use constantly: "3M",
+ *     "7-Eleven", "20th Century Trading"
+ *   ✓ Spaces and the punctuation that appears in company names: . , ' & ( ) / -
+ *
+ *   ✗ Control characters, emoji, and symbols like @ # + * — they break display
+ *     and invoicing and appear in no real company name. Extend the set if a
+ *     customer genuinely needs one; do not remove the check.
+ *
+ * The trap this avoids, borrowed from a sibling project that hit it: reusing a
+ * PERSON-name pattern here. Those exclude digits, which makes any company with
+ * a number in its name impossible to register — and the person who cannot sign
+ * up is the one least able to report why.
+ */
+export const WORKSPACE_NAME_REGEX = /^[\p{L}\p{N} .,'&()/-]+$/u;
+export const WORKSPACE_NAME_ERROR =
+  "Use letters, numbers, spaces, and common punctuation (.,'&()/-)";
+
+export const workspaceNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'Give your workspace a name')
+  .max(120)
+  .regex(WORKSPACE_NAME_REGEX, WORKSPACE_NAME_ERROR);
+
+/** Body of the onboarding form. */
+export const createWorkspaceInputSchema = z.object({
+  name: workspaceNameSchema,
+});
+export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>;
+
 export const workspaceSchema = z.object({
   workspaceId: workspaceIdSchema,
   type: z.literal('workspace'),
-  name: z.string().min(1).max(120),
+  name: workspaceNameSchema,
   /** Auth0 `sub` of the owner. Exactly one per workspace. */
   ownerUserId: z.string().min(1),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
+
+  /**
+   * The Stripe customer this workspace bills to.
+   *
+   * REQUIRED, and created in the same act as the workspace. A workspace
+   * without one cannot be charged, so allowing it to exist would mean a
+   * category of account that spends and can never be billed — and the backfill
+   * to repair that has to guess which customer belongs to which workspace.
+   */
+  stripeCustomerId: z.string().min(1),
+
+  /**
+   * What they bought, and whether it is currently paid for.
+   *
+   * Both absent on a workspace that has never subscribed, which is the normal
+   * state for a new signup. Never read `plan` without `subscriptionStatus` —
+   * see `effectivePlan`; the pair is what decides an allowance, and the plan
+   * alone is only a record of what was once purchased.
+   */
+  plan: planIdSchema.optional(),
+  subscriptionStatus: subscriptionStatusSchema.optional(),
+  stripeSubscriptionId: z.string().optional(),
+  /** Epoch ms. When the current paid period ends. */
+  currentPeriodEnd: z.number().int().optional(),
 });
 export type Workspace = z.infer<typeof workspaceSchema>;
 

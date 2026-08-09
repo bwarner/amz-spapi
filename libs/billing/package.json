@@ -1,0 +1,21 @@
+{
+  "name": "@amz-spapi/billing",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@farvisionllc/models": "0.0.1",
+    "stripe": "^22.4.0",
+    "tslib": "^2.3.0"
+  }
+}

@@ -17,14 +17,14 @@ import { signIn, strangerSub } from './support/session.js';
  * cleanup.
  */
 
-test.describe('invite gate', () => {
+test.describe('access and onboarding', () => {
   test('sends an anonymous visitor to sign in', async ({ page }) => {
     await page.goto('/chat');
 
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test('sends a signed-in stranger to the dead end, not the product', async ({
+  test('sends an account with no workspace to onboarding', async ({
     context,
     page,
     baseURL,
@@ -36,13 +36,32 @@ test.describe('invite gate', () => {
 
     await page.goto('/chat');
 
-    // The specific failure this catches: an account that Auth0 created quite
-    // happily, reaching an authenticated chat that spends money on its first
-    // message.
-    await expect(page).toHaveURL(/\/no-access/);
+    // Signup is open, so having no workspace is the ordinary first minute of an
+    // account rather than a refusal. What must NOT happen is reaching chat,
+    // which spends money on its first message.
+    await expect(page).toHaveURL(/\/onboarding/);
     await expect(
-      page.getByRole('heading', { name: /invite only/i })
+      page.getByRole('heading', { name: /create your workspace/i })
     ).toBeVisible();
+  });
+
+  test('does not provision a workspace merely for looking', async ({
+    context,
+    page,
+    baseURL,
+  }) => {
+    // Visiting must not create anything — provisioning is the form submit, and
+    // only the form submit. If a page view provisioned, every crawler and
+    // health check would mint a workspace and a Stripe customer.
+    await signIn(context, baseURL as string, {
+      sub: strangerSub(),
+      email: 'stranger@example.com',
+    });
+
+    await page.goto('/onboarding');
+    await page.goto('/chat');
+
+    await expect(page).toHaveURL(/\/onboarding/);
   });
 
   test('refuses the chat API for a signed-in stranger', async ({
@@ -54,8 +73,8 @@ test.describe('invite gate', () => {
       email: 'stranger@example.com',
     });
 
-    // Hitting the route directly, because the UI dead end is only half the
-    // gate — the half that a curl command walks straight around.
+    // Hitting the route directly, because the UI redirect is only half of it —
+    // the half a curl command walks straight around.
     const response = await context.request.post('/api/chat', {
       data: {
         messages: [{ role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
@@ -63,9 +82,12 @@ test.describe('invite gate', () => {
       failOnStatusCode: false,
     });
 
+    // Still 403, and for a better reason than before: the caller has no
+    // workspace, so there is nowhere to bill the work to. This is what stops
+    // provisioning becoming a side effect of an API call.
     expect(response.status()).toBe(403);
     expect(await response.json()).toMatchObject({
-      error: expect.stringContaining('invite-only'),
+      reason: 'needs-onboarding',
     });
   });
 

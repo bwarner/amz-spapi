@@ -24,7 +24,16 @@ import {
   revokeInvitationsFor,
 } from '@amz-spapi/data-rights';
 import { writeFile } from 'node:fs/promises';
+import {
+  createBillingCustomer,
+  linkCustomerToWorkspace,
+  provisionBilling,
+} from '@amz-spapi/billing';
 import { renderTable } from './format.js';
+import {
+  attachCustomerToWorkspace,
+  findWorkspacesWithoutCustomer,
+} from './backfill.js';
 import { createS3ObjectStore } from './object-store.js';
 
 /**
@@ -36,16 +45,15 @@ import { createS3ObjectStore } from './object-store.js';
  *
  * ## Why this exists rather than a page in the app
  *
- * The web UI can only be used by somebody who is already inside a workspace,
- * and the gate that enforces that has exactly one bootstrap route: the
- * `PLATFORM_OWNER_EMAILS` environment variable. That is fine until it is wrong.
- * A typo, an Auth0 account under a different address, or an environment where
- * restarting the process is slow, and the result is nobody can get in and the
- * repair itself requires getting in.
+ * Signup is open and a new account provisions its own workspace at
+ * `/onboarding`, so this is no longer the way in. It is what the web UI
+ * deliberately will not do: create a workspace on somebody's behalf, grant
+ * membership with no invitation round trip, repair rows that predate a schema
+ * change, and answer data-subject requests.
  *
- * This talks to Couchbase directly, so it works when nothing else does. It is
- * the escape hatch, and secondarily the batch tool — inviting twenty pilot
- * sellers is a loop here and twenty form submissions there.
+ * It talks to Couchbase directly, so it works when the app does not — which is
+ * the property that matters when the thing you are repairing is the reason
+ * nobody can sign in.
  *
  * ## Connection
  *
@@ -166,18 +174,120 @@ workspaces
     'Auth0 subject of the owner, e.g. "auth0|abc123"'
   )
   .requiredOption('--owner-email <email>', 'owner email address')
+  .option(
+    '--stripe-customer <id>',
+    'use an existing Stripe customer instead of creating one'
+  )
   .addOption(formatOption)
   .action(async (options) => {
     assertConnection();
     try {
+      /**
+       * A workspace must be billable, so this creates a Stripe customer for it
+       * exactly as onboarding does — an operator-made workspace that could
+       * never be charged would be a slower version of the same bug.
+       *
+       * `--stripe-customer` exists for the repair case: attaching a workspace
+       * to a customer that already exists, rather than minting a duplicate for
+       * somebody Stripe already knows about.
+       */
+      const customerId =
+        options.stripeCustomer ??
+        (
+          await createBillingCustomer({
+            email: options.ownerEmail,
+            name: options.name,
+            ownerUserId: options.ownerSub,
+          })
+        ).customerId;
+
       const workspace = await createWorkspace({
         name: options.name,
         ownerUserId: options.ownerSub,
         ownerEmail: options.ownerEmail,
+        stripeCustomerId: customerId,
       });
+
+      await linkCustomerToWorkspace({
+        customerId,
+        workspaceId: workspace.workspaceId,
+      }).catch(() => undefined);
+
       emit(workspace, options.format);
     } catch (error) {
       fail(`Could not create the workspace: ${describe(error)}`, error);
+    }
+  });
+
+/**
+ * Give a pre-billing workspace a Stripe customer.
+ *
+ * `stripeCustomerId` became required when billing landed, which means any
+ * workspace created before that no longer parses and every read of it throws.
+ * This is the one-way conversion, not a compatibility shim — after it runs
+ * there is no such thing as a workspace without a customer, and nothing in the
+ * codebase needs to allow for one.
+ *
+ * Reads the raw document rather than going through `getWorkspace`, because
+ * `getWorkspace` validates and would refuse the very rows this repairs.
+ */
+workspaces
+  .command('backfill-billing')
+  .description('Create Stripe customers for workspaces that predate billing')
+  .option('--apply', 'actually write; without this it only reports')
+  .addOption(formatOption)
+  .action(async (options) => {
+    assertConnection();
+    const apply = Boolean(options.apply);
+
+    const stale = await findWorkspacesWithoutCustomer();
+    if (stale.length === 0) {
+      process.stderr.write('Every workspace already has a Stripe customer.\n');
+      emit([], options.format);
+      return;
+    }
+
+    const results: Array<Record<string, unknown>> = [];
+    for (const row of stale) {
+      if (!apply) {
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          action: 'would create customer',
+        });
+        continue;
+      }
+      try {
+        const { customerId } = await createBillingCustomer({
+          email: row.ownerEmail ?? '',
+          name: row.name,
+          ownerUserId: row.ownerUserId,
+        });
+        await attachCustomerToWorkspace(row.workspaceId, customerId);
+        await linkCustomerToWorkspace({
+          customerId,
+          workspaceId: row.workspaceId,
+        }).catch(() => undefined);
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          customerId,
+        });
+      } catch (error) {
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          error: describe(error),
+        });
+        process.exitCode = 1;
+      }
+    }
+
+    emit(results, options.format);
+    if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
+      );
     }
   });
 
@@ -534,6 +644,156 @@ users
     }
   });
 
+// ── Stripe account provisioning ─────────────────────────────────────────────
+
+const billing = program
+  .command('billing')
+  .description('Provision the Stripe objects the app needs');
+
+/**
+ * Create the products, prices, portal configuration and webhook endpoint.
+ *
+ * Not a Couchbase command — `assertConnection` is deliberately NOT called, so
+ * this works before the database exists, which is the order things actually
+ * happen in when standing up a new environment.
+ *
+ * ## The dangerous part is which account it writes to
+ *
+ * A test key and a live key differ by four characters and the API accepts both
+ * without comment. So the account is printed before anything is written, live
+ * mode requires `--live` as well as `--apply`, and the default is a dry run.
+ *
+ * ## The webhook secret is printed once
+ *
+ * Stripe returns a signing secret only at the moment an endpoint is created;
+ * there is no API to read it back. If it is not captured here it has to be
+ * fetched from the dashboard. It is written to STDERR, not stdout, so that
+ * `--format json | jq` does not put it somewhere it will be committed.
+ */
+billing
+  .command('provision')
+  .description('Create/update Stripe products, prices, portal and webhook')
+  .option('--apply', 'actually write; without this it only reports')
+  .option('--live', 'permit writing to a live-mode account')
+  .option(
+    '--webhook-url <url>',
+    'public URL of POST /api/billing/webhook; omit for local dev (use `stripe listen`)'
+  )
+  .option(
+    '--base-url <url>',
+    'public origin, for the portal return and policy URLs',
+    process.env['APP_BASE_URL'] || 'https://sellavant.com'
+  )
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to provision against.');
+    }
+
+    const base = String(options.baseUrl).replace(/\/$/, '');
+    const apply = Boolean(options.apply);
+
+    const result = await provisionBilling({
+      dryRun: !apply,
+      returnUrl: `${base}/billing`,
+      privacyPolicyUrl: `${base}/privacy`,
+      termsOfServiceUrl: `${base}/terms`,
+      ...(options.webhookUrl ? { webhookUrl: options.webhookUrl } : {}),
+    });
+
+    // Checked AFTER the call because the dry run is what tells you the account
+    // is wrong. Refusing before reporting would leave you guessing.
+    if (result.livemode && apply && !options.live) {
+      fail(
+        `Refusing to write to LIVE account ${result.accountId} without --live.`
+      );
+    }
+
+    process.stderr.write(
+      `Stripe account ${result.accountId} (${
+        result.livemode ? 'LIVE' : 'test'
+      } mode)\n`
+    );
+
+    for (const p of result.plans) {
+      if (p.amountMismatch) {
+        process.stderr.write(
+          `WARNING: ${p.planId} price ${p.priceId} charges ` +
+            `$${(p.amountMismatch.existingCents / 100).toFixed(2)}, but ` +
+            `PLAN_PRICE_CENTS says $${(
+              p.amountMismatch.expectedCents / 100
+            ).toFixed(
+              2
+            )}. Stripe prices are immutable — re-price deliberately ` +
+            `in the dashboard.\n`
+        );
+        process.exitCode = 1;
+      }
+    }
+
+    const rows = result.plans.map((p) => ({
+      plan: p.planId,
+      product: p.productId,
+      price: p.priceId,
+      monthly: `$${(p.amountCents / 100).toFixed(2)}`,
+      created: p.created.product || p.created.price ? 'yes' : 'no',
+    }));
+
+    if (options.format === 'json') {
+      // The whole result, so `| jq` can reach the portal id and the secret.
+      emit(
+        {
+          account: result.accountId,
+          livemode: result.livemode,
+          plans: rows,
+          portalConfiguration: result.portal.configurationId,
+          webhook: result.webhook ?? null,
+          env: result.env,
+        },
+        'json'
+      );
+    } else {
+      // Only the plans. Nesting an array inside a table cell renders it as raw
+      // JSON on one enormous line, which is how the useful columns become
+      // unreadable; the scalars go to stderr below instead.
+      emit(rows, 'table');
+      process.stderr.write(
+        `\nportal configuration: ${result.portal.configurationId}` +
+          ` (${result.portal.created ? 'created' : 'existing'})\n` +
+          `webhook: ${
+            result.webhook
+              ? `${result.webhook.id} (${
+                  result.webhook.created ? 'created' : 'updated'
+                })`
+              : 'none — local dev forwards with `stripe listen`'
+          }\n`
+      );
+    }
+
+    if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
+      );
+      return;
+    }
+
+    process.stderr.write('\nSet these in the environment:\n');
+    for (const [key, value] of Object.entries(result.env)) {
+      const shown =
+        key === 'STRIPE_ENDPOINT_SECRET'
+          ? `${value}   ← shown ONCE; Stripe will not return it again`
+          : value;
+      process.stderr.write(`  ${key}=${shown}\n`);
+    }
+    if (result.webhook && !result.webhook.created) {
+      process.stderr.write(
+        '\nThe webhook endpoint already existed, so its signing secret was not\n' +
+          'reissued. Keep the STRIPE_ENDPOINT_SECRET you already have, or roll it\n' +
+          'from the endpoint page in the Stripe dashboard.\n'
+      );
+    }
+  });
+
 // ── whoami-style lookup ─────────────────────────────────────────────────────
 
 program
@@ -546,10 +806,6 @@ program
     assertConnection();
 
     const memberships = await listMembershipsForUser(options.sub);
-    const owners = (process.env['PLATFORM_OWNER_EMAILS'] ?? '')
-      .split(',')
-      .map((value) => value.toLowerCase().trim())
-      .filter(Boolean);
     const email = options.email?.toLowerCase().trim();
 
     emit(
@@ -560,13 +816,11 @@ program
         workspaces: memberships
           .map((m) => `${m.workspaceId} (${m.role})`)
           .join(', '),
-        // The two fields that explain a lockout. An empty owner list usually
-        // means the process predates the variable rather than that the address
-        // is wrong, and the symptoms are identical.
-        ownerListConfigured: owners.length > 0,
-        matchesOwnerList: email ? owners.includes(email) : false,
-        wouldBeAllowed:
-          memberships.length > 0 || (!!email && owners.includes(email)),
+        // Signup is open, so the question is no longer "were they admitted"
+        // but "do they have a workspace". Someone with none is not stuck —
+        // they go to onboarding and create one.
+        hasWorkspace: memberships.length > 0,
+        nextStep: memberships.length > 0 ? 'ready' : 'onboarding',
       },
       options.format
     );

@@ -28,10 +28,13 @@ export default async function DashboardLayout({
     email: session.user.email ?? undefined,
   });
   if (!access.allowed) {
+    // `needs-onboarding` is the ordinary state of a new account, not a
+    // refusal — it goes to the form that creates a workspace. Only a failed
+    // lookup is a dead end, and it is a temporary one.
     redirect(
       access.reason === 'lookup-failed'
         ? '/no-access?reason=unavailable'
-        : '/no-access'
+        : '/onboarding'
     );
   }
 

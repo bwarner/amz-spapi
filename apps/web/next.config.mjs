@@ -14,6 +14,7 @@ const nextConfig = {
     '@amz-spapi/ai-provider',
     '@amz-spapi/seller-agent',
     '@amz-spapi/sp-cache',
+    '@amz-spapi/billing',
     '@amz-spapi/couchbase-utils',
     '@amz-spapi/identity',
     '@farvisionllc/sp-client',

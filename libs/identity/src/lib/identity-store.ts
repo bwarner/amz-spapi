@@ -76,6 +76,18 @@ export async function createWorkspace(params: {
   name: string;
   ownerUserId: string;
   ownerEmail: string;
+  /**
+   * The Stripe customer to bill, created by the CALLER before it gets here.
+   *
+   * Passed in rather than created here so this library never learns that Stripe
+   * exists — identity is about who may do what, and coupling it to a payment
+   * processor would make every test of a membership rule need a billing stub.
+   *
+   * Required, not optional. An optional field would be satisfied by forgetting
+   * it, and the thing being prevented is a workspace that can spend and can
+   * never be charged.
+   */
+  stripeCustomerId: string;
 }): Promise<Workspace> {
   const now = Date.now();
   const workspace = workspaceSchema.parse({
@@ -83,6 +95,7 @@ export async function createWorkspace(params: {
     type: 'workspace',
     name: params.name,
     ownerUserId: params.ownerUserId,
+    stripeCustomerId: params.stripeCustomerId,
     createdAt: now,
     updatedAt: now,
   });
@@ -380,4 +393,64 @@ export async function acceptInvitation(params: {
   });
 
   return { invitation: accepted, member };
+}
+
+/**
+ * Record what Stripe says about a workspace's subscription.
+ *
+ * Read-modify-write of the whole document, so a field this function does not
+ * know about is preserved. Webhooks arrive concurrently and out of order; a
+ * targeted UPDATE per field would interleave into a state Stripe never sent.
+ *
+ * Deliberately takes an already-flattened snapshot rather than a Stripe object,
+ * so this library stays free of the Stripe SDK — the same reason
+ * `createWorkspace` is handed a customer id instead of creating one.
+ */
+export async function updateWorkspaceSubscription(params: {
+  workspaceId: string;
+  plan?: string;
+  subscriptionStatus?: string;
+  stripeSubscriptionId?: string;
+  currentPeriodEnd?: number;
+}): Promise<Workspace | null> {
+  const existing = await getDocument<Record<string, unknown>>(
+    DOMAIN,
+    WORKSPACES,
+    params.workspaceId
+  );
+  if (!existing) return null;
+
+  const updated = workspaceSchema.parse({
+    ...existing,
+    // `plan` is left alone when the event does not name one — a status-only
+    // event must not erase which plan they bought.
+    ...(params.plan ? { plan: params.plan } : {}),
+    subscriptionStatus: params.subscriptionStatus,
+    stripeSubscriptionId: params.stripeSubscriptionId,
+    currentPeriodEnd: params.currentPeriodEnd,
+    updatedAt: Date.now(),
+  });
+
+  await upsertDocument(DOMAIN, WORKSPACES, params.workspaceId, updated);
+  return updated;
+}
+
+/**
+ * The workspace a Stripe customer belongs to.
+ *
+ * The fallback path for a subscription created outside Checkout — from the
+ * Stripe dashboard, say — where nothing stamped `workspaceId` into metadata.
+ * Without it those events are unattributable and the customer keeps the trial
+ * allowance despite paying.
+ */
+export async function findWorkspaceByCustomer(
+  stripeCustomerId: string
+): Promise<Workspace | null> {
+  const { rows } = await executeQuery<Workspace>(
+    DOMAIN,
+    `SELECT w.* FROM \`${collectionName(DOMAIN, WORKSPACES)}\` w
+      WHERE w.stripeCustomerId = $stripeCustomerId LIMIT 1`,
+    { parameters: { stripeCustomerId } }
+  );
+  return rows[0] ? workspaceSchema.parse(rows[0]) : null;
 }

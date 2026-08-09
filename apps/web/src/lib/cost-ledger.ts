@@ -6,6 +6,8 @@ import {
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
 import { withVendorSpan } from './telemetry';
+import { dailySpendCeilingUsd } from '@farvisionllc/models';
+import { currentWorkspace } from './workspace-context';
 import { loggerFor } from './logger';
 const log = loggerFor('cost');
 
@@ -148,9 +150,42 @@ export function unitPriceUsd(operation: string): number | undefined {
   return override ?? UNIT_PRICES_USD[operation];
 }
 
-/** Per-user daily ceiling. Set COST_CAP_DAILY_USD=0 to disable enforcement. */
-function dailyCapUsd(): number {
+/**
+ * The fallback ceiling, used only when a workspace cannot be resolved.
+ *
+ * `COST_CAP_DAILY_USD=0` still disables enforcement, which is the escape hatch
+ * for a local machine. It is NOT how production is bounded any more — the plan
+ * is. See `resolveDailyCapUsd`.
+ */
+function fallbackDailyCapUsd(): number {
   return readFloatEnv('COST_CAP_DAILY_USD') ?? 10;
+}
+
+/**
+ * What this user's workspace may spend today.
+ *
+ * The plan, not an environment variable. With open signup an env-wide cap is
+ * the wrong shape entirely: it is identical for a trial account and a paying
+ * one, so either the trial is too generous or the customer is throttled.
+ *
+ * Falls back to the env value when there is no workspace — a state that should
+ * not reach a paid call, since those routes refuse without one, but a cap of
+ * "undefined" must never mean "unlimited".
+ */
+async function resolveDailyCapUsd(userId: string): Promise<number> {
+  try {
+    const context = await currentWorkspace(userId);
+    if (!context) return fallbackDailyCapUsd();
+
+    return dailySpendCeilingUsd({
+      plan: context.workspace.plan,
+      subscriptionStatus: context.workspace.subscriptionStatus,
+    });
+  } catch {
+    // Same fail-open posture as the rest of this module: a Couchbase problem
+    // must not take chat down, and the ledger still records what gets spent.
+    return fallbackDailyCapUsd();
+  }
 }
 
 function utcDay(now = Date.now()): string {
@@ -218,10 +253,13 @@ async function addToCounter(userId: string, costUsd: number): Promise<void> {
 export class BudgetExceededError extends Error {
   constructor(spentUsd: number, capUsd: number) {
     super(
-      `Daily spend cap reached ($${spentUsd.toFixed(2)} of $${capUsd.toFixed(
+      // Says what to DO about it. The old wording ended at "or until the cap is
+      // raised", which named no way to raise it — the reader was told they were
+      // stuck without being told they could simply upgrade.
+      `Daily limit reached ($${spentUsd.toFixed(2)} of $${capUsd.toFixed(
         2
-      )}). Paid lookups (supplier searches, page reads, image generation) are ` +
-        'paused until tomorrow, or until the cap is raised.'
+      )}). Chat, supplier searches and image generation resume tomorrow. ` +
+        'Upgrading your plan raises the limit immediately — see Billing.'
     );
     this.name = 'BudgetExceededError';
   }
@@ -238,7 +276,7 @@ export async function assertWithinBudget(params: {
   userId: string;
   estimatedCostUsd: number;
 }): Promise<void> {
-  const cap = dailyCapUsd();
+  const cap = await resolveDailyCapUsd(params.userId);
   if (cap <= 0) return;
 
   const spent = await spendTodayUsd(params.userId);

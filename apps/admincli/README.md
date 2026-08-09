@@ -8,12 +8,11 @@ and nothing about Amazon.
 
 ## Why it exists
 
-The web UI at `/team` can only be used by somebody already inside a workspace,
-and the invite gate has exactly one bootstrap route: the
-`PLATFORM_OWNER_EMAILS` environment variable. That is fine until it is wrong. A
-typo, an Auth0 account under a different address, or a process that has not been
-restarted since the variable was added, and nobody can get in — including the
-person who would fix it.
+Signup is open and new accounts provision their own workspace at `/onboarding`,
+so nobody is locked out by default. What this exists for is everything the web
+UI deliberately will not do: create a workspace on somebody's behalf, grant
+membership without an invitation round trip, repair a workspace that predates a
+schema change, and answer data-subject requests.
 
 `admincli` reaches Couchbase directly, so it works when nothing else does. It is
 the escape hatch first and a batch tool second: inviting twenty pilot sellers is
@@ -45,10 +44,8 @@ Start here. `check` reports what the gate would decide and why:
 ./admincli.sh check --sub 'auth0|abc123' --email 'someone@example.com'
 ```
 
-`ownerListConfigured: false` means the running app process predates
-`PLATFORM_OWNER_EMAILS` — restart it. `matchesOwnerList: false` with the list
-populated means the address is wrong. The two have identical symptoms in the
-browser and completely different fixes.
+`hasWorkspace: false` means the account exists but has not completed
+onboarding — it is not stuck, it just has not created a workspace yet.
 
 To find a user's subject when you only know they have used the app:
 
@@ -102,6 +99,68 @@ it yourself. Use `--base-url` to override the host (defaults to `APP_BASE_URL`).
 `invitations accept --id … --sub … --email …` completes an invitation on a
 user's behalf, for the support case where they cannot. The email is still
 checked against the invitation unless you pass `--force`.
+
+## Stripe provisioning
+
+Billing needs four things to exist in Stripe before it works: a product and a
+recurring price per purchasable plan, a customer portal configuration, and a
+webhook endpoint. `billing provision` creates whatever is missing and prints the
+environment variables to set.
+
+```bash
+# Always look first. This is the default.
+./admincli.sh billing provision
+
+# Then, for a real environment:
+./admincli.sh billing provision --apply \
+  --base-url https://sellavant.com \
+  --webhook-url https://sellavant.com/api/billing/webhook
+```
+
+Idempotent — it matches on `metadata.product = sellavant` plus
+`metadata.planId`, not on names, so re-running adopts what already exists and
+creates nothing twice. That matters because this Stripe account is shared with
+other products.
+
+Unlike the rest of this CLI it needs **no Couchbase connection**, only
+`STRIPE_SECRET_KEY` — so it works when standing up a new environment before the
+database exists.
+
+Three things to know:
+
+- **The account is printed before anything is written.** A test key and a live
+  key differ by four characters, so live mode also requires `--live` on top of
+  `--apply`.
+- **The webhook signing secret is shown once.** Stripe returns it only at
+  creation and has no API to read it back. If the endpoint already exists it is
+  not reissued — keep the `STRIPE_ENDPOINT_SECRET` you have, or roll it from the
+  endpoint's page in the dashboard.
+- **It never re-prices.** Stripe prices are immutable in amount, and the
+  workaround — mint a new price, deactivate the old — does not move existing
+  subscribers, so it looks successful while changing nobody's bill. A price
+  that disagrees with `PLAN_PRICE_CENTS` is reported and the command exits
+  non-zero.
+
+Omit `--webhook-url` for local development: Stripe cannot reach
+`local.sellavant.com`, so forward deliveries instead, and use the secret it
+prints rather than a dashboard one.
+
+```bash
+stripe listen --forward-to https://local.sellavant.com/api/billing/webhook
+```
+
+**Check which account the CLI is on first.** `stripe config --list` reports it,
+and it is not necessarily the account `STRIPE_SECRET_KEY` belongs to — the
+sandbox the app uses is a separate account from the parent org. A `stripe
+listen` on the wrong one forwards the wrong account's events and prints a
+signing secret that will never verify, which surfaces as
+`rejected an unverifiable webhook` and looks like a code bug. Either
+`stripe login` into the right account, or pin it per invocation:
+
+```bash
+stripe listen --api-key "$STRIPE_SECRET_KEY" \
+  --forward-to https://local.sellavant.com/api/billing/webhook
+```
 
 ## Output
 
