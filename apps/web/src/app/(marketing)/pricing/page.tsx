@@ -1,14 +1,14 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import {
-  DEFAULT_PLAN,
+  RECOMMENDED_PLAN,
   TRIAL_DAYS,
   displayPlans,
   isPurchasable,
   monthlyEquivalentCents,
+  planFeatures,
   priceCentsFor,
   yearlySavingPercent,
-  type Plan,
 } from '@farvisionllc/models';
 import { findPromotionCode } from '@amz-spapi/billing';
 import { auth0 } from '../../../lib/auth0';
@@ -43,42 +43,6 @@ function usd(cents: number): string {
   });
 }
 
-/**
- * What a plan actually gives you, in the order it matters.
- *
- * Derived from the plan table rather than written out per tier, so a change to
- * seats or allowance cannot leave the marketing copy claiming the old number —
- * the failure where a customer buys what the page promised and gets something
- * smaller.
- */
-function featuresFor(plan: Plan): string[] {
-  const accounts =
-    plan.sellerAccounts === -1
-      ? 'Unlimited Amazon seller accounts'
-      : `${plan.sellerAccounts} Amazon seller account${
-          plan.sellerAccounts === 1 ? '' : 's'
-        }`;
-  const seats =
-    plan.seats === -1
-      ? 'Unlimited team members'
-      : `${plan.seats} team member${plan.seats === 1 ? '' : 's'}`;
-
-  return [
-    accounts,
-    seats,
-    `$${plan.includedSpendUsd}/month of included AI usage`,
-    `$${plan.dailySpendUsd}/day spend ceiling`,
-    'A+ content and brand guide workspace',
-    'Brand Analytics and seller reporting',
-    ...(plan.id === DEFAULT_PLAN
-      ? []
-      : [
-          'Email support during onboarding',
-          'Usage beyond the allowance billed at cost + 50%',
-        ]),
-  ];
-}
-
 export default async function PricingPage() {
   // Treat a session lookup failure as anonymous so the page still renders — a
   // marketing page that 500s because auth hiccuped is the worst trade here.
@@ -111,7 +75,7 @@ export default async function PricingPage() {
       yearly: usd(priceCentsFor(plan, 'year')),
       yearlyPerMonth: usd(monthlyEquivalentCents(plan)),
       savingPercent: yearlySavingPercent(plan),
-      features: featuresFor(plan),
+      features: planFeatures(plan),
       ...(purchasable
         ? {
             href: {
@@ -137,9 +101,7 @@ export default async function PricingPage() {
       ctaLabel: purchasable
         ? `Start ${TRIAL_DAYS}-day trial`
         : 'Get started free',
-      // Pilot, not Scale. The recommended row should be the one most people
-      // should actually buy, not the most expensive one.
-      highlight: plan.id === 'pilot',
+      highlight: plan.id === RECOMMENDED_PLAN,
     };
   });
 

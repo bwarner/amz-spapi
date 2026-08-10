@@ -310,6 +310,54 @@ export function isPurchasable(plan: Plan): boolean {
   return plan.monthlyCents > 0 && plan.yearlyCents > 0;
 }
 
+/**
+ * The tier we steer people to.
+ *
+ * Pilot, not Scale: the recommended row should be the one most people should
+ * actually buy, not the most expensive one. Here rather than in a page, because
+ * the marketing pricing table and the in-app upgrade cards both mark it and a
+ * recommendation that differs between the two reads as a dark pattern.
+ */
+export const RECOMMENDED_PLAN: PlanId = 'pilot';
+
+/**
+ * What a plan actually gives you, in the order it matters.
+ *
+ * Derived from the plan table rather than written out per tier, so a change to
+ * seats or allowance cannot leave the copy claiming the old number — the
+ * failure where a customer buys what the page promised and gets something
+ * smaller. Shared by the marketing pricing page and the in-app billing page for
+ * the same reason: two hand-maintained lists of the same plan disagree
+ * eventually, and the disagreement is invisible until somebody compares them.
+ */
+export function planFeatures(plan: Plan): string[] {
+  const accounts =
+    plan.sellerAccounts === -1
+      ? 'Unlimited Amazon seller accounts'
+      : `${plan.sellerAccounts} Amazon seller account${
+          plan.sellerAccounts === 1 ? '' : 's'
+        }`;
+  const seats =
+    plan.seats === -1
+      ? 'Unlimited team members'
+      : `${plan.seats} team member${plan.seats === 1 ? '' : 's'}`;
+
+  return [
+    accounts,
+    seats,
+    `$${plan.includedSpendUsd}/month of included AI usage`,
+    `$${plan.dailySpendUsd}/day spend ceiling`,
+    'A+ content and brand guide workspace',
+    'Brand Analytics and seller reporting',
+    ...(plan.id === DEFAULT_PLAN
+      ? []
+      : [
+          'Email support during onboarding',
+          'Usage beyond the allowance billed at cost + 50%',
+        ]),
+  ];
+}
+
 /** List price in cents for an interval. */
 export function priceCentsFor(plan: Plan, interval: BillingInterval): number {
   return interval === 'year' ? plan.yearlyCents : plan.monthlyCents;
