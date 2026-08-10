@@ -14,6 +14,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
+    "@amz-spapi/couchbase-utils": "0.0.1",
     "@farvisionllc/models": "0.0.1",
     "stripe": "^22.4.0",
     "tslib": "^2.3.0"

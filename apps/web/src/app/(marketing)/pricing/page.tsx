@@ -4,6 +4,7 @@ import {
   DEFAULT_PLAN,
   TRIAL_DAYS,
   displayPlans,
+  isPurchasable,
   monthlyEquivalentCents,
   priceCentsFor,
   yearlySavingPercent,
@@ -101,7 +102,7 @@ export default async function PricingPage() {
   }
 
   const plans: PricingRow[] = displayPlans().map((plan) => {
-    const purchasable = Boolean(plan.priceEnvVars);
+    const purchasable = isPurchasable(plan);
     return {
       id: plan.id,
       label: plan.label,

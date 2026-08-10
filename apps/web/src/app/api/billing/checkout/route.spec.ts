@@ -22,8 +22,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * amount. Guessing charges the wrong amount silently, which is the one failure
  * here that money cannot be un-spent from.
  *
- * `priceIdFor` is the real implementation: it reads env, and its empty-value
- * handling is exactly what decides between "not for sale" and a charge.
+ * `priceForPlan` is mocked: it reads the `billing_prices` catalogue, and the
+ * distinction between "no sellable row" and "a row we can charge against" is
+ * exactly what decides between a 503 and a charge.
  */
 
 const getSession = vi.fn();
@@ -31,6 +32,7 @@ const currentWorkspace = vi.fn();
 const createCheckoutSession = vi.fn();
 const createPortalSession = vi.fn();
 const findPromotionCode = vi.fn();
+const priceForPlan = vi.fn();
 const cookieStore = { get: vi.fn() };
 
 vi.mock('@amz-spapi/billing', async () => {
@@ -43,6 +45,7 @@ vi.mock('@amz-spapi/billing', async () => {
       createCheckoutSession(...args),
     createPortalSession: (...args: unknown[]) => createPortalSession(...args),
     findPromotionCode: (...args: unknown[]) => findPromotionCode(...args),
+    priceForPlan: (...args: unknown[]) => priceForPlan(...args),
   };
 });
 
@@ -106,10 +109,16 @@ beforeEach(() => {
   // one test would otherwise still be returned in the next.
   cookieStore.get.mockReturnValue(undefined);
   findPromotionCode.mockResolvedValue(null);
-  process.env['STRIPE_PRICE_PILOT_MONTHLY'] = 'price_pilot_m';
-  process.env['STRIPE_PRICE_PILOT_YEARLY'] = 'price_pilot_y';
-  process.env['STRIPE_PRICE_SCALE_MONTHLY'] = 'price_scale_m';
-  process.env['STRIPE_PRICE_SCALE_YEARLY'] = 'price_scale_y';
+  priceForPlan.mockImplementation(async (planId: string, interval: string) => ({
+    planId,
+    interval,
+    priceId: `price_${planId}_${interval}`,
+    productId: `prod_${planId}`,
+    amountCents: 9_900,
+    currency: 'usd',
+    active: true,
+    syncedAt: '2026-08-09T00:00:00.000Z',
+  }));
   getSession.mockResolvedValue({ user: { sub: USER, email: 'o@example.com' } });
   currentWorkspace.mockResolvedValue(contextWithRole('owner'));
   createCheckoutSession.mockResolvedValue({
@@ -166,7 +175,7 @@ describe('checkout authorization', () => {
     });
     expect(createCheckoutSession).toHaveBeenCalledWith({
       customerId: CUSTOMER,
-      priceId: 'price_pilot_m',
+      priceId: 'price_pilot_month',
       workspaceId: WORKSPACE,
       successUrl: 'https://sellavant.com/billing?subscribed=1',
       cancelUrl: 'https://sellavant.com/billing',
@@ -181,7 +190,7 @@ describe('interval', () => {
     await checkout(request({ plan: 'pilot' }));
 
     expect(createCheckoutSession).toHaveBeenCalledWith(
-      expect.objectContaining({ priceId: 'price_pilot_m' })
+      expect.objectContaining({ priceId: 'price_pilot_month' })
     );
   });
 
@@ -189,7 +198,7 @@ describe('interval', () => {
     await checkout(request({ plan: 'scale', interval: 'year' }));
 
     expect(createCheckoutSession).toHaveBeenCalledWith(
-      expect.objectContaining({ priceId: 'price_scale_y' })
+      expect.objectContaining({ priceId: 'price_scale_year' })
     );
   });
 
@@ -327,11 +336,11 @@ describe('checkout input and configuration', () => {
     expect(createCheckoutSession).not.toHaveBeenCalled();
   });
 
-  it('answers 503 rather than GUESSING a price that is not configured', async () => {
+  it('answers 503 rather than GUESSING a price that is not catalogued', async () => {
     // Configuration, not user error — and the one recovery that must never
     // happen is inferring an amount, because that charges the wrong money
     // silently.
-    delete process.env['STRIPE_PRICE_PILOT_MONTHLY'];
+    priceForPlan.mockResolvedValue(null);
 
     const response = await checkout(request({ plan: 'pilot' }));
 
@@ -339,14 +348,26 @@ describe('checkout input and configuration', () => {
     expect(createCheckoutSession).not.toHaveBeenCalled();
   });
 
-  it('treats an EMPTY price variable as unconfigured, not as a blank price', async () => {
-    // A trailing `=` in an env file must not reach Stripe as a line item.
-    process.env['STRIPE_PRICE_PILOT_MONTHLY'] = '';
+  it('answers 503 when the CATALOGUE ITSELF cannot be read', async () => {
+    // Fails closed. An unreachable Couchbase must not fall back to a
+    // remembered id: that is precisely the silent mischarge the catalogue
+    // exists to make impossible.
+    priceForPlan.mockRejectedValue(new Error('couchbase unreachable'));
 
     const response = await checkout(request({ plan: 'pilot' }));
 
     expect(response.status).toBe(503);
     expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it('charges the price id the CATALOGUE names', async () => {
+    // The whole point of the collection: the id that reaches Stripe is the one
+    // whose amount was checked against the plan table when the row was written.
+    await checkout(request({ plan: 'scale', interval: 'year' }));
+
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ priceId: 'price_scale_year' })
+    );
   });
 
   it('reports a Stripe failure as 500 without leaking the reason', async () => {

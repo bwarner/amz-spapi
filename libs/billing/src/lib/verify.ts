@@ -1,53 +1,47 @@
 import type Stripe from 'stripe';
 import {
   priceCentsFor,
-  priceEnvVarFor,
   purchasablePlans,
   type BillingInterval,
   type PlanId,
 } from '@farvisionllc/models';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
-import { priceIdFor } from './subscriptions.js';
+import { readPriceCatalog } from './catalog.js';
 
 /**
  * Does the price this deployment will actually CHARGE match the price the
  * pricing page advertises?
  *
- * ## Why `provision` does not answer this
+ * ## What changed, and why this check survived it
  *
- * There are three numbers, and it only compares two of them:
+ * This used to start from `STRIPE_PRICE_<PLAN>_<INTERVAL>`, because that
+ * hand-copied env var was the one link nothing else checked. The catalogue
+ * removed the env var, and with it most of the ways the answer could be no:
+ * `syncPriceCatalog` refuses to write a row whose amount disagrees with the
+ * plan table, so page-vs-checkout divergence is now prevented rather than
+ * detected.
  *
- *   1. what the page shows      — the plan table
- *   2. what checkout charges    — the Stripe price named by STRIPE_PRICE_…
- *   3. what provision inspects  — a Stripe price it FINDS BY METADATA
+ * The check is still worth running, because "prevented at write time" only
+ * holds if the row was written by the writer we think it was, and stayed true
+ * afterwards:
  *
- * `provision` checks 3 against 1 and never reads the env var at all. So the
- * link between what a customer is quoted and what their card is charged is
- * unverified — and that link is a hand-copied price id, which is exactly the
- * kind of thing that is wrong precisely when nobody is looking.
+ *   - the plan table can be edited AFTER a sync, leaving a correct-looking row
+ *     quoting yesterday's price — the one drift the write-time rule cannot
+ *     catch, because it happens nowhere near a write;
+ *   - a price can be deactivated in the dashboard, so the row names something
+ *     Stripe will refuse at checkout;
+ *   - a row can be written against one environment's Stripe account and read in
+ *     another, which looks fine until the id 404s;
+ *   - `provision` can adopt a different price than the catalogue named, if
+ *     somebody minted a second one carrying the same `planId`.
  *
- * This check starts from the env var instead, which is the only starting point
- * that follows the path a real payment takes.
- *
- * ## The realistic failures
- *
- * Not "somebody edited the price" — Stripe amounts are IMMUTABLE, so that
- * cannot happen. Every real failure is about which id is wired up:
- *
- *   - the var still points at a retired price, so the page says $99 and the
- *     card is charged $299;
- *   - it points at a price belonging to another product in a shared account;
- *   - it points at an id that no longer exists, so checkout 500s at the exact
- *     moment somebody decided to pay;
- *   - the monthly variable holds the yearly price.
- *
- * Every one is silent until a customer complains or an invoice is reconciled.
+ * Every one is silent until a customer complains or an invoice is reconciled,
+ * which is why this is a command and not a comment.
  */
 
 export type PriceFinding = {
   planId: PlanId;
   interval: BillingInterval;
-  envVar: string;
   priceId?: string;
   /** Human-readable problems; empty means this one is correct. */
   problems: string[];
@@ -56,8 +50,8 @@ export type PriceFinding = {
 export type VerifyResult = {
   findings: PriceFinding[];
   /**
-   * Active prices on our products that carry a `planId` but are not the ones
-   * configured. Not an error — a retired price stays active until somebody
+   * Active prices on our products that carry a `planId` but are not the ones in
+   * the catalogue. Not an error — a retired price stays active until somebody
    * retires it — but a future `provision` could adopt one of these instead, so
    * it is worth seeing.
    */
@@ -81,7 +75,7 @@ export async function verifyConfiguredPrices(): Promise<VerifyResult> {
   const stripe = stripeClient();
   if (!stripe) throw new BillingNotConfiguredError();
 
-  // Our products, so a configured price can be checked for belonging to us
+  // Our products, so a catalogued price can be checked for belonging to us
   // rather than to one of the other applications in this account.
   const products = await stripe.products.list({ active: true, limit: 100 });
   const ours = new Map<string, string>();
@@ -92,44 +86,75 @@ export async function verifyConfiguredPrices(): Promise<VerifyResult> {
     }
   }
 
+  const catalog = new Map(
+    (await readPriceCatalog()).map((row) => [
+      `${row.planId}::${row.interval}`,
+      row,
+    ])
+  );
+
   const findings: PriceFinding[] = [];
   const configured = new Set<string>();
 
   for (const plan of purchasablePlans()) {
     for (const interval of INTERVALS) {
-      const envVar = priceEnvVarFor(plan, interval);
-      if (!envVar) continue;
-
       const problems: string[] = [];
-      const priceId = priceIdFor(envVar);
+      const row = catalog.get(`${plan.id}::${interval}`);
 
-      if (!priceId) {
+      if (!row) {
         findings.push({
           planId: plan.id,
           interval,
-          envVar,
-          problems: [`${envVar} is not set — checkout for this plan will 503`],
+          problems: [
+            'has no row in the price catalogue — checkout for this plan will ' +
+              '503. Run `admincli billing provision --apply`',
+          ],
         });
         continue;
       }
-      configured.add(priceId);
+
+      if (!row.active) {
+        // Distinct from a missing row: something was catalogued and then
+        // withdrawn, which usually means a dashboard edit rather than an
+        // environment that was never provisioned.
+        problems.push(
+          'is INACTIVE in the catalogue — the last sync found no Stripe price ' +
+            'matching the plan table'
+        );
+      }
+
+      const expected = priceCentsFor(plan, interval);
+      if (row.amountCents !== expected) {
+        // The row was correct when written and the plan table has moved since.
+        // Nothing else notices this, because the write-time rule only runs at
+        // write time.
+        problems.push(
+          `is catalogued at ${money(row.amountCents)} but the page now ` +
+            `advertises ${money(
+              expected
+            )} — the plan table changed after the ` +
+            `last sync; run \`admincli billing sync-prices --apply\``
+        );
+      }
+
+      configured.add(row.priceId);
 
       let price: Stripe.Price | null = null;
       try {
-        price = await stripe.prices.retrieve(priceId);
+        price = await stripe.prices.retrieve(row.priceId);
       } catch (error) {
         problems.push(
-          `${priceId} could not be retrieved (${
+          `${row.priceId} could not be retrieved (${
             error instanceof Error ? error.message.split('\n')[0] : 'unknown'
           }) — checkout will fail`
         );
       }
 
       if (price) {
-        const expected = priceCentsFor(plan, interval);
-
         if (!price.active) {
-          problems.push(`${priceId} is INACTIVE — Stripe will refuse checkout`);
+          problems.push(
+            `${row.priceId} is INACTIVE in Stripe — checkout will be refused`
+          );
         }
         if (price.unit_amount !== expected) {
           // The headline failure: the page quotes one number, the card is
@@ -137,14 +162,14 @@ export async function verifyConfiguredPrices(): Promise<VerifyResult> {
           problems.push(
             `charges ${money(
               price.unit_amount ?? 0
-            )} but the page advertises ` + `${money(expected)}`
+            )} but the page advertises ${money(expected)}`
           );
         }
         if (price.recurring?.interval !== interval) {
           problems.push(
             `is a ${
               price.recurring?.interval ?? 'one-off'
-            } price but is wired ` + `to the ${interval} variable`
+            } price but is catalogued as ${interval}`
           );
         }
         if (price.metadata?.['planId'] !== plan.id) {
@@ -165,8 +190,7 @@ export async function verifyConfiguredPrices(): Promise<VerifyResult> {
       findings.push({
         planId: plan.id,
         interval,
-        envVar,
-        ...(priceId ? { priceId } : {}),
+        priceId: row.priceId,
         problems,
       });
     }

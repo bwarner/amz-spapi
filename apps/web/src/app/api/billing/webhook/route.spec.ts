@@ -32,6 +32,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const verifyWebhook = vi.fn();
+const applyCatalogEvent = vi.fn();
 const findWorkspaceByCustomer = vi.fn();
 const updateWorkspaceSubscription = vi.fn();
 const captureServerException = vi.fn();
@@ -43,6 +44,7 @@ vi.mock('@amz-spapi/billing', async () => {
   return {
     ...actual,
     verifyWebhook: (...args: unknown[]) => verifyWebhook(...args),
+    applyCatalogEvent: (...args: unknown[]) => applyCatalogEvent(...args),
   };
 });
 
@@ -113,6 +115,77 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateWorkspaceSubscription.mockResolvedValue({ workspaceId: WORKSPACE });
   findWorkspaceByCustomer.mockResolvedValue(null);
+  applyCatalogEvent.mockResolvedValue([]);
+});
+
+/**
+ * Price and product events keep the `billing_prices` catalogue current.
+ *
+ * They carry a Price or a Product, NOT a Subscription, so the branch that
+ * handles them has to come before every line that assumes the latter — read
+ * `event.data.object` as a subscription and `readSubscription` walks into
+ * `items.data`, which is not there.
+ */
+describe('price catalogue events', () => {
+  const priceEvent = {
+    id: 'evt_price',
+    type: 'price.updated',
+    data: {
+      object: {
+        id: 'price_1',
+        object: 'price',
+        metadata: { product: 'sellavant', planId: 'pilot' },
+      },
+    },
+  };
+
+  it('syncs the catalogue and does NOT touch any workspace', async () => {
+    verifyWebhook.mockReturnValue(priceEvent);
+    applyCatalogEvent.mockResolvedValue([
+      { planId: 'pilot', interval: 'month', action: 'written' },
+    ]);
+
+    const response = await POST(post(priceEvent));
+
+    expect(response.status).toBe(200);
+    expect(applyCatalogEvent).toHaveBeenCalled();
+    // A price change says nothing about anybody's entitlement.
+    expect(updateWorkspaceSubscription).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges an event about somebody ELSE\u2019s product', async () => {
+    // The Stripe account is shared. Null means "not ours" and must be a 200:
+    // a non-2xx would make Stripe retry another product's event forever.
+    verifyWebhook.mockReturnValue(priceEvent);
+    applyCatalogEvent.mockResolvedValue(null);
+
+    const response = await POST(post(priceEvent));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ received: true, matched: false });
+  });
+
+  it('answers 500 so Stripe RETRIES when the sync fails', async () => {
+    // A dropped price event leaves the catalogue quoting something Stripe may
+    // have withdrawn, and nothing else would notice until a checkout fails.
+    verifyWebhook.mockReturnValue(priceEvent);
+    applyCatalogEvent.mockRejectedValue(new Error('couchbase unreachable'));
+
+    const response = await POST(post(priceEvent));
+
+    expect(response.status).toBe(500);
+    expect(captureServerException).toHaveBeenCalled();
+  });
+
+  it('still handles subscription events, which are a different object', async () => {
+    verifyWebhook.mockReturnValue(event('customer.subscription.updated'));
+
+    const response = await POST(post({}));
+
+    expect(response.status).toBe(200);
+    expect(applyCatalogEvent).not.toHaveBeenCalled();
+    expect(updateWorkspaceSubscription).toHaveBeenCalled();
+  });
 });
 
 describe('authentication', () => {

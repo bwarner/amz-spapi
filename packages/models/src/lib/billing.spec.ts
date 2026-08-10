@@ -6,10 +6,10 @@ import {
   dailySpendCeilingUsd,
   displayPlans,
   effectivePlan,
+  isPurchasable,
   isSubscriptionEntitled,
   monthlyEquivalentCents,
   priceCentsFor,
-  priceEnvVarFor,
   purchasablePlans,
   seatLimitReached,
   yearlySavingPercent,
@@ -196,16 +196,25 @@ describe('plan table', () => {
     // It is what you get without paying; listing it on a pricing page would be
     // a checkout that charges for nothing.
     expect(purchasablePlans().map((p) => p.id)).not.toContain(DEFAULT_PLAN);
-    expect(PLANS[DEFAULT_PLAN].priceEnvVars).toBeUndefined();
+    expect(isPurchasable(PLANS[DEFAULT_PLAN])).toBe(false);
   });
 
   it('gives every purchasable plan a price for BOTH intervals', () => {
     for (const plan of purchasablePlans()) {
-      expect(priceEnvVarFor(plan, 'month'), `${plan.id} monthly`).toBeTruthy();
-      expect(priceEnvVarFor(plan, 'year'), `${plan.id} yearly`).toBeTruthy();
+      expect(isPurchasable(plan), `${plan.id} purchasable`).toBe(true);
       expect(priceCentsFor(plan, 'month')).toBeGreaterThan(0);
       expect(priceCentsFor(plan, 'year')).toBeGreaterThan(0);
     }
+  });
+
+  it('agrees with purchasablePlans about what is for sale', () => {
+    // Two independent statements of the same fact — the pricing page reads the
+    // predicate, `provision` and the catalogue read the list. Letting them drift
+    // would advertise a Buy button for a plan nothing ever mints a price for.
+    const sellable = displayPlans()
+      .filter(isPurchasable)
+      .map((p) => p.id);
+    expect(sellable).toEqual(purchasablePlans().map((p) => p.id));
   });
 
   it('never lets a paid tier allow less than the free one', () => {

@@ -29,6 +29,7 @@ import {
   deactivateStalePrices,
   linkCustomerToWorkspace,
   provisionBilling,
+  syncPriceCatalog,
   verifyConfiguredPrices,
 } from '@amz-spapi/billing';
 import { renderTable } from './format.js';
@@ -777,6 +778,35 @@ billing
       return;
     }
 
+    // The catalogue is what checkout reads, so a run that provisioned Stripe
+    // correctly but failed to write it has NOT made the environment usable.
+    if (result.catalogError) {
+      process.stderr.write(
+        `\nStripe is provisioned, but the price catalogue was NOT written:\n` +
+          `  ${result.catalogError}\n` +
+          `Checkout will answer 503 until this succeeds. Re-run, or run\n` +
+          `\`admincli billing sync-prices\` once Couchbase is reachable.\n`
+      );
+      process.exitCode = 1;
+    } else if (result.catalog) {
+      const unsellable = result.catalog.filter(
+        (o) => o.action === 'deactivated'
+      );
+      process.stderr.write(
+        `\nprice catalogue: ${
+          result.catalog.filter((o) => o.action === 'written').length
+        } written, ${
+          result.catalog.filter((o) => o.action === 'unchanged').length
+        } unchanged, ${unsellable.length} unsellable\n`
+      );
+      for (const outcome of unsellable) {
+        process.stderr.write(
+          `  ${outcome.planId}/${outcome.interval}: ${outcome.reason}\n`
+        );
+      }
+      if (unsellable.length > 0) process.exitCode = 1;
+    }
+
     process.stderr.write('\nSet these in the environment:\n');
     for (const [key, value] of Object.entries(result.env)) {
       const shown =
@@ -838,25 +868,76 @@ billing
   });
 
 /**
+ * Rebuild the price catalogue from Stripe.
+ *
+ * `provision --apply` already does this, so this exists for the case where
+ * Stripe changed but nothing needs provisioning — a price deactivated in the
+ * dashboard, or a webhook delivery that was missed while the endpoint was
+ * misconfigured. Idempotent: it recomputes desired state rather than patching.
+ *
+ * Writes only what matches the plan table. A price whose amount has drifted
+ * makes its plan UNSELLABLE rather than mispriced, which is the safe direction:
+ * a 503 gets fixed today, a silent overcharge becomes a refund and an apology.
+ */
+billing
+  .command('sync-prices')
+  .description('Rebuild the billing_prices catalogue from Stripe')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to sync from.');
+    }
+    assertConnection();
+
+    const outcomes = await syncPriceCatalog();
+
+    emit(
+      outcomes.map((o) => ({
+        plan: o.planId,
+        interval: o.interval,
+        action: o.action,
+        price: o.priceId ?? '(none)',
+        detail: o.reason ?? '',
+      })),
+      options.format
+    );
+
+    const unsellable = outcomes.filter((o) => o.action === 'deactivated');
+    if (unsellable.length > 0) {
+      process.stderr.write(
+        `\n${unsellable.length} plan/interval pair(s) have NO sellable price. ` +
+          'Checkout for them will answer 503 until a Stripe price matching the ' +
+          'plan table exists.\n'
+      );
+      process.exitCode = 1;
+    }
+  });
+
+/**
  * Check that what we CHARGE matches what the pricing page ADVERTISES.
  *
- * Distinct from `provision`, which compares the plan table against a price it
- * finds by metadata and never reads the env vars at all. This starts from the
- * env var — the only starting point that follows the path a real payment takes
- * — so it is the one that catches a deployment wired to a retired price.
+ * Starts from the price CATALOGUE — the row checkout actually reads — and walks
+ * it out to Stripe and back to the plan table, which is the path a real payment
+ * takes. `syncPriceCatalog` already refuses to write a row whose amount
+ * disagrees with the plan table, so most divergence is now prevented rather
+ * than found here; what remains is drift that happens nowhere near a write, of
+ * which a plan table edited AFTER the last sync is the important one.
  *
- * Read-only, needs no Couchbase, and exits non-zero on any problem. Safe to run
- * on a schedule against every environment, which is the point: a price id is
- * hand-copied into several places, and it is wrong exactly when nobody looks.
+ * Read-only, and exits non-zero on any problem. Safe to run on a schedule
+ * against every environment, which is the point: it is wrong exactly when
+ * nobody looks.
+ *
+ * Reads Couchbase as well as Stripe now, because the catalogue lives there.
  */
 billing
   .command('verify')
-  .description('Check the configured Stripe prices against the plan table')
+  .description('Check the catalogued Stripe prices against the plan table')
   .addOption(formatOption)
   .action(async (options) => {
     if (!process.env['STRIPE_SECRET_KEY']) {
       fail('STRIPE_SECRET_KEY is not set — nothing to verify against.');
     }
+    assertConnection();
 
     const result = await verifyConfiguredPrices();
 

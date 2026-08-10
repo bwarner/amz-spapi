@@ -3,13 +3,13 @@ import {
   PLANS,
   TRIAL_DAYS,
   billingIntervalSchema,
+  isPurchasable,
   planIdSchema,
-  priceEnvVarFor,
 } from '@farvisionllc/models';
 import {
   createCheckoutSession,
   findPromotionCode,
-  priceIdFor,
+  priceForPlan,
 } from '@amz-spapi/billing';
 import { auth0 } from '../../../../lib/auth0';
 import { currentWorkspace } from '../../../../lib/workspace-context';
@@ -60,8 +60,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const priceEnvVar = priceEnvVarFor(PLANS[plan.data], interval.data);
-  if (!priceEnvVar) {
+  if (!isPurchasable(PLANS[plan.data])) {
     // The free tier is what you get without paying; a checkout for it would
     // charge somebody for their existing allowance.
     return Response.json(
@@ -70,11 +69,32 @@ export async function POST(request: Request) {
     );
   }
 
-  const priceId = priceIdFor(priceEnvVar);
-  if (!priceId) {
+  // The catalogue, not an env var. A row exists only if its Stripe amount
+  // matched the plan table when it was written, so the number quoted on the
+  // pricing page and the number this charges cannot disagree.
+  //
+  // An unreachable catalogue is treated exactly like a missing row: both mean
+  // "cannot price this correctly right now", and the only alternative — going
+  // ahead on a remembered id — is the silent mischarge this collection exists
+  // to prevent. Fails closed, deliberately.
+  const price = await priceForPlan(plan.data, interval.data).catch((error) => {
+    log.error(
+      {
+        plan: plan.data,
+        interval: interval.data,
+        error: error instanceof Error ? error.message : error,
+      },
+      'could not read the price catalogue'
+    );
+    return null;
+  });
+  if (!price) {
     // Configuration, not user error. Guessing a price would be the worst
     // possible recovery — it charges the wrong amount, silently.
-    log.error({ priceEnvVar }, 'plan has no configured price');
+    log.error(
+      { plan: plan.data, interval: interval.data },
+      'no catalogued price for this plan'
+    );
     return Response.json(
       { error: 'Billing is not fully configured. Please contact support.' },
       { status: 503 }
@@ -117,7 +137,7 @@ export async function POST(request: Request) {
     const base = appBaseUrl();
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
-      priceId,
+      priceId: price.priceId,
       workspaceId: context.workspace.workspaceId,
       successUrl: `${base}/billing?subscribed=1`,
       // Back to where they started, not to the dashboard — a cancelled

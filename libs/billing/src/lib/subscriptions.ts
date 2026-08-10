@@ -9,12 +9,6 @@ import { stripeClient, BillingNotConfiguredError } from './customers.js';
  * this library deliberately does not know what a workspace is.
  */
 
-/** The price id for a plan, or undefined when the deployment has not set one. */
-export function priceIdFor(priceEnvVar: string): string | undefined {
-  const value = process.env[priceEnvVar];
-  return value && value.trim() ? value.trim() : undefined;
-}
-
 /** A promotion code as the customer sees it, resolved to what Stripe needs. */
 export type ResolvedPromotion = {
   /** Stripe's `promo_…` id, which is what `discounts` takes. */

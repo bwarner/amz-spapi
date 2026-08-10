@@ -1,21 +1,33 @@
 import type Stripe from 'stripe';
 import { PLANS } from '@farvisionllc/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetStripeClient } from './customers.js';
-import { verifyConfiguredPrices } from './verify.js';
 
 /**
  * The check that follows the path a real payment takes.
  *
- * `provision` compares the plan table against a price it finds by metadata. It
- * never reads the env var, so it cannot see the one failure that actually
- * charges somebody the wrong amount: a correct price sitting in Stripe while
- * the deployment is wired to a different one.
+ * It starts from the CATALOGUE row checkout reads and walks it out to Stripe
+ * and back to the plan table. `syncPriceCatalog` already refuses to write a row
+ * whose amount disagrees with the plan table, so what is left here is drift
+ * that happens nowhere near a write — most importantly a plan table edited
+ * AFTER the last sync, which no write-time rule can catch.
  *
  * Every case below is silent in production. There is no error, no log and no
  * failed request — the customer is quoted one number and charged another, and
  * it surfaces when they complain or when somebody reconciles an invoice.
  */
+
+const store = new Map<string, unknown>();
+
+vi.mock('@amz-spapi/couchbase-utils', () => ({
+  collectionName: (domain: string, collection: string) =>
+    `${domain}_${collection}`,
+  getDocument: async () => null,
+  upsertDocument: async () => undefined,
+  executeQuery: async () => ({ rows: [...store.values()] }),
+}));
+
+const { verifyConfiguredPrices } = await import('./verify.js');
+const { resetStripeClient } = await import('./customers.js');
 
 const original = { ...process.env };
 
@@ -74,12 +86,33 @@ async function withStripe(fake: ReturnType<typeof fakeStripe>) {
   );
 }
 
-/** Wire all four variables at their correct prices, then break one per test. */
+/** A catalogue row, correct unless a test breaks one field of it. */
+function row(
+  planId: 'pilot' | 'scale',
+  interval: 'month' | 'year',
+  over: Record<string, unknown> = {}
+) {
+  const plan = PLANS[planId];
+  return {
+    planId,
+    interval,
+    priceId: `price_${planId}_${interval}`,
+    productId: `prod_${planId}`,
+    amountCents: interval === 'year' ? plan.yearlyCents : plan.monthlyCents,
+    currency: 'usd',
+    active: true,
+    syncedAt: '2026-08-09T00:00:00.000Z',
+    ...over,
+  };
+}
+
+/** Catalogue all four at their correct prices, then break one per test. */
 function configureAll() {
-  process.env['STRIPE_PRICE_PILOT_MONTHLY'] = 'price_pilot_month';
-  process.env['STRIPE_PRICE_PILOT_YEARLY'] = 'price_pilot_year';
-  process.env['STRIPE_PRICE_SCALE_MONTHLY'] = 'price_scale_month';
-  process.env['STRIPE_PRICE_SCALE_YEARLY'] = 'price_scale_year';
+  store.clear();
+  store.set('pilot::month', row('pilot', 'month'));
+  store.set('pilot::year', row('pilot', 'year'));
+  store.set('scale::month', row('scale', 'month'));
+  store.set('scale::year', row('scale', 'year'));
 }
 
 function allGoodPrices() {
@@ -104,7 +137,7 @@ afterEach(() => {
 });
 
 describe('verifyConfiguredPrices', () => {
-  it('passes when every variable points at the right price', async () => {
+  it('passes when every row points at the right price', async () => {
     await withStripe(fakeStripe(allGoodPrices()));
 
     const result = await verifyConfiguredPrices();
@@ -117,7 +150,7 @@ describe('verifyConfiguredPrices', () => {
   /**
    * The headline case, and the one today's hand-rotation could have produced.
    */
-  it('catches a variable still pointing at a RETIRED price', async () => {
+  it('catches a row still pointing at a RETIRED price', async () => {
     const prices = allGoodPrices();
     prices['price_pilot_month'] = {
       ...good('pilot', 'month'),
@@ -137,8 +170,8 @@ describe('verifyConfiguredPrices', () => {
     );
   });
 
-  it('catches an unset variable, which is a 503 at checkout', async () => {
-    delete process.env['STRIPE_PRICE_SCALE_YEARLY'];
+  it('catches a MISSING row, which is a 503 at checkout', async () => {
+    store.delete('scale::year');
     await withStripe(fakeStripe(allGoodPrices()));
 
     const result = await verifyConfiguredPrices();
@@ -147,11 +180,43 @@ describe('verifyConfiguredPrices', () => {
     expect(
       result.findings.find((f) => f.planId === 'scale' && f.interval === 'year')
         ?.problems[0]
-    ).toContain('not set');
+    ).toContain('no row in the price catalogue');
+  });
+
+  it('catches a row DEACTIVATED by the last sync', async () => {
+    // Distinct from a missing row: something was catalogued and then withdrawn,
+    // which points at a dashboard edit rather than an unprovisioned deployment.
+    store.set('pilot::month', row('pilot', 'month', { active: false }));
+    await withStripe(fakeStripe(allGoodPrices()));
+
+    const result = await verifyConfiguredPrices();
+
+    expect(result.ok).toBe(false);
+    expect(result.findings[0]?.problems.join(' ')).toContain(
+      'INACTIVE in the catalogue'
+    );
+  });
+
+  it('catches a PLAN TABLE edited after the last sync', async () => {
+    // The one drift the write-time rule cannot prevent, because it happens
+    // nowhere near a write: the row was correct when written and the advertised
+    // price moved underneath it. Nothing else notices.
+    store.set('pilot::month', row('pilot', 'month', { amountCents: 8_900 }));
+    await withStripe(fakeStripe(allGoodPrices()));
+
+    const result = await verifyConfiguredPrices();
+
+    expect(result.ok).toBe(false);
+    expect(result.findings[0]?.problems.join(' ')).toContain(
+      'is catalogued at $89.00'
+    );
   });
 
   it('catches a price id that no longer exists', async () => {
-    process.env['STRIPE_PRICE_PILOT_MONTHLY'] = 'price_deleted';
+    store.set(
+      'pilot::month',
+      row('pilot', 'month', { priceId: 'price_deleted' })
+    );
     await withStripe(fakeStripe(allGoodPrices()));
 
     const result = await verifyConfiguredPrices();
@@ -175,7 +240,7 @@ describe('verifyConfiguredPrices', () => {
     ).toContain('INACTIVE');
   });
 
-  it('catches the yearly price wired to the monthly variable', async () => {
+  it('catches the yearly price catalogued as monthly', async () => {
     const prices = allGoodPrices();
     prices['price_pilot_month'] = good('pilot', 'year');
     await withStripe(fakeStripe(prices));

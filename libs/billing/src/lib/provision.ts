@@ -3,13 +3,13 @@ import {
   PLANS,
   billingIntervalSchema,
   priceCentsFor,
-  priceEnvVarFor,
   purchasablePlans,
   type BillingInterval,
   type Plan,
   type PlanId,
 } from '@farvisionllc/models';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
+import { syncPriceCatalog, type PriceSyncOutcome } from './catalog.js';
 
 /**
  * Create the Stripe objects this application cannot run without.
@@ -47,12 +47,36 @@ import { stripeClient, BillingNotConfiguredError } from './customers.js';
 /** Marks everything this application owns in a shared Stripe account. */
 const PRODUCT_TAG = 'sellavant';
 
-/** The only events `POST /api/billing/webhook` acts on. */
+/**
+ * What `POST /api/billing/webhook` must be sent.
+ *
+ * A SUPERSET of what it acts on today: the subscription events drive
+ * entitlement, while the product and price events keep the `billing_prices`
+ * catalogue current so the pricing page and checkout read one row instead of
+ * two hand-copied env vars. The route acknowledges anything it has no handler
+ * for, so subscribing ahead of the handler is safe and is the deliberate order
+ * — an event nobody is listening for is free, whereas a handler that never
+ * fires because the subscription is missing is a silent, stale catalogue.
+ *
+ * `price.updated` cannot carry an amount change; Stripe price amounts are
+ * immutable. It carries `active` and metadata, which is what the catalogue
+ * cares about.
+ *
+ * This is a FLOOR, not the whole set: `ensureWebhook` unions it into an adopted
+ * endpoint's existing `enabled_events` rather than replacing them, so anything
+ * subscribed in the dashboard survives provisioning.
+ */
 export const WEBHOOK_EVENTS: Stripe.WebhookEndpointCreateParams.EnabledEvent[] =
   [
     'customer.subscription.created',
     'customer.subscription.updated',
     'customer.subscription.deleted',
+    'price.created',
+    'price.updated',
+    'price.deleted',
+    'product.created',
+    'product.updated',
+    'product.deleted',
   ];
 
 const INTERVALS: BillingInterval[] = ['month', 'year'];
@@ -60,8 +84,6 @@ const INTERVALS: BillingInterval[] = ['month', 'year'];
 export type ProvisionedPrice = {
   interval: BillingInterval;
   priceId: string;
-  /** The env var that must carry `priceId`. */
-  priceEnvVar: string;
   amountCents: number;
   created: boolean;
   /**
@@ -95,6 +117,15 @@ export type ProvisionResult = {
   env: Record<string, string>;
   /** Every price whose amount disagrees with the plan table. */
   mismatches: string[];
+  /**
+   * What writing the price catalogue did. Absent on a dry run, and absent when
+   * the catalogue could not be reached — which is reported rather than thrown,
+   * because a Couchbase outage must not make the Stripe half of a provisioning
+   * run look like it failed when it in fact succeeded.
+   */
+  catalog?: PriceSyncOutcome[];
+  /** Why the catalogue was not written, when it was not. */
+  catalogError?: string;
 };
 
 export type ProvisionParams = {
@@ -181,12 +212,6 @@ async function ensurePrice(
   dryRun: boolean
 ): Promise<ProvisionedPrice> {
   const amountCents = priceCentsFor(plan, interval);
-  const priceEnvVar = priceEnvVarFor(plan, interval);
-  if (!priceEnvVar) {
-    throw new Error(
-      `Plan "${plan.id}" is purchasable but declares no ${interval} price env var.`
-    );
-  }
 
   const pending = productId.startsWith('(');
   if (!pending) {
@@ -209,7 +234,6 @@ async function ensurePrice(
       return {
         interval,
         priceId: existing.id,
-        priceEnvVar,
         amountCents,
         created: false,
         ...(existing.unit_amount !== amountCents
@@ -228,7 +252,6 @@ async function ensurePrice(
     return {
       interval,
       priceId: `(would create ${plan.id}/${interval} @ ${amountCents})`,
-      priceEnvVar,
       amountCents,
       created: true,
     };
@@ -250,7 +273,6 @@ async function ensurePrice(
   return {
     interval,
     priceId: created.id,
-    priceEnvVar,
     amountCents,
     created: true,
   };
@@ -407,8 +429,22 @@ async function ensureWebhook(
     const callerSpecifiedQuery = url.includes('?');
     const keepUrl = callerSpecifiedQuery ? url : existing.url;
 
+    // UNION, not replace. This endpoint may well have been made in the
+    // dashboard — the live one was — and carry events subscribed for reasons
+    // that predate this file. Overwriting would unsubscribe them silently: the
+    // only symptom is an event that stops arriving, months later, with nothing
+    // in any log to connect it to a provisioning run. Provision's job is to
+    // guarantee OUR events are present, not to assert that nothing else may be.
+    //
+    // `*` already means every event, so adding to it would be noise.
+    const subscribed = existing.enabled_events ?? [];
+    const mergedEvents = subscribed.includes('*')
+      ? subscribed
+      : [...new Set<string>([...subscribed, ...WEBHOOK_EVENTS])];
+
     const updated = await stripe.webhookEndpoints.update(existing.id, {
-      enabled_events: WEBHOOK_EVENTS,
+      enabled_events:
+        mergedEvents as Stripe.WebhookEndpointUpdateParams.EnabledEvent[],
       disabled: false,
       ...(keepUrl !== existing.url ? { url: keepUrl } : {}),
     });
@@ -491,7 +527,6 @@ export async function provisionBilling(
   const mismatches: string[] = [];
   for (const plan of plans) {
     for (const price of plan.prices) {
-      env[price.priceEnvVar] = price.priceId;
       if (price.amountMismatch) {
         mismatches.push(
           `${plan.planId}/${price.interval} ${price.priceId} charges ` +
@@ -507,6 +542,25 @@ export async function provisionBilling(
   }
   if (webhook?.secret) env['STRIPE_ENDPOINT_SECRET'] = webhook.secret;
 
+  // The catalogue is written LAST and only for real, because it is a projection
+  // of the Stripe objects above: writing it first would publish price ids that
+  // a later failure means do not exist. A dry run must touch nothing at all.
+  //
+  // A Couchbase failure is captured rather than thrown. Everything in Stripe
+  // has already happened by this point and is not rolled back, so throwing
+  // would report a total failure for a run that in fact half-succeeded — and
+  // the operator's next move (re-run it) is the same either way.
+  let catalog: PriceSyncOutcome[] | undefined;
+  let catalogError: string | undefined;
+  if (!dryRun) {
+    try {
+      catalog = await syncPriceCatalog();
+    } catch (error) {
+      catalogError =
+        error instanceof Error ? `${error.name}: ${error.message}` : 'unknown';
+    }
+  }
+
   return {
     accountId,
     // From the KEY, not the account object, which carries no `livemode`. A test
@@ -519,6 +573,8 @@ export async function provisionBilling(
     ...(webhook ? { webhook } : {}),
     env,
     mismatches,
+    ...(catalog ? { catalog } : {}),
+    ...(catalogError ? { catalogError } : {}),
   };
 }
 

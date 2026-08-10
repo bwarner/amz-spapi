@@ -1,12 +1,39 @@
 import type Stripe from 'stripe';
 import { PLANS, purchasablePlans } from '@farvisionllc/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetStripeClient } from './customers.js';
-import {
-  WEBHOOK_EVENTS,
-  deactivateStalePrices,
-  provisionBilling,
-} from './provision.js';
+
+/**
+ * Couchbase is faked so `provisionBilling` can write the price catalogue
+ * without a cluster. Left real, every test here would make a network call whose
+ * failure `catalogError` deliberately swallows — hiding both the latency and
+ * any genuine regression in the catalogue write.
+ */
+const catalogStore = new Map<string, unknown>();
+
+/**
+ * Declared out here rather than reached for with a dynamic `import()`, which
+ * would mark `couchbase-utils` lazy-loaded and make the ordinary static import
+ * in `catalog.ts` an `enforce-module-boundaries` error.
+ */
+const catalogUpsert = vi.fn(
+  async (_d: string, _c: string, key: string, doc: unknown) => {
+    catalogStore.set(key, doc);
+  }
+);
+
+vi.mock('@amz-spapi/couchbase-utils', () => ({
+  collectionName: (domain: string, collection: string) =>
+    `${domain}_${collection}`,
+  getDocument: async (_d: string, _c: string, key: string) =>
+    catalogStore.has(key) ? catalogStore.get(key) : null,
+  upsertDocument: (...args: [string, string, string, unknown]) =>
+    catalogUpsert(...args),
+  executeQuery: async () => ({ rows: [...catalogStore.values()] }),
+}));
+
+const { resetStripeClient } = await import('./customers.js');
+const { WEBHOOK_EVENTS, deactivateStalePrices, provisionBilling } =
+  await import('./provision.js');
 
 /**
  * Provisioning, and the two ways it could quietly ruin an account.
@@ -127,6 +154,12 @@ const params = {
 const PAID = purchasablePlans().length;
 
 beforeEach(() => {
+  catalogStore.clear();
+  catalogUpsert.mockImplementation(
+    async (_d: string, _c: string, key: string, doc: unknown) => {
+      catalogStore.set(key, doc);
+    }
+  );
   resetStripeClient();
   process.env[KEY] = 'sk_test_x';
 });
@@ -345,7 +378,10 @@ describe('provisionBilling', () => {
     expect(body.features?.subscription_cancel?.mode).toBe('at_period_end');
   });
 
-  it('returns an env var for every price and the portal', async () => {
+  it('returns the portal id, and NO price env vars', async () => {
+    // Price ids moved to the `billing_prices` catalogue. Still emitting them
+    // here would invite somebody to paste them back into an env file that
+    // nothing reads, and then to trust it.
     const fake = fakeStripe();
     await withStripe(fake);
 
@@ -354,13 +390,56 @@ describe('provisionBilling', () => {
     expect(result.env['STRIPE_PORTAL_CONFIGURATION_ID']).toBe(
       result.portal.configurationId
     );
-    expect(result.env['STRIPE_PRICE_PILOT_MONTHLY']).toBeDefined();
-    expect(result.env['STRIPE_PRICE_PILOT_YEARLY']).toBeDefined();
-    expect(result.env['STRIPE_PRICE_SCALE_MONTHLY']).toBeDefined();
-    expect(result.env['STRIPE_PRICE_SCALE_YEARLY']).toBeDefined();
+    expect(
+      Object.keys(result.env).filter((k) => k.startsWith('STRIPE_PRICE_'))
+    ).toEqual([]);
   });
 
-  it('subscribes the webhook to exactly the events the route handles', async () => {
+  it('POPULATES the price catalogue, which is what makes checkout work', async () => {
+    // Provisioning Stripe without writing the catalogue leaves an environment
+    // that looks provisioned and 503s at checkout — the bootstrap trap this
+    // whole collection introduced.
+    const fake = fakeStripe();
+    await withStripe(fake);
+
+    const result = await provisionBilling(params);
+
+    expect(result.catalogError).toBeUndefined();
+    expect(result.catalog).toHaveLength(PAID * 2);
+    expect(result.catalog?.every((o) => o.action === 'written')).toBe(true);
+    expect([...catalogStore.keys()].sort()).toEqual([
+      'pilot::month',
+      'pilot::year',
+      'scale::month',
+      'scale::year',
+    ]);
+  });
+
+  it('writes NOTHING to the catalogue on a dry run', async () => {
+    const fake = fakeStripe();
+    await withStripe(fake);
+
+    const result = await provisionBilling({ ...params, dryRun: true });
+
+    expect(result.catalog).toBeUndefined();
+    expect(catalogStore.size).toBe(0);
+  });
+
+  it('reports a catalogue failure without discarding the Stripe work', async () => {
+    // Everything in Stripe has already happened and is not rolled back, so
+    // throwing here would report a total failure for a run that half-succeeded.
+    const fake = fakeStripe();
+    await withStripe(fake);
+    catalogUpsert.mockRejectedValue(new Error('couchbase unreachable'));
+
+    const result = await provisionBilling(params);
+
+    expect(result.plans).toHaveLength(PAID);
+    expect(result.catalog).toBeUndefined();
+    expect(result.catalogError).toContain('couchbase unreachable');
+  });
+
+  it('subscribes a new webhook to every event the catalogue and route need', async () => {
     const fake = fakeStripe();
     await withStripe(fake);
 
@@ -402,6 +481,64 @@ describe('provisionBilling', () => {
     );
     expect(result.webhook?.secret).toBeUndefined();
     expect(result.env['STRIPE_ENDPOINT_SECRET']).toBeUndefined();
+  });
+
+  it('merges into an existing subscription instead of replacing it', async () => {
+    // The live endpoint was created in the dashboard and carries ~60 events
+    // this file has never heard of. Replacing the list would unsubscribe them
+    // silently — the failure only shows up as an event that stopped arriving.
+    const url = 'https://sellavant.com/api/billing/webhook';
+    const foreign = [
+      'checkout.session.completed',
+      'invoice.paid',
+      'customer.subscription.trial_will_end',
+    ];
+    const fake = fakeStripe({
+      webhooks: [
+        {
+          id: 'we_existing',
+          url,
+          enabled_events: [...foreign, 'customer.subscription.created'],
+        } as Partial<Stripe.WebhookEndpoint>,
+      ],
+    });
+    await withStripe(fake);
+
+    await provisionBilling({ ...params, webhookUrl: url });
+
+    const body = fake.webhookEndpoints.update.mock.calls[0]?.[1] as {
+      enabled_events: string[];
+    };
+    // Nothing lost…
+    for (const event of foreign) expect(body.enabled_events).toContain(event);
+    // …nothing we need missing…
+    for (const event of WEBHOOK_EVENTS)
+      expect(body.enabled_events).toContain(event);
+    // …and the one they already shared is not duplicated.
+    expect(new Set(body.enabled_events).size).toBe(body.enabled_events.length);
+  });
+
+  it('leaves a wildcard subscription alone', async () => {
+    // `*` is already every event. Appending to it would be noise, and Stripe
+    // rejects a list that pairs the wildcard with named events.
+    const url = 'https://sellavant.com/api/billing/webhook';
+    const fake = fakeStripe({
+      webhooks: [
+        {
+          id: 'we_existing',
+          url,
+          enabled_events: ['*'],
+        } as Partial<Stripe.WebhookEndpoint>,
+      ],
+    });
+    await withStripe(fake);
+
+    await provisionBilling({ ...params, webhookUrl: url });
+
+    const body = fake.webhookEndpoints.update.mock.calls[0]?.[1] as {
+      enabled_events: string[];
+    };
+    expect(body.enabled_events).toEqual(['*']);
   });
 
   it('adopts an endpoint that differs only by a bypass token in the query', async () => {

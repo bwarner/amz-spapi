@@ -5,11 +5,7 @@ import {
   resetStripeClient,
   stripeClient,
 } from './customers.js';
-import {
-  priceIdFor,
-  readSubscription,
-  verifyWebhook,
-} from './subscriptions.js';
+import { readSubscription, verifyWebhook } from './subscriptions.js';
 
 /**
  * What Stripe tells us, and whether to believe it.
@@ -191,32 +187,6 @@ describe('readSubscription', () => {
     expect(
       readSubscription(subscription({ status: 'a_new_status' })).status
     ).toBe('a_new_status');
-  });
-});
-
-describe('priceIdFor', () => {
-  it('returns the configured price id', () => {
-    process.env['STRIPE_PRICE_PILOT'] = 'price_abc';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBe('price_abc');
-  });
-
-  it('trims surrounding whitespace', () => {
-    // A price id copied out of the Stripe dashboard often arrives with a newline.
-    process.env['STRIPE_PRICE_PILOT'] = '  price_abc\n';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBe('price_abc');
-  });
-
-  it('treats an unset or EMPTY variable as unconfigured', () => {
-    // A trailing `=` in an env file must read as "no price", so the caller
-    // refuses the purchase rather than sending Stripe an empty line item.
-    delete process.env['STRIPE_PRICE_PILOT'];
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBeUndefined();
-
-    process.env['STRIPE_PRICE_PILOT'] = '';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBeUndefined();
-
-    process.env['STRIPE_PRICE_PILOT'] = '   ';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBeUndefined();
   });
 });
 

@@ -1,10 +1,10 @@
 import { redirect } from 'next/navigation';
 import { NextResponse, type NextRequest } from 'next/server';
-import { PLANS, TRIAL_DAYS, priceEnvVarFor } from '@farvisionllc/models';
+import { PLANS, TRIAL_DAYS, isPurchasable } from '@farvisionllc/models';
 import {
   createCheckoutSession,
   findPromotionCode,
-  priceIdFor,
+  priceForPlan,
 } from '@amz-spapi/billing';
 import { auth0 } from '../../lib/auth0';
 import { currentWorkspace } from '../../lib/workspace-context';
@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
   }
 
   // The free tier is not something you buy; it is what an account already has.
-  if (!priceEnvVarFor(PLANS[selection.plan], selection.interval)) {
+  if (!isPurchasable(PLANS[selection.plan])) {
     redirect('/chat');
   }
 
@@ -70,10 +70,22 @@ export async function GET(request: NextRequest) {
     redirect('/billing?error=owner-only');
   }
 
-  const priceEnvVar = priceEnvVarFor(PLANS[selection.plan], selection.interval);
-  const priceId = priceEnvVar ? priceIdFor(priceEnvVar) : undefined;
-  if (!priceId) {
-    log.error({ priceEnvVar }, 'plan has no configured price');
+  // Fails closed on an unreachable catalogue for the same reason checkout does:
+  // proceeding would mean charging against an id nothing has just confirmed.
+  const price = await priceForPlan(selection.plan, selection.interval).catch(
+    (error) => {
+      log.error(
+        { error: error instanceof Error ? error.message : error },
+        'could not read the price catalogue'
+      );
+      return null;
+    }
+  );
+  if (!price) {
+    log.error(
+      { plan: selection.plan, interval: selection.interval },
+      'no catalogued price for this plan'
+    );
     redirect('/billing?error=unconfigured');
   }
 
@@ -87,7 +99,7 @@ export async function GET(request: NextRequest) {
     const base = appBaseUrl();
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
-      priceId,
+      priceId: price.priceId,
       workspaceId: context.workspace.workspaceId,
       successUrl: `${base}/billing?subscribed=1`,
       cancelUrl: `${base}/pricing`,

@@ -89,9 +89,34 @@ export type Plan = {
   monthlyCents: number;
   /** Yearly list price in cents — ten months, so two are free. */
   yearlyCents: number;
-  /** Env vars carrying the Stripe price ids. Absent for the free plan. */
-  priceEnvVars?: Record<BillingInterval, string>;
 };
+
+/**
+ * One row of the Stripe price catalogue (`billing_prices`).
+ *
+ * `amountCents` is stored even though it must equal `priceCentsFor(plan,
+ * interval)` — that is the invariant the writer enforces, and keeping the
+ * number lets `billing verify` prove it held rather than assume it.
+ */
+export const catalogPriceSchema = z.object({
+  planId: planIdSchema,
+  interval: billingIntervalSchema,
+  /** The Stripe `price_…` that checkout will charge. */
+  priceId: z.string().min(1),
+  /** The Stripe `prod_…` it hangs off, so ownership is auditable from the row. */
+  productId: z.string().min(1),
+  amountCents: z.number().int().nonnegative(),
+  currency: z.string().min(1),
+  /**
+   * False means Stripe no longer offers a price matching the plan table. The
+   * row is kept so the difference between "went away" and "never existed"
+   * survives.
+   */
+  active: z.boolean(),
+  /** ISO-8601. When this row was last confirmed against Stripe. */
+  syncedAt: z.string().min(1),
+});
+export type CatalogPrice = z.infer<typeof catalogPriceSchema>;
 
 /**
  * The free allowance is the single most consequential number in this file.
@@ -128,10 +153,6 @@ export const PLANS: Record<PlanId, Plan> = {
     sellerAccounts: 2,
     monthlyCents: 9_900,
     yearlyCents: 94_800,
-    priceEnvVars: {
-      month: 'STRIPE_PRICE_PILOT_MONTHLY',
-      year: 'STRIPE_PRICE_PILOT_YEARLY',
-    },
   },
   scale: {
     id: 'scale',
@@ -143,10 +164,6 @@ export const PLANS: Record<PlanId, Plan> = {
     sellerAccounts: 10,
     monthlyCents: 29_900,
     yearlyCents: 286_800,
-    priceEnvVars: {
-      month: 'STRIPE_PRICE_SCALE_MONTHLY',
-      year: 'STRIPE_PRICE_SCALE_YEARLY',
-    },
   },
 };
 
@@ -279,12 +296,18 @@ export function displayPlans(): Plan[] {
   return [PLANS.free, PLANS.pilot, PLANS.scale];
 }
 
-/** The Stripe price env var for a plan at an interval, if it is for sale. */
-export function priceEnvVarFor(
-  plan: Plan,
-  interval: BillingInterval
-): string | undefined {
-  return plan.priceEnvVars?.[interval];
+/**
+ * Is this a plan somebody can buy, as opposed to the free tier?
+ *
+ * Derived from the plan table rather than from the price catalogue on purpose.
+ * The pricing page is marketing and must render when Couchbase is unreachable;
+ * making "is this for sale" a database question would blank the Buy buttons
+ * during an outage of a system the visitor has no relationship with. Whether a
+ * price is actually WIRED UP is a different question, asked at checkout, where
+ * failing is safe and `billing verify` is the thing that catches it early.
+ */
+export function isPurchasable(plan: Plan): boolean {
+  return plan.monthlyCents > 0 && plan.yearlyCents > 0;
 }
 
 /** List price in cents for an interval. */
