@@ -56,6 +56,15 @@ test.describe('billing page', () => {
     await expect(page.getByText('$299', { exact: true })).toBeVisible();
   });
 
+  test('labels the figures instead of leaving them to be guessed', async ({
+    page,
+  }) => {
+    // A bare workspace name under "Billing" read as branding, and "Today"
+    // named a time without naming what was being measured.
+    await expect(page.getByText(/Workspace · /)).toBeVisible();
+    await expect(page.getByText('Spend today')).toBeVisible();
+  });
+
   test('marks the current plan and steers to exactly one upgrade', async ({
     page,
   }) => {

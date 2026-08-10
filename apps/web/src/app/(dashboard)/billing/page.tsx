@@ -48,8 +48,12 @@ export default async function BillingPage() {
     // them on a wide display, which read as a layout accident.
     <div className="container mx-auto max-w-4xl px-4 py-6 sm:py-8">
       <h1 className="text-2xl font-semibold tracking-tight">Billing</h1>
+      {/* Labelled, because a bare name under a "Billing" heading reads as
+          branding rather than data — especially when the workspace happens to
+          be named after the product. It answers "whose bill is this", which
+          only becomes a real question once somebody belongs to two. */}
       <p className="mt-2 text-sm leading-6 text-muted-foreground">
-        {workspace.name}
+        Workspace · {workspace.name}
       </p>
 
       {/* Accented, because the whole point of this card is "the one you are on"
@@ -73,8 +77,13 @@ export default async function BillingPage() {
 
         <dl className="mt-4 grid gap-3 sm:grid-cols-2 sm:gap-4">
           <div>
+            {/* "Today" said WHEN but never what, leaving the figure to be
+                explained by the helper line below it. "Spend" is the word the
+                plan table and the pricing page already use — `dailySpendUsd`,
+                "$5/day spend ceiling" — so the label matches what was
+                advertised. */}
             <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-              Today
+              Spend today
             </dt>
             <dd className="mt-1 text-2xl font-semibold tabular-nums">
               ${spent.toFixed(2)}
