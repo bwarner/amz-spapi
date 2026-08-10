@@ -56,8 +56,16 @@ const PILOT_YEAR = priceCentsFor(PLANS.pilot, 'year');
 const SCALE_MONTH = priceCentsFor(PLANS.scale, 'month');
 const SCALE_YEAR = priceCentsFor(PLANS.scale, 'year');
 
-/** A price as Stripe would return it, correct unless a test says otherwise. */
-function price(over: Partial<Stripe.Price> & { product: string }): unknown {
+/**
+ * A price as Stripe would return it, correct unless a test says otherwise.
+ *
+ * Deliberately NOT `Partial<Stripe.Price>`. `Partial` only makes the top level
+ * optional, so `recurring: { interval: 'year' }` still has to satisfy the whole
+ * `Recurring` type — `interval_count`, `meter`, `trial_period_days`,
+ * `usage_type` — none of which the catalogue reads. Spelling them out would
+ * document Stripe's type rather than the case under test.
+ */
+function price(over: Record<string, unknown> & { product: string }): unknown {
   return {
     id: 'price_default',
     object: 'price',
