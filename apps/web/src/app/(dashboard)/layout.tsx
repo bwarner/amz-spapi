@@ -3,8 +3,10 @@ import Image from 'next/image';
 import { redirect } from 'next/navigation';
 import { auth0 } from '../../lib/auth0';
 import { resolveAccess } from '../../lib/access';
+import { listPendingInvitationsForEmail } from '@amz-spapi/identity';
 import { DashboardNav } from '@/components/dashboard-nav';
 import { PostHogProvider } from '@/components/posthog-provider';
+import { selectInvitationsToShow } from './team/pending-invitations';
 
 export default async function DashboardLayout({
   children,
@@ -38,6 +40,38 @@ export default async function DashboardLayout({
     );
   }
 
+  /**
+   * Invitations waiting for this person, counted for the nav badge.
+   *
+   * The gap this closes: `resolveAccess` returns as soon as it finds ONE
+   * membership, so somebody who already belongs to a workspace never has a
+   * second invitation looked at. That is the right call for a gate — joining an
+   * organisation should not be a silent side effect of signing in — but it left
+   * the invitation with nowhere to appear. A contractor invited by a new client
+   * would see nothing, and it would expire after seven days.
+   *
+   * Deliberately NOT folded into `resolveAccess`. That function is on the path
+   * of every authenticated request and its single-query shape is worth keeping;
+   * this is a separate concern that happens to need the same email. Awaited
+   * separately, but only after the gate has already decided — a badge must
+   * never be the thing that delays a redirect.
+   *
+   * Failure is silent by design. A missing badge is a missed notification; an
+   * error page because the badge query failed would be a worse outcome than the
+   * problem it reports.
+   */
+  const pendingInvitations = selectInvitationsToShow({
+    pending: session.user.email
+      ? await listPendingInvitationsForEmail(session.user.email).catch(() => [])
+      : [],
+    // The SAME filter the Team page applies, over the memberships `resolveAccess`
+    // already returned. Counting raw pending invitations here made the badge say
+    // two while the page listed one, because a re-invitation to a workspace they
+    // had already joined is hidden there. A badge that disagrees with the page it
+    // points at is worse than no badge — it teaches people to ignore it.
+    memberOf: access.memberships.map((membership) => membership.workspaceId),
+  });
+
   return (
     <PostHogProvider
       distinctId={session.user.sub}
@@ -64,7 +98,7 @@ export default async function DashboardLayout({
                 className="hidden sm:block h-9 w-auto"
               />
             </Link>
-            <DashboardNav />
+            <DashboardNav pendingInvitations={pendingInvitations.length} />
           </div>
           <span className="hidden sm:inline text-sm text-muted-foreground truncate max-w-[200px]">
             {session.user.name || session.user.email}

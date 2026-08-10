@@ -37,7 +37,12 @@ const navItems = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-export function DashboardNav() {
+export function DashboardNav({
+  pendingInvitations = 0,
+}: {
+  /** Invitations addressed to this user that nobody has acted on yet. */
+  pendingInvitations?: number;
+}) {
   const pathname = usePathname();
 
   return (
@@ -45,24 +50,43 @@ export function DashboardNav() {
       <div className="flex items-center gap-1">
         {navItems.map((item) => {
           const isActive = pathname === item.href;
+          const badge = item.href === '/team' ? pendingInvitations : 0;
           return (
             <Tooltip key={item.href}>
               <TooltipTrigger asChild>
                 <Link
                   href={item.href}
                   className={cn(
-                    'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3',
+                    'relative flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3',
                     isActive
                       ? 'bg-primary/10 text-primary'
                       : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
+                  // The count belongs in the accessible name, not only in a
+                  // coloured circle. A screen reader hearing "Team" learns
+                  // nothing about the invitation waiting there.
+                  aria-label={
+                    badge > 0
+                      ? `${item.label} — ${badge} pending invitation${
+                          badge === 1 ? '' : 's'
+                        }`
+                      : undefined
+                  }
                 >
                   <item.icon className="h-4 w-4" />
                   <span className="hidden sm:inline">{item.label}</span>
+                  {badge > 0 ? (
+                    <span
+                      aria-hidden
+                      className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground"
+                    >
+                      {badge}
+                    </span>
+                  ) : null}
                 </Link>
               </TooltipTrigger>
               <TooltipContent className="sm:hidden">
-                {item.label}
+                {badge > 0 ? `${item.label} (${badge})` : item.label}
               </TooltipContent>
             </Tooltip>
           );
