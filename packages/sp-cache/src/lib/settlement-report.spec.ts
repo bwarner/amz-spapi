@@ -14,6 +14,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { detectReportKind, parseReport } from './report-ingest.js';
 import { REPORTS } from './report-registry.js';
+import {
+  collectKnownSkus,
+  economicRows,
+  isPassThroughTax,
+  passThroughTaxResidual,
+  reconcileSettlements,
+  resolveSku,
+} from './settlement-report.js';
 
 /** Trimmed and scrubbed shape of Amazon's V2 flat file. */
 const SETTLEMENT_HEADER =
@@ -203,5 +211,268 @@ describe('fetching auto-generated reports', () => {
     // No reports in the window is a real outcome, not a crash: it means Amazon
     // has not settled in that period, or the 90-day retention has passed.
     expect('error' in result).toBe(true);
+  });
+});
+
+/**
+ * Reading a settlement, as opposed to parsing one.
+ *
+ * Every case below is a shape taken from real exports, because each of these
+ * fails quietly: the wrong answer is a plausible number, not an exception.
+ */
+
+const parse = (text: string) =>
+  parseReport({ kind: 'settlement', sellerId: 'seller-1', text }).rows;
+
+describe('settlement reconciliation', () => {
+  it('confirms the rows add up to the deposit Amazon declared', () => {
+    // 1420.55 is the declared total, so the rows must reach exactly that.
+    const text = [
+      SETTLEMENT_HEADER,
+      TOTALS_ROW,
+      transactionRow('ItemPrice', 'Principal', '1425.05'),
+      transactionRow('ItemFees', 'Commission', '-4.50'),
+    ].join('\n');
+
+    const [result] = reconcileSettlements(parse(text));
+    expect(result.settlementId).toBe('90210');
+    expect(result.declared).toBe(1420.55);
+    expect(result.sum).toBe(1420.55);
+    expect(result.balanced).toBe(true);
+    // The totals row carries no `amount`, so it must not inflate the count.
+    expect(result.rowCount).toBe(2);
+  });
+
+  it('reports a file that does not balance', () => {
+    const text = [
+      SETTLEMENT_HEADER,
+      TOTALS_ROW,
+      transactionRow('ItemPrice', 'Principal', '1000.00'),
+    ].join('\n');
+
+    const [result] = reconcileSettlements(parse(text));
+    expect(result.balanced).toBe(false);
+    expect(result.difference).toBe(-420.55);
+  });
+
+  it('says "unknown" rather than "unbalanced" when no total was declared', () => {
+    // A truncated export with the header row lost. Claiming a discrepancy here
+    // sends someone hunting for money that was never shown to be missing.
+    const text = [
+      SETTLEMENT_HEADER,
+      transactionRow('ItemPrice', 'Principal', '29.99'),
+    ].join('\n');
+
+    const [result] = reconcileSettlements(parse(text));
+    expect(result.declared).toBeNull();
+    expect(result.balanced).toBeNull();
+    expect(result.difference).toBeNull();
+  });
+
+  it('tolerates float drift across many rows without inventing a discrepancy', () => {
+    const rows = Array.from({ length: 300 }, () =>
+      transactionRow('ItemPrice', 'Principal', '0.10')
+    );
+    const text = [
+      SETTLEMENT_HEADER,
+      '90210\t2026-07-01\t2026-07-15\t2026-07-17\t30.00\tUSD\t\t\t\t\t\t\t\t\t\t',
+      ...rows,
+    ].join('\n');
+
+    const [result] = reconcileSettlements(parse(text));
+    expect(result.balanced).toBe(true);
+  });
+
+  it('reconciles each settlement separately when rows are combined', () => {
+    const results = reconcileSettlements([
+      ...parse(FILE_ONE),
+      ...parse(FILE_TWO),
+    ]);
+    expect(results.map((entry) => entry.settlementId).sort()).toEqual([
+      '90210',
+      '90211',
+    ]);
+  });
+});
+
+describe('pass-through marketplace facilitator tax', () => {
+  // Both legs of the same tax: collected from the buyer, withheld by Amazon.
+  const TAX_PAIR = [
+    transactionRow('ItemPrice', 'Principal', '25.99'),
+    transactionRow('ItemPrice', 'Tax', '2.14'),
+    transactionRow(
+      'ItemWithheldTax',
+      'MarketplaceFacilitatorTax-Principal',
+      '-2.14'
+    ),
+    transactionRow('ItemPrice', 'GiftWrap', '3.99'),
+    transactionRow('ItemPrice', 'GiftWrapTax', '0.28'),
+    transactionRow(
+      'ItemWithheldTax',
+      'MarketplaceFacilitatorTax-Other',
+      '-0.28'
+    ),
+    // The leg an allowlist of ("Tax", "GiftWrapTax") missed on real data.
+    transactionRow('ItemPrice', 'Shipping', '1.49'),
+    transactionRow('ItemPrice', 'ShippingTax', '0.12'),
+    transactionRow(
+      'ItemWithheldTax',
+      'MarketplaceFacilitatorTax-Shipping',
+      '-0.12'
+    ),
+  ];
+
+  it('excludes both legs, and keeps everything else', () => {
+    // No totals row: this is about the filter, and its empty columns would
+    // only add a row with no description to compare against.
+    const rows = parse([SETTLEMENT_HEADER, ...TAX_PAIR].join('\n'));
+    const kept = economicRows(rows).map((row) => row.fields.amountDescription);
+    expect(kept).toEqual(['Principal', 'GiftWrap', 'Shipping']);
+  });
+
+  it('reports a zero residual when both legs of every pair are recognised', () => {
+    const rows = parse([SETTLEMENT_HEADER, ...TAX_PAIR].join('\n'));
+    expect(passThroughTaxResidual(rows)).toBe(0);
+  });
+
+  it('surfaces a residual when a collected leg goes unrecognised', () => {
+    // Simulates the next tax variant Amazon invents: withheld, but named so
+    // that the collected side is not matched. Without this check the amount
+    // silently becomes revenue.
+    const rows = parse(
+      [
+        SETTLEMENT_HEADER,
+        transactionRow('ItemPrice', 'SomeNewLevy', '0.50'),
+        transactionRow(
+          'ItemWithheldTax',
+          'MarketplaceFacilitatorTax-New',
+          '-0.50'
+        ),
+      ].join('\n')
+    );
+    expect(passThroughTaxResidual(rows)).toBe(-0.5);
+  });
+
+  it('drops exactly zero from the total, since the legs cancel', () => {
+    // No totals row: this is about the filter, and its empty columns would
+    // only add a row with no description to compare against.
+    const rows = parse([SETTLEMENT_HEADER, ...TAX_PAIR].join('\n'));
+    const sum = (list: typeof rows) =>
+      Math.round(
+        list.reduce((total, row) => total + (row.numbers?.amount ?? 0), 0) * 100
+      ) / 100;
+
+    // The whole point: excluding tax changes the revenue reading but not the
+    // money. If these ever diverge, the filter is dropping something real.
+    expect(sum(rows)).toBe(31.47);
+    expect(sum(economicRows(rows))).toBe(31.47);
+  });
+
+  it('keeps a fee that merely mentions tax in its description', () => {
+    const rows = parse(
+      [
+        SETTLEMENT_HEADER,
+        TOTALS_ROW,
+        transactionRow('ItemFees', 'Commission', '-3.90'),
+      ].join('\n')
+    );
+    expect(isPassThroughTax(rows[0])).toBe(false);
+  });
+});
+
+describe('Grade and Resell SKUs', () => {
+  const KNOWN = [
+    'NMS-FB-350-DW',
+    'NMS-FB-350-BEI',
+    'PCM-FB-15OZ-BLK-101',
+    'FB-LFP-WHT-1600-100',
+    'FB-LFP-BLK-1600-100',
+    'TIF-FB-450-GLS',
+  ];
+
+  it('treats an ordinary SKU as its own parent, in new condition', () => {
+    expect(resolveSku('PCM-FB-15OZ-BLK-101', KNOWN)).toEqual({
+      sku: 'PCM-FB-15OZ-BLK-101',
+      parentSku: 'PCM-FB-15OZ-BLK-101',
+      condition: 'new',
+      graded: false,
+    });
+  });
+
+  it('reads the parent and the grade off a graded SKU', () => {
+    expect(
+      resolveSku('amzn.gr.TIF-FB-450-GLS-_ltRVX5UefTK48-LN', KNOWN)
+    ).toEqual({
+      sku: 'amzn.gr.TIF-FB-450-GLS-_ltRVX5UefTK48-LN',
+      parentSku: 'TIF-FB-450-GLS',
+      condition: 'LN',
+      graded: true,
+    });
+  });
+
+  it.each([
+    // The cases a hyphen-splitting regex gets wrong: the opaque token contains
+    // hyphens of its own, so nothing in the string marks where the parent ends.
+    ['amzn.gr.NMS-FB-350-DW-AIuLag-pWeg3K10-LN', 'NMS-FB-350-DW', 'LN'],
+    ['amzn.gr.NMS-FB-350-DW-d3Pd1d-1Z9NfB01-VG', 'NMS-FB-350-DW', 'VG'],
+    // Token ending in a hyphen, so the SKU carries a double hyphen.
+    ['amzn.gr.PCM-FB-15OZ-BLK-101-XhNNbefI--LN', 'PCM-FB-15OZ-BLK-101', 'LN'],
+    // Token starting with a hyphen.
+    ['amzn.gr.FB-LFP-BLK-1600-100--SHn8bakm-LN', 'FB-LFP-BLK-1600-100', 'LN'],
+    // Grades other than Like New.
+    ['amzn.gr.PCM-FB-15OZ-BLK-101-pQnN4U3e7-GD', 'PCM-FB-15OZ-BLK-101', 'GD'],
+    ['amzn.gr.TIF-FB-450-GLS-1uzTpMPP8cWzHB-PO', 'TIF-FB-450-GLS', 'PO'],
+  ])('resolves %s', (sku, parentSku, condition) => {
+    const resolved = resolveSku(sku, KNOWN);
+    expect(resolved.parentSku).toBe(parentSku);
+    expect(resolved.condition).toBe(condition);
+  });
+
+  it('prefers the longest matching parent', () => {
+    // WHT and BLK share no prefix, but a shorter SKU that prefixed a longer one
+    // would otherwise win on iteration order alone.
+    expect(
+      resolveSku('amzn.gr.FB-LFP-WHT-1600-100-1rr5Ac2xv-VG', [
+        ...KNOWN,
+        'FB-LFP',
+      ]).parentSku
+    ).toBe('FB-LFP-WHT-1600-100');
+  });
+
+  it('does not treat a shorter SKU as a parent without a separator', () => {
+    // NMS-FB-350-BE must not claim a NMS-FB-350-BEI unit.
+    expect(
+      resolveSku('amzn.gr.NMS-FB-350-BEI-G9cYCswCGlNPDS-LN', ['NMS-FB-350-BE'])
+        .parentSku
+    ).toBeNull();
+  });
+
+  it('returns null rather than guessing when the parent is unknown', () => {
+    const resolved = resolveSku('amzn.gr.SOME-UNSEEN-SKU-abc123def-VG', KNOWN);
+    expect(resolved.parentSku).toBeNull();
+    expect(resolved.condition).toBe('VG');
+    expect(resolved.graded).toBe(true);
+  });
+
+  it('collects only new-condition SKUs as the match set', () => {
+    const rows = parse(
+      [
+        SETTLEMENT_HEADER,
+        TOTALS_ROW,
+        transactionRow(
+          'ItemPrice',
+          'Principal',
+          '22.99',
+          'PCM-FB-15OZ-BLK-101'
+        ),
+        transactionRow(
+          'ItemPrice',
+          'Principal',
+          '20.69',
+          'amzn.gr.PCM-FB-15OZ-BLK-101-HRsEIPd3N-LN'
+        ),
+      ].join('\n')
+    );
+    expect([...collectKnownSkus(rows)]).toEqual(['PCM-FB-15OZ-BLK-101']);
   });
 });

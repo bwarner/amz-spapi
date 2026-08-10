@@ -86,6 +86,47 @@ type Row = {
   error?: ImportError;
 };
 
+/**
+ * How many uploads are in flight at once.
+ *
+ * Sequential was fine for one file and slow for a backfill: a year of
+ * settlements is roughly twenty-six of them, each its own request. Unbounded
+ * `Promise.all` is the wrong other extreme — it opens every connection at once
+ * and hands the API route a thundering herd, for no gain once the link is
+ * saturated.
+ *
+ * Files stay one-per-request whatever this is set to. Batching several into one
+ * body would be worse: a year is around 5 MB and the platform rejects a request
+ * body over 4.5 MB, so the batch would work in testing and fail on the real
+ * backfill. Per-file also means per-file reconciliation feedback, and an import
+ * that dedupes on re-upload, so a partial failure is repaired by dropping the
+ * same folder in again.
+ */
+const UPLOAD_CONCURRENCY = 5;
+
+/**
+ * Run `worker` over `items`, at most `limit` at a time, in order.
+ *
+ * Workers share one cursor rather than taking a fixed slice each, so a slow
+ * file holds up only itself: whichever worker frees first takes the next file.
+ * Never rejects — `worker` is expected to record its own failures, and one bad
+ * file must not abandon the rest of the batch.
+ */
+async function runPooled<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let cursor = 0;
+  const take = async (): Promise<void> => {
+    // Safe without a lock: nothing awaits between reading and advancing.
+    while (cursor < items.length) await worker(items[cursor++]);
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, take)
+  );
+}
+
 /** Tabular exports go to the report parser; everything else is a document. */
 const REPORT_EXTENSIONS = new Set(['txt', 'tsv', 'csv']);
 
@@ -122,7 +163,7 @@ export default function ReportsPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const upload = useCallback(async (files: FileList | File[]) => {
-    for (const file of Array.from(files)) {
+    const uploadOne = async (file: File) => {
       const id = `${file.name}-${Date.now()}-${Math.random()}`;
       const kind = classify(file);
       setRows((current) => [
@@ -196,7 +237,9 @@ export default function ReportsPage() {
           )
         );
       }
-    }
+    };
+
+    await runPooled(Array.from(files), UPLOAD_CONCURRENCY, uploadOne);
   }, []);
 
   return (
