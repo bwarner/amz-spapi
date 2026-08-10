@@ -160,6 +160,28 @@ export type ReportDefinition = {
   identityIncludesOptions?: boolean;
   /** Header spellings accepted for each logical field, normalised. */
   fields: Partial<Record<ReportFieldName, string[]>>;
+  /**
+   * Columns we have SEEN, decided not to index, and do not want reported.
+   * Normalised, like the field aliases.
+   *
+   * Without this there are only two states — mapped, or unrecognised — so a
+   * column we deliberately do not index is reported on every single import as
+   * though the registry had drifted. Two costs follow, and the second is the
+   * expensive one:
+   *
+   *  - The warning is never empty, so it stops being read. `posted-date-time`
+   *    sat in that list on every settlement import, correctly reported, and was
+   *    invisible precisely because the list always had entries in it.
+   *  - One unrecognised column makes `parseReport` keep `raw`, a verbatim copy
+   *    of EVERY column, on every row of the file. Four permanently-unindexed
+   *    columns therefore doubled the stored size of every settlement row to buy
+   *    optionality on identifiers nobody queries.
+   *
+   * Only list a column here once its absence from `fields` is a decision. A
+   * column nobody has looked at yet belongs in the warning, which is the whole
+   * point of the warning.
+   */
+  ignoredColumns?: string[];
 };
 
 /** Lowercase, strip everything non-alphanumeric: "Reference ID" -> "referenceid". */
@@ -295,6 +317,16 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       promotionId: ['promotionid'],
       fulfillmentCenter: ['fulfillmentid'],
     },
+    // Amazon-internal line identifiers, plus the seller's own order reference.
+    // Nothing joins or filters on them today, and `orderId` already carries the
+    // Amazon order — these were the four that made every settlement row keep a
+    // full verbatim copy of itself.
+    ignoredColumns: [
+      'merchantorderid',
+      'orderitemcode',
+      'merchantorderitemid',
+      'merchantadjustmentitemid',
+    ],
   },
   stranded: {
     kind: 'stranded',
