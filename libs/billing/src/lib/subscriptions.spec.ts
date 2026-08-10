@@ -1,12 +1,12 @@
 import type Stripe from 'stripe';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BillingNotConfiguredError,
   resetStripeClient,
   stripeClient,
 } from './customers.js';
 import {
-  priceIdFor,
+  createPlanChangeSession,
   readSubscription,
   verifyWebhook,
 } from './subscriptions.js';
@@ -194,32 +194,6 @@ describe('readSubscription', () => {
   });
 });
 
-describe('priceIdFor', () => {
-  it('returns the configured price id', () => {
-    process.env['STRIPE_PRICE_PILOT'] = 'price_abc';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBe('price_abc');
-  });
-
-  it('trims surrounding whitespace', () => {
-    // A price id copied out of the Stripe dashboard often arrives with a newline.
-    process.env['STRIPE_PRICE_PILOT'] = '  price_abc\n';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBe('price_abc');
-  });
-
-  it('treats an unset or EMPTY variable as unconfigured', () => {
-    // A trailing `=` in an env file must read as "no price", so the caller
-    // refuses the purchase rather than sending Stripe an empty line item.
-    delete process.env['STRIPE_PRICE_PILOT'];
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBeUndefined();
-
-    process.env['STRIPE_PRICE_PILOT'] = '';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBeUndefined();
-
-    process.env['STRIPE_PRICE_PILOT'] = '   ';
-    expect(priceIdFor('STRIPE_PRICE_PILOT')).toBeUndefined();
-  });
-});
-
 describe('stripeClient', () => {
   it('is null when no key is configured, rather than throwing on import', () => {
     delete process.env[KEY];
@@ -312,5 +286,110 @@ describe('verifyWebhook', () => {
     expect(() =>
       verifyWebhook({ rawBody: '{"id":"evt_1"}', signature: 'not-a-signature' })
     ).toThrow();
+  });
+});
+
+/**
+ * Changing plan must never mint a SECOND subscription.
+ *
+ * Checkout in `mode: 'subscription'` always creates one, so routing an existing
+ * subscriber through it leaves two live subscriptions on one customer — both
+ * billing, and only the newer one recorded against the workspace. The customer
+ * finds out on their statement, which is the worst possible discovery channel.
+ */
+describe('createPlanChangeSession', () => {
+  function fakeStripe(items: Array<Partial<Stripe.SubscriptionItem>>) {
+    return {
+      subscriptions: {
+        retrieve: vi.fn(async () => ({ id: 'sub_1', items: { data: items } })),
+      },
+      billingPortal: {
+        sessions: {
+          // Typed parameter so `mock.calls[0][0]` is reachable; a zero-arg
+          // `vi.fn` gives an empty-tuple call signature and the assertions
+          // below stop compiling.
+          create: vi.fn(async (_body: unknown) => ({
+            url: 'https://portal.stripe.com/x',
+          })),
+        },
+      },
+    };
+  }
+
+  async function withStripe(fake: ReturnType<typeof fakeStripe>) {
+    const customers = await import('./customers.js');
+    vi.spyOn(customers, 'stripeClient').mockReturnValue(
+      fake as unknown as Stripe
+    );
+  }
+
+  const params = {
+    customerId: 'cus_1',
+    subscriptionId: 'sub_1',
+    priceId: 'price_scale_month',
+    returnUrl: 'https://sellavant.com/billing',
+  };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('never creates a checkout session — it updates the existing subscription', async () => {
+    const fake = fakeStripe([{ id: 'si_1', price: { metadata: {} } as never }]);
+    await withStripe(fake);
+
+    const { url } = await createPlanChangeSession(params);
+
+    expect(url).toBe('https://portal.stripe.com/x');
+    // The portal, not Checkout. There is deliberately no `checkout` key on the
+    // fake: reaching for one would throw rather than quietly double-bill.
+    expect(fake.billingPortal.sessions.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('pre-fills the target price when the subscription has ONE item', async () => {
+    const fake = fakeStripe([{ id: 'si_1', price: { metadata: {} } as never }]);
+    await withStripe(fake);
+
+    await createPlanChangeSession(params);
+
+    const body = fake.billingPortal.sessions.create.mock
+      .calls[0]?.[0] as unknown as {
+      flow_data: {
+        type: string;
+        subscription_update_confirm: {
+          subscription: string;
+          items: Array<{ id: string; price: string; quantity: number }>;
+        };
+      };
+    };
+    expect(body.flow_data.type).toBe('subscription_update_confirm');
+    expect(body.flow_data.subscription_update_confirm.subscription).toBe(
+      'sub_1'
+    );
+    expect(body.flow_data.subscription_update_confirm.items).toEqual([
+      { id: 'si_1', price: 'price_scale_month', quantity: 1 },
+    ]);
+  });
+
+  it('falls back to the picker when the subscription has SEVERAL items', async () => {
+    // Stripe refuses `subscription_update_confirm` for multi-item
+    // subscriptions, and a metered overage item is planned — so this is a
+    // future shape, not a hypothetical. Sending the confirm flow anyway would
+    // fail the API call at the moment somebody tries to upgrade.
+    const fake = fakeStripe([
+      { id: 'si_plan', price: { metadata: { planId: 'pilot' } } as never },
+      { id: 'si_overage', price: { metadata: {} } as never },
+    ]);
+    await withStripe(fake);
+
+    await createPlanChangeSession(params);
+
+    const body = fake.billingPortal.sessions.create.mock
+      .calls[0]?.[0] as unknown as {
+      flow_data: {
+        type: string;
+        subscription_update: { subscription: string };
+      };
+    };
+    expect(body.flow_data.type).toBe('subscription_update');
+    expect(body.flow_data.subscription_update.subscription).toBe('sub_1');
   });
 });

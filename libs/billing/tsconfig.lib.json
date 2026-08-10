@@ -11,6 +11,9 @@
   "references": [
     {
       "path": "../../packages/models/tsconfig.lib.json"
+    },
+    {
+      "path": "../couchbase-utils/tsconfig.lib.json"
     }
   ]
 }

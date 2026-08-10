@@ -132,6 +132,20 @@ export const workspaceSchema = z.object({
   stripeSubscriptionId: z.string().optional(),
   /** Epoch ms. When the current paid period ends. */
   currentPeriodEnd: z.number().int().optional(),
+
+  /**
+   * Epoch ms of the FIRST subscription this workspace ever had. Write-once.
+   *
+   * Exists because `stripeSubscriptionId` cannot answer "have they subscribed
+   * before": cancelling clears it, so the free trial's "only for people who
+   * have never subscribed" check read as true again the moment somebody
+   * cancelled. Subscribe, cancel, resubscribe was an unlimited supply of free
+   * weeks — the exact loophole that check was written to close.
+   *
+   * Never cleared, by anything. That is the entire point of it, and a
+   * well-meaning "reset the billing fields" is how it would be lost.
+   */
+  firstSubscribedAt: z.number().int().optional(),
 });
 export type Workspace = z.infer<typeof workspaceSchema>;
 

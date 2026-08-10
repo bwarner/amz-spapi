@@ -1,10 +1,26 @@
-import { PLANS, planIdSchema } from '@farvisionllc/models';
-import { createCheckoutSession, priceIdFor } from '@amz-spapi/billing';
+import { cookies } from 'next/headers';
+import {
+  PLANS,
+  TRIAL_DAYS,
+  billingIntervalSchema,
+  isPurchasable,
+  planIdSchema,
+} from '@farvisionllc/models';
+import {
+  createCheckoutSession,
+  createPlanChangeSession,
+  findPromotionCode,
+  priceForPlan,
+} from '@amz-spapi/billing';
 import { auth0 } from '../../../../lib/auth0';
 import { currentWorkspace } from '../../../../lib/workspace-context';
 import { appBaseUrl } from '../../../../lib/config';
 import { loggerFor } from '../../../../lib/logger';
-import { captureServerException } from '../../../../lib/posthog-server';
+import {
+  captureServerEvent,
+  captureServerException,
+} from '../../../../lib/posthog-server';
+import { promoCodeSchema, readPromoCookie } from '../../../../lib/promo';
 
 const log = loggerFor('billing-checkout');
 
@@ -26,7 +42,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { plan?: unknown };
+  let body: { plan?: unknown; interval?: unknown; promo?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -38,9 +54,18 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Unknown plan.' }, { status: 400 });
   }
 
-  const priceEnvVar = PLANS[plan.data].priceEnvVar;
-  if (!priceEnvVar) {
-    // The default tier is what you get without paying; a checkout for it would
+  // Defaults to monthly so an older client that sends no interval still works
+  // rather than silently being sold a year.
+  const interval = billingIntervalSchema.safeParse(body.interval ?? 'month');
+  if (!interval.success) {
+    return Response.json(
+      { error: 'Unknown billing interval.' },
+      { status: 400 }
+    );
+  }
+
+  if (!isPurchasable(PLANS[plan.data])) {
+    // The free tier is what you get without paying; a checkout for it would
     // charge somebody for their existing allowance.
     return Response.json(
       { error: 'That plan is not for sale.' },
@@ -48,11 +73,44 @@ export async function POST(request: Request) {
     );
   }
 
-  const priceId = priceIdFor(priceEnvVar);
-  if (!priceId) {
+  // The catalogue, not an env var. A row exists only if its Stripe amount
+  // matched the plan table when it was written, so the number quoted on the
+  // pricing page and the number this charges cannot disagree.
+  //
+  // An unreachable catalogue is treated exactly like a missing row: both mean
+  // "cannot price this correctly right now", and the only alternative — going
+  // ahead on a remembered id — is the silent mischarge this collection exists
+  // to prevent. Fails closed, deliberately.
+  const price = await priceForPlan(plan.data, interval.data).catch((error) => {
+    log.error(
+      {
+        plan: plan.data,
+        interval: interval.data,
+        error: error instanceof Error ? error.message : error,
+      },
+      'could not read the price catalogue'
+    );
+    return null;
+  });
+  if (!price) {
     // Configuration, not user error. Guessing a price would be the worst
     // possible recovery — it charges the wrong amount, silently.
-    log.error({ priceEnvVar }, 'plan has no configured price');
+    log.error(
+      { plan: plan.data, interval: interval.data },
+      'no catalogued price for this plan'
+    );
+    // An unprovisioned environment is invisible from the outside — the pricing
+    // page renders perfectly and only the purchase fails. Worth counting.
+    await captureServerEvent({
+      distinctId: session.user.sub,
+      event: 'billing_checkout_unavailable',
+      properties: {
+        plan: plan.data,
+        interval: interval.data,
+        reason: 'no_catalogued_price',
+        source: 'billing_page',
+      },
+    });
     return Response.json(
       { error: 'Billing is not fully configured. Please contact support.' },
       { status: 503 }
@@ -74,15 +132,84 @@ export async function POST(request: Request) {
   }
 
   try {
+    // The body wins over the cookie: the customer may have typed a code on the
+    // pricing page, and that is a more recent statement of intent than whatever
+    // link brought them here weeks ago.
+    const fromBody = promoCodeSchema.safeParse(body.promo);
+    const code =
+      (fromBody.success ? fromBody.data : null) ??
+      readPromoCookie(await cookies());
+    const promotion = code ? await findPromotionCode(code) : null;
+    if (code && !promotion) {
+      // Expired campaign, typo, or a code someone invented. Not a reason to
+      // refuse the sale — checkout continues and Stripe's own field is offered.
+      log.info({ code }, 'promotion code did not resolve; continuing without');
+    }
+
     const base = appBaseUrl();
+
+    // An existing subscriber is CHANGING plan, not buying a second one.
+    //
+    // Checkout in subscription mode always creates a subscription, so sending
+    // them through it would leave two live subscriptions on one customer — both
+    // billing, with only the newer one recorded on the workspace. The guard
+    // lives here rather than only in the UI because this route is a public API
+    // and the button is not the only way to reach it.
+    if (context.workspace.stripeSubscriptionId) {
+      const { url } = await createPlanChangeSession({
+        customerId: context.workspace.stripeCustomerId,
+        subscriptionId: context.workspace.stripeSubscriptionId,
+        priceId: price.priceId,
+        returnUrl: `${base}/billing`,
+      });
+      await captureServerEvent({
+        distinctId: session.user.sub,
+        event: 'billing_plan_change_started',
+        properties: {
+          plan_from: context.workspace.plan ?? 'none',
+          plan_to: plan.data,
+          interval: interval.data,
+          source: 'billing_page',
+        },
+      });
+      return Response.json({ url });
+    }
+
+    // A trial is for a workspace that has NEVER subscribed.
+    //
+    // Read from `firstSubscribedAt`, which is write-once, and NOT from
+    // `stripeSubscriptionId`, which the cancellation webhook clears. Keying it
+    // off the id meant the test passed again the moment somebody cancelled, so
+    // subscribe → cancel → resubscribe minted a fresh trial every time. The
+    // comment here used to claim that was handled; it was not.
+    const trialDays = context.workspace.firstSubscribedAt ? 0 : TRIAL_DAYS;
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
-      priceId,
+      priceId: price.priceId,
       workspaceId: context.workspace.workspaceId,
       successUrl: `${base}/billing?subscribed=1`,
       // Back to where they started, not to the dashboard — a cancelled
       // checkout should feel like closing a dialog, not like being logged out.
       cancelUrl: `${base}/billing`,
+      trialDays,
+      ...(promotion ? { promotionCodeId: promotion.promotionCodeId } : {}),
+    });
+    // Started, NOT completed — the subscription only exists once Stripe says
+    // so on the webhook. Counting this as a sale would overstate conversion by
+    // every abandoned checkout.
+    await captureServerEvent({
+      distinctId: session.user.sub,
+      event: 'billing_checkout_started',
+      properties: {
+        plan: plan.data,
+        interval: interval.data,
+        trial_days: trialDays,
+        // False for somebody who subscribed before and cancelled; how often
+        // that happens is the question the trial policy turns on.
+        trial_eligible: trialDays > 0,
+        promotion_applied: Boolean(promotion),
+        source: 'billing_page',
+      },
     });
     return Response.json({ url });
   } catch (error) {

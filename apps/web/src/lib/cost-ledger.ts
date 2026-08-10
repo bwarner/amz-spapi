@@ -155,51 +155,74 @@ export function unitPriceUsd(operation: string): number | undefined {
  *
  * `COST_CAP_DAILY_USD=0` still disables enforcement, which is the escape hatch
  * for a local machine. It is NOT how production is bounded any more — the plan
- * is. See `resolveDailyCapUsd`.
+ * is. See `resolveBudget`.
  */
 function fallbackDailyCapUsd(): number {
   return readFloatEnv('COST_CAP_DAILY_USD') ?? 10;
-}
-
-/**
- * What this user's workspace may spend today.
- *
- * The plan, not an environment variable. With open signup an env-wide cap is
- * the wrong shape entirely: it is identical for a trial account and a paying
- * one, so either the trial is too generous or the customer is throttled.
- *
- * Falls back to the env value when there is no workspace — a state that should
- * not reach a paid call, since those routes refuse without one, but a cap of
- * "undefined" must never mean "unlimited".
- */
-async function resolveDailyCapUsd(userId: string): Promise<number> {
-  try {
-    const context = await currentWorkspace(userId);
-    if (!context) return fallbackDailyCapUsd();
-
-    return dailySpendCeilingUsd({
-      plan: context.workspace.plan,
-      subscriptionStatus: context.workspace.subscriptionStatus,
-    });
-  } catch {
-    // Same fail-open posture as the rest of this module: a Couchbase problem
-    // must not take chat down, and the ledger still records what gets spent.
-    return fallbackDailyCapUsd();
-  }
 }
 
 function utcDay(now = Date.now()): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
-function counterKey(userId: string, day: string): string {
-  // Hash the user id: ledger docs carry it in a field, but keys end up in logs.
+function counterKey(subjectId: string, day: string): string {
+  // Hashed: ledger docs carry the identifiers in fields, but keys end up in
+  // logs.
   const ref = crypto
     .createHash('sha256')
-    .update(userId)
+    .update(subjectId)
     .digest('hex')
     .slice(0, 24);
   return `spend::${ref}::${day}`;
+}
+
+/**
+ * Whose budget a call draws on, and how much is left in it.
+ *
+ * The WORKSPACE, not the user. The workspace holds the subscription, so it is
+ * what was actually sold — and a per-user counter multiplies the tier's
+ * allowance by the seat count, which turns a $15/day plan with six seats into a
+ * $90/day liability nobody priced. Pooling is also what customers expect: they
+ * bought one allowance, not one each.
+ *
+ * Falls back to the user when there is no workspace. Such a caller should never
+ * reach a paid call, since those routes refuse without one, but a cap of
+ * "undefined" must never mean "unlimited".
+ */
+async function resolveBudget(
+  userId: string
+): Promise<{ subjectId: string; capUsd: number }> {
+  try {
+    const context = await currentWorkspace(userId);
+    if (!context) return { subjectId: userId, capUsd: fallbackDailyCapUsd() };
+
+    return {
+      subjectId: context.workspace.workspaceId,
+      capUsd: dailySpendCeilingUsd({
+        plan: context.workspace.plan,
+        subscriptionStatus: context.workspace.subscriptionStatus,
+      }),
+    };
+  } catch {
+    // Same fail-open posture as the rest of this module: a Couchbase problem
+    // must not take chat down, and the ledger still records what gets spent.
+    return { subjectId: userId, capUsd: fallbackDailyCapUsd() };
+  }
+}
+
+/** Today's counter for an already-resolved subject. */
+async function spendForSubject(subjectId: string): Promise<number> {
+  try {
+    const value = await ledgerStorage.getDocument<number>(
+      SCOPE,
+      COUNTERS,
+      counterKey(subjectId, utcDay())
+    );
+    const micro = Number(value);
+    return Number.isFinite(micro) ? micro / MICRO : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Opaque, stable, non-PII reference for span attributes. */
@@ -214,17 +237,8 @@ export function userRef(userId: string): string {
  * micro-USD rather than JSON.
  */
 export async function spendTodayUsd(userId: string): Promise<number> {
-  try {
-    const value = await ledgerStorage.getDocument<number>(
-      SCOPE,
-      COUNTERS,
-      counterKey(userId, utcDay())
-    );
-    const micro = Number(value);
-    return Number.isFinite(micro) ? micro / MICRO : 0;
-  } catch {
-    return 0;
-  }
+  const { subjectId } = await resolveBudget(userId);
+  return spendForSubject(subjectId);
 }
 
 /**
@@ -234,7 +248,7 @@ export async function spendTodayUsd(userId: string): Promise<number> {
  * lost). The ledger remains complete, so the counter is self-correcting the
  * next day and reconcilable at any time.
  */
-async function addToCounter(userId: string, costUsd: number): Promise<void> {
+async function addToCounter(subjectId: string, costUsd: number): Promise<void> {
   const delta = Math.round(costUsd * MICRO);
   if (delta <= 0) return;
 
@@ -244,7 +258,7 @@ async function addToCounter(userId: string, costUsd: number): Promise<void> {
   await ledgerStorage.incrementCounter(
     SCOPE,
     COUNTERS,
-    counterKey(userId, utcDay()),
+    counterKey(subjectId, utcDay()),
     delta,
     COUNTER_TTL_SECONDS
   );
@@ -276,17 +290,19 @@ export async function assertWithinBudget(params: {
   userId: string;
   estimatedCostUsd: number;
 }): Promise<void> {
-  const cap = await resolveDailyCapUsd(params.userId);
-  if (cap <= 0) return;
+  // Resolved once and reused for both the ceiling and the counter, so the two
+  // cannot disagree about whose budget this is.
+  const { subjectId, capUsd } = await resolveBudget(params.userId);
+  if (capUsd <= 0) return;
 
-  const spent = await spendTodayUsd(params.userId);
-  if (spent + params.estimatedCostUsd > cap) {
+  const spent = await spendForSubject(subjectId);
+  if (spent + params.estimatedCostUsd > capUsd) {
     log.warn(
-      `cap reached for ${userRef(params.userId)}: spent ${spent.toFixed(
+      `cap reached for ${userRef(subjectId)}: spent ${spent.toFixed(
         4
-      )} + pending ${params.estimatedCostUsd.toFixed(4)} > cap ${cap}`
+      )} + pending ${params.estimatedCostUsd.toFixed(4)} > cap ${capUsd}`
     );
-    throw new BudgetExceededError(spent, cap);
+    throw new BudgetExceededError(spent, capUsd);
   }
 }
 
@@ -331,7 +347,11 @@ export async function recordCost(params: {
     );
   }
   try {
-    await addToCounter(params.userId, params.costUsd);
+    // Resolved rather than passed in: every caller already has the user, and
+    // threading a workspace id through each of them is a chance for one to pass
+    // the wrong one — which would credit the spend to another customer's pool.
+    const { subjectId } = await resolveBudget(params.userId);
+    await addToCounter(subjectId, params.costUsd);
   } catch (error) {
     log.error(
       { error: error instanceof Error ? error.message : error },

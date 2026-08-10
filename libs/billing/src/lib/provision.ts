@@ -1,30 +1,39 @@
 import type Stripe from 'stripe';
-import { PLANS, type Plan, type PlanId } from '@farvisionllc/models';
+import {
+  PLANS,
+  billingIntervalSchema,
+  priceCentsFor,
+  purchasablePlans,
+  type BillingInterval,
+  type Plan,
+  type PlanId,
+} from '@farvisionllc/models';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
+import { syncPriceCatalog, type PriceSyncOutcome } from './catalog.js';
 
 /**
  * Create the Stripe objects this application cannot run without.
  *
  * ## Why this is code and not a dashboard checklist
  *
- * Three things have to exist in Stripe before billing works, and none of them
- * are created by the application at runtime: a product and recurring price per
- * purchasable plan, a customer portal configuration, and a webhook endpoint.
- * Clicking them into the dashboard works exactly once, in one account. It has
- * to be done again for live mode, and by then nobody remembers that the price
- * needs `planId` in its METADATA — which is the field `readSubscription` reads
- * to decide what a subscriber is entitled to. A price created without it looks
- * completely normal and silently leaves every subscriber on the trial
- * allowance.
+ * Several things have to exist in Stripe before billing works, and none of them
+ * are created by the application at runtime: a product per purchasable plan, a
+ * recurring price per plan PER INTERVAL, a customer portal configuration, and a
+ * webhook endpoint. Clicking them into the dashboard works exactly once, in one
+ * account. It has to be done again for live mode, and by then nobody remembers
+ * that the price needs `planId` in its METADATA — which is the field
+ * `readSubscription` reads to decide what a subscriber is entitled to. A price
+ * created without it looks completely normal and silently leaves every
+ * subscriber on the free allowance.
  *
  * ## Idempotent by metadata, not by name
  *
  * Every lookup here matches on `metadata.product === 'sellavant'` plus
- * `metadata.planId`. Names get edited in the dashboard by whoever is tidying
- * the product catalogue; metadata does not, and this Stripe account is shared
- * with other products, so "the one called Pilot" is not a safe identifier.
- * Re-running is therefore safe: it adopts what exists and creates only what is
- * missing.
+ * `metadata.planId` (and `metadata.interval` for prices). Names get edited in
+ * the dashboard by whoever is tidying the product catalogue; metadata does not,
+ * and this Stripe account is shared with other products, so "the one called
+ * Pilot" is not a safe identifier. Re-running is therefore safe: it adopts what
+ * exists and creates only what is missing.
  *
  * ## What it deliberately will not do
  *
@@ -35,46 +44,60 @@ import { stripeClient, BillingNotConfiguredError } from './customers.js';
  * re-pricing stays a deliberate commercial act performed in the dashboard.
  */
 
-/**
- * List price per plan, in cents.
- *
- * Deliberately here and not in `PLANS`. The model's numbers describe what a
- * plan ENTITLES you to and are read on every request; this is what we charge,
- * is read only when provisioning, and is the number that must never drift by
- * accident. Keeping it in the module that is allowed to create prices means
- * there is exactly one place to look before running this against live mode.
- */
-export const PLAN_PRICE_CENTS: Record<PlanId, number | null> = {
-  // Not for sale — the allowance you get without paying.
-  trial: null,
-  pilot: 29_900,
-  scale: 99_900,
-};
-
 /** Marks everything this application owns in a shared Stripe account. */
 const PRODUCT_TAG = 'sellavant';
 
-/** The only events `POST /api/billing/webhook` acts on. */
+/**
+ * What `POST /api/billing/webhook` must be sent.
+ *
+ * A SUPERSET of what it acts on today: the subscription events drive
+ * entitlement, while the product and price events keep the `billing_prices`
+ * catalogue current so the pricing page and checkout read one row instead of
+ * two hand-copied env vars. The route acknowledges anything it has no handler
+ * for, so subscribing ahead of the handler is safe and is the deliberate order
+ * — an event nobody is listening for is free, whereas a handler that never
+ * fires because the subscription is missing is a silent, stale catalogue.
+ *
+ * `price.updated` cannot carry an amount change; Stripe price amounts are
+ * immutable. It carries `active` and metadata, which is what the catalogue
+ * cares about.
+ *
+ * This is a FLOOR, not the whole set: `ensureWebhook` unions it into an adopted
+ * endpoint's existing `enabled_events` rather than replacing them, so anything
+ * subscribed in the dashboard survives provisioning.
+ */
 export const WEBHOOK_EVENTS: Stripe.WebhookEndpointCreateParams.EnabledEvent[] =
   [
     'customer.subscription.created',
     'customer.subscription.updated',
     'customer.subscription.deleted',
+    'price.created',
+    'price.updated',
+    'price.deleted',
+    'product.created',
+    'product.updated',
+    'product.deleted',
   ];
+
+const INTERVALS: BillingInterval[] = ['month', 'year'];
+
+export type ProvisionedPrice = {
+  interval: BillingInterval;
+  priceId: string;
+  amountCents: number;
+  created: boolean;
+  /**
+   * Set when an existing price charges something other than the plan table
+   * says. Reported, never corrected.
+   */
+  amountMismatch?: { existingCents: number; expectedCents: number };
+};
 
 export type ProvisionedPlan = {
   planId: PlanId;
   productId: string;
-  priceId: string;
-  /** The env var that must carry `priceId`. */
-  priceEnvVar: string;
-  amountCents: number;
-  created: { product: boolean; price: boolean };
-  /**
-   * Set when an existing price charges something other than
-   * `PLAN_PRICE_CENTS`. Reported, never corrected.
-   */
-  amountMismatch?: { existingCents: number; expectedCents: number };
+  productCreated: boolean;
+  prices: ProvisionedPrice[];
 };
 
 export type ProvisionResult = {
@@ -92,6 +115,17 @@ export type ProvisionResult = {
   };
   /** Env vars this deployment needs, ready to paste. */
   env: Record<string, string>;
+  /** Every price whose amount disagrees with the plan table. */
+  mismatches: string[];
+  /**
+   * What writing the price catalogue did. Absent on a dry run, and absent when
+   * the catalogue could not be reached — which is reported rather than thrown,
+   * because a Couchbase outage must not make the Stripe half of a provisioning
+   * run look like it failed when it in fact succeeded.
+   */
+  catalog?: PriceSyncOutcome[];
+  /** Why the catalogue was not written, when it was not. */
+  catalogError?: string;
 };
 
 export type ProvisionParams = {
@@ -107,12 +141,6 @@ export type ProvisionParams = {
   /** Report what would change and write nothing. */
   dryRun?: boolean;
 };
-
-function purchasable(): Array<Plan & { priceEnvVar: string }> {
-  return Object.values(PLANS).filter((p): p is Plan & { priceEnvVar: string } =>
-    Boolean(p.priceEnvVar)
-  );
-}
 
 /**
  * Every page of a Stripe list, as one array.
@@ -134,6 +162,17 @@ async function listAll<T extends { id: string }>(
     cursor = batch.data[batch.data.length - 1]?.id;
     if (!cursor) return out;
   }
+}
+
+function planDescription(plan: Plan): string {
+  const accounts =
+    plan.sellerAccounts === -1
+      ? 'Unlimited seller accounts'
+      : `${plan.sellerAccounts} seller account${
+          plan.sellerAccounts === 1 ? '' : 's'
+        }`;
+  const seats = plan.seats === -1 ? 'unlimited seats' : `${plan.seats} seats`;
+  return `${accounts}, ${seats}, $${plan.includedSpendUsd}/month of included AI usage.`;
 }
 
 async function ensureProduct(
@@ -159,9 +198,7 @@ async function ensureProduct(
 
   const created = await stripe.products.create({
     name: `Sellavant ${plan.label}`,
-    description:
-      `${plan.seats === -1 ? 'Unlimited' : plan.seats} seats, ` +
-      `$${plan.dailySpendUsd}/day of AI usage, image generation and supplier lookups.`,
+    description: planDescription(plan),
     metadata: { product: PRODUCT_TAG, planId: plan.id },
   });
   return { productId: created.id, created: true };
@@ -170,15 +207,14 @@ async function ensureProduct(
 async function ensurePrice(
   stripe: Stripe,
   plan: Plan,
+  interval: BillingInterval,
   productId: string,
-  amountCents: number,
   dryRun: boolean
-): Promise<
-  Pick<ProvisionedPlan, 'priceId' | 'amountMismatch'> & {
-    created: boolean;
-  }
-> {
-  if (!dryRun || !productId.startsWith('(')) {
+): Promise<ProvisionedPrice> {
+  const amountCents = priceCentsFor(plan, interval);
+
+  const pending = productId.startsWith('(');
+  if (!pending) {
     const prices = await listAll<Stripe.Price>((startingAfter) =>
       stripe.prices.list({
         product: productId,
@@ -190,13 +226,15 @@ async function ensurePrice(
 
     const existing = prices.find(
       (p) =>
-        p.recurring?.interval === 'month' &&
-        p.metadata?.['planId'] === plan.id &&
-        p.type === 'recurring'
+        p.type === 'recurring' &&
+        p.recurring?.interval === interval &&
+        p.metadata?.['planId'] === plan.id
     );
     if (existing) {
       return {
+        interval,
         priceId: existing.id,
+        amountCents,
         created: false,
         ...(existing.unit_amount !== amountCents
           ? {
@@ -212,7 +250,9 @@ async function ensurePrice(
 
   if (dryRun) {
     return {
-      priceId: `(would create ${plan.id} @ ${amountCents})`,
+      interval,
+      priceId: `(would create ${plan.id}/${interval} @ ${amountCents})`,
+      amountCents,
       created: true,
     };
   }
@@ -221,13 +261,21 @@ async function ensurePrice(
     product: productId,
     currency: 'usd',
     unit_amount: amountCents,
-    recurring: { interval: 'month' },
+    recurring: { interval },
+    nickname: `${plan.label} ${interval === 'year' ? 'yearly' : 'monthly'}`,
     // THE load-bearing field. `readSubscription` reads the plan from here, not
     // from the product name or the amount, because those two get edited and
-    // discounted respectively.
-    metadata: { planId: plan.id, product: PRODUCT_TAG },
+    // discounted respectively. `interval` is here so the two prices on one
+    // product stay distinguishable without parsing `recurring`.
+    metadata: { planId: plan.id, interval, product: PRODUCT_TAG },
   });
-  return { priceId: created.id, created: true };
+
+  return {
+    interval,
+    priceId: created.id,
+    amountCents,
+    created: true,
+  };
 }
 
 /**
@@ -283,8 +331,8 @@ async function ensurePortalConfiguration(
       enabled: true,
       default_allowed_updates: ['price'],
       proration_behavior: 'create_prorations',
-      // Only OUR plans. Left unset, the portal offers every active price in the
-      // account, which here includes two unrelated products.
+      // Only OUR plans, and BOTH intervals of each, so the portal is also how
+      // somebody moves from monthly to yearly without talking to us.
       //
       // This field is EXPANDABLE, so a plain retrieve comes back without it and
       // looks exactly like a configuration where it never saved. Verify with
@@ -296,7 +344,7 @@ async function ensurePortalConfiguration(
       // a legacy price still sees the portal; they can only move onto these.
       products: plans.map((p) => ({
         product: p.productId,
-        prices: [p.priceId],
+        prices: p.prices.map((price) => price.priceId),
       })),
     },
   };
@@ -321,8 +369,9 @@ async function ensurePortalConfiguration(
 
   if (existing) {
     // Updated rather than left alone: the plan list embedded in it goes stale
-    // the moment a plan is added, and a portal offering a plan that no longer
-    // exists is a checkout that fails after the customer has decided to pay.
+    // the moment a plan or interval is added, and a portal offering a price
+    // that no longer exists is a checkout that fails after the customer has
+    // decided to pay.
     const updated = await stripe.billingPortal.configurations.update(
       existing.id,
       body
@@ -380,8 +429,22 @@ async function ensureWebhook(
     const callerSpecifiedQuery = url.includes('?');
     const keepUrl = callerSpecifiedQuery ? url : existing.url;
 
+    // UNION, not replace. This endpoint may well have been made in the
+    // dashboard — the live one was — and carry events subscribed for reasons
+    // that predate this file. Overwriting would unsubscribe them silently: the
+    // only symptom is an event that stops arriving, months later, with nothing
+    // in any log to connect it to a provisioning run. Provision's job is to
+    // guarantee OUR events are present, not to assert that nothing else may be.
+    //
+    // `*` already means every event, so adding to it would be noise.
+    const subscribed = existing.enabled_events ?? [];
+    const mergedEvents = subscribed.includes('*')
+      ? subscribed
+      : [...new Set<string>([...subscribed, ...WEBHOOK_EVENTS])];
+
     const updated = await stripe.webhookEndpoints.update(existing.id, {
-      enabled_events: WEBHOOK_EVENTS,
+      enabled_events:
+        mergedEvents as Stripe.WebhookEndpointUpdateParams.EnabledEvent[],
       disabled: false,
       ...(keepUrl !== existing.url ? { url: keepUrl } : {}),
     });
@@ -409,7 +472,7 @@ async function ensureWebhook(
  *
  * Safe to re-run. Reports the account it wrote to, because the mistake that
  * costs the most here is provisioning the wrong one — a test key and a live key
- * are eight characters apart and the API accepts both without comment.
+ * are four characters apart and the API accepts both without comment.
  */
 export async function provisionBilling(
   params: ProvisionParams
@@ -434,31 +497,21 @@ export async function provisionBilling(
     .catch(() => 'unknown (key lacks account-read permission)');
 
   const plans: ProvisionedPlan[] = [];
-  for (const plan of purchasable()) {
-    const amountCents = PLAN_PRICE_CENTS[plan.id];
-    if (amountCents === null || amountCents === undefined) {
-      throw new Error(
-        `Plan "${plan.id}" is purchasable but has no price in PLAN_PRICE_CENTS.`
+  for (const plan of purchasablePlans()) {
+    const product = await ensureProduct(stripe, plan, dryRun);
+
+    const prices: ProvisionedPrice[] = [];
+    for (const interval of INTERVALS) {
+      prices.push(
+        await ensurePrice(stripe, plan, interval, product.productId, dryRun)
       );
     }
-
-    const product = await ensureProduct(stripe, plan, dryRun);
-    const price = await ensurePrice(
-      stripe,
-      plan,
-      product.productId,
-      amountCents,
-      dryRun
-    );
 
     plans.push({
       planId: plan.id,
       productId: product.productId,
-      priceId: price.priceId,
-      priceEnvVar: plan.priceEnvVar,
-      amountCents,
-      created: { product: product.created, price: price.created },
-      ...(price.amountMismatch ? { amountMismatch: price.amountMismatch } : {}),
+      productCreated: product.created,
+      prices,
     });
   }
 
@@ -471,8 +524,42 @@ export async function provisionBilling(
   const env: Record<string, string> = {
     STRIPE_PORTAL_CONFIGURATION_ID: portal.configurationId,
   };
-  for (const p of plans) env[p.priceEnvVar] = p.priceId;
+  const mismatches: string[] = [];
+  for (const plan of plans) {
+    for (const price of plan.prices) {
+      if (price.amountMismatch) {
+        mismatches.push(
+          `${plan.planId}/${price.interval} ${price.priceId} charges ` +
+            `$${(price.amountMismatch.existingCents / 100).toFixed(
+              2
+            )} but the ` +
+            `plan table says $${(
+              price.amountMismatch.expectedCents / 100
+            ).toFixed(2)}`
+        );
+      }
+    }
+  }
   if (webhook?.secret) env['STRIPE_ENDPOINT_SECRET'] = webhook.secret;
+
+  // The catalogue is written LAST and only for real, because it is a projection
+  // of the Stripe objects above: writing it first would publish price ids that
+  // a later failure means do not exist. A dry run must touch nothing at all.
+  //
+  // A Couchbase failure is captured rather than thrown. Everything in Stripe
+  // has already happened by this point and is not rolled back, so throwing
+  // would report a total failure for a run that in fact half-succeeded — and
+  // the operator's next move (re-run it) is the same either way.
+  let catalog: PriceSyncOutcome[] | undefined;
+  let catalogError: string | undefined;
+  if (!dryRun) {
+    try {
+      catalog = await syncPriceCatalog();
+    } catch (error) {
+      catalogError =
+        error instanceof Error ? `${error.name}: ${error.message}` : 'unknown';
+    }
+  }
 
   return {
     accountId,
@@ -485,5 +572,91 @@ export async function provisionBilling(
     portal,
     ...(webhook ? { webhook } : {}),
     env,
+    mismatches,
+    ...(catalog ? { catalog } : {}),
+    ...(catalogError ? { catalogError } : {}),
   };
+}
+
+/**
+ * Deactivate prices this application owns whose amount no longer matches the
+ * plan table.
+ *
+ * Separate from `provisionBilling`, and separate on purpose: `provision` is
+ * safe to run on a schedule and must never change what anybody is charged.
+ * This is the deliberate act, and it is still not a re-price — existing
+ * subscribers stay on the price they signed up to, because that is what Stripe
+ * subscriptions reference. It only stops the stale price being sold again.
+ */
+export async function deactivateStalePrices(params: {
+  dryRun?: boolean;
+}): Promise<Array<{ priceId: string; planId: string; reason: string }>> {
+  const stripe = stripeClient();
+  if (!stripe) throw new BillingNotConfiguredError();
+
+  const wanted = new Set<string>();
+  for (const plan of purchasablePlans()) {
+    for (const interval of INTERVALS) {
+      wanted.add(`${plan.id}:${interval}:${priceCentsFor(plan, interval)}`);
+    }
+  }
+
+  // Ownership is decided by the PRODUCT, exactly as `ensurePrice` decides it.
+  //
+  // The obvious shortcut — require `metadata.product === 'sellavant'` on the
+  // price — silently misses every price created before that tag was a
+  // convention, including the ones this function exists to retire. Provision
+  // would keep reporting a mismatch while retirement kept reporting nothing to
+  // do, and the two would disagree forever.
+  const products = await listAll<Stripe.Product>((startingAfter) =>
+    stripe.products.list({
+      active: true,
+      limit: 100,
+      starting_after: startingAfter,
+    })
+  );
+  const ours = new Map<string, string>();
+  for (const product of products) {
+    const planId = product.metadata?.['planId'];
+    if (product.metadata?.['product'] === PRODUCT_TAG && planId) {
+      ours.set(product.id, planId);
+    }
+  }
+
+  const prices: Stripe.Price[] = [];
+  for (const productId of ours.keys()) {
+    prices.push(
+      ...(await listAll<Stripe.Price>((startingAfter) =>
+        stripe.prices.list({
+          product: productId,
+          active: true,
+          limit: 100,
+          starting_after: startingAfter,
+        })
+      ))
+    );
+  }
+
+  const stale = prices.filter((p) => {
+    const productId = typeof p.product === 'string' ? p.product : p.product?.id;
+    const planId = p.metadata?.['planId'] ?? (productId && ours.get(productId));
+    if (!planId || !(planId in PLANS)) return false;
+    const interval = billingIntervalSchema.safeParse(p.recurring?.interval);
+    if (!interval.success) return true;
+    return !wanted.has(`${planId}:${interval.data}:${p.unit_amount ?? -1}`);
+  });
+
+  const out: Array<{ priceId: string; planId: string; reason: string }> = [];
+  for (const price of stale) {
+    const reason = `${((price.unit_amount ?? 0) / 100).toFixed(2)} ${
+      price.recurring?.interval ?? '?'
+    } no longer in the plan table`;
+    out.push({
+      priceId: price.id,
+      planId: String(price.metadata?.['planId']),
+      reason,
+    });
+    if (!params.dryRun) await stripe.prices.update(price.id, { active: false });
+  }
+  return out;
 }

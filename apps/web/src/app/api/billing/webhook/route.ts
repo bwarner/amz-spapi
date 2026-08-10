@@ -1,5 +1,10 @@
 import type Stripe from 'stripe';
-import { readSubscription, verifyWebhook } from '@amz-spapi/billing';
+import {
+  applyCatalogEvent,
+  isCatalogEvent,
+  readSubscription,
+  verifyWebhook,
+} from '@amz-spapi/billing';
 import {
   findWorkspaceByCustomer,
   updateWorkspaceSubscription,
@@ -52,6 +57,44 @@ export async function POST(request: Request) {
       'rejected an unverifiable webhook'
     );
     return Response.json({ error: 'Invalid signature.' }, { status: 400 });
+  }
+
+  // Price and product changes keep the price catalogue current. Handled before
+  // the subscription branch because they carry a Price or Product, not a
+  // Subscription, and everything below this point assumes the latter.
+  if (isCatalogEvent(event.type)) {
+    try {
+      const outcomes = await applyCatalogEvent(event);
+      if (!outcomes) {
+        // Somebody else's product. The Stripe account is shared, and without
+        // this the catalogue would fill with other applications' prices.
+        return Response.json({ received: true, matched: false });
+      }
+      log.info(
+        { type: event.type, outcomes },
+        'price catalogue synced from a Stripe event'
+      );
+      return Response.json({ received: true });
+    } catch (error) {
+      // 500 so Stripe retries. A missed price event leaves the catalogue
+      // quoting a price Stripe may have withdrawn, and nothing else would
+      // notice until `billing verify` runs or a checkout fails.
+      log.error(
+        {
+          type: event.type,
+          error:
+            error instanceof Error ? `${error.name}: ${error.message}` : error,
+        },
+        'could not sync the price catalogue'
+      );
+      await captureServerException(error, {
+        properties: { feature: 'billing', phase: 'catalog', type: event.type },
+      });
+      return Response.json(
+        { error: 'Could not apply event.' },
+        { status: 500 }
+      );
+    }
   }
 
   const handled = new Set([

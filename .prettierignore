@@ -11,3 +11,11 @@
 # formatting; leave it alone.
 /packages/amazon-ads-generated/src/lib
 /packages/amazon-sp-generated/src/lib
+
+# The pnpm lockfile. pnpm rewrites it in its own canonical style on every
+# install, so formatting it here means the two fight: prettier wraps
+# `resolution: { integrity: … }` across three lines, the next `pnpm install`
+# unwraps every one of them, and a one-line dependency change arrives as a
+# 15,000-line diff nobody can review. Same reasoning as the generated types
+# above — the tool owns the formatting.
+/pnpm-lock.yaml

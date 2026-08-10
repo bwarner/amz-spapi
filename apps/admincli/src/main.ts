@@ -26,13 +26,19 @@ import {
 import { writeFile } from 'node:fs/promises';
 import {
   createBillingCustomer,
+  deactivateStalePrices,
+  firstSubscribedAtFor,
   linkCustomerToWorkspace,
   provisionBilling,
+  syncPriceCatalog,
+  verifyConfiguredPrices,
 } from '@amz-spapi/billing';
 import { renderTable } from './format.js';
 import {
   attachCustomerToWorkspace,
+  backfillFirstSubscribedAt,
   findWorkspacesWithoutCustomer,
+  findWorkspacesWithoutTrialHistory,
 } from './backfill.js';
 import { createS3ObjectStore } from './object-store.js';
 
@@ -715,29 +721,27 @@ billing
       } mode)\n`
     );
 
-    for (const p of result.plans) {
-      if (p.amountMismatch) {
-        process.stderr.write(
-          `WARNING: ${p.planId} price ${p.priceId} charges ` +
-            `$${(p.amountMismatch.existingCents / 100).toFixed(2)}, but ` +
-            `PLAN_PRICE_CENTS says $${(
-              p.amountMismatch.expectedCents / 100
-            ).toFixed(
-              2
-            )}. Stripe prices are immutable — re-price deliberately ` +
-            `in the dashboard.\n`
-        );
-        process.exitCode = 1;
-      }
+    for (const mismatch of result.mismatches) {
+      process.stderr.write(
+        `WARNING: ${mismatch}. Stripe prices are immutable in amount — ` +
+          `re-pricing means minting a new price, which does NOT move existing ` +
+          `subscribers. Use \`billing retire-prices\` deliberately.\n`
+      );
+      process.exitCode = 1;
     }
 
-    const rows = result.plans.map((p) => ({
-      plan: p.planId,
-      product: p.productId,
-      price: p.priceId,
-      monthly: `$${(p.amountCents / 100).toFixed(2)}`,
-      created: p.created.product || p.created.price ? 'yes' : 'no',
-    }));
+    // One row per PRICE, not per plan: a plan now has a monthly and a yearly,
+    // and collapsing them loses the id you actually need to paste.
+    const rows = result.plans.flatMap((p) =>
+      p.prices.map((price) => ({
+        plan: p.planId,
+        interval: price.interval,
+        product: p.productId,
+        price: price.priceId,
+        amount: `$${(price.amountCents / 100).toFixed(2)}`,
+        created: price.created || p.productCreated ? 'yes' : 'no',
+      }))
+    );
 
     if (options.format === 'json') {
       // The whole result, so `| jq` can reach the portal id and the secret.
@@ -777,6 +781,35 @@ billing
       return;
     }
 
+    // The catalogue is what checkout reads, so a run that provisioned Stripe
+    // correctly but failed to write it has NOT made the environment usable.
+    if (result.catalogError) {
+      process.stderr.write(
+        `\nStripe is provisioned, but the price catalogue was NOT written:\n` +
+          `  ${result.catalogError}\n` +
+          `Checkout will answer 503 until this succeeds. Re-run, or run\n` +
+          `\`admincli billing sync-prices\` once Couchbase is reachable.\n`
+      );
+      process.exitCode = 1;
+    } else if (result.catalog) {
+      const unsellable = result.catalog.filter(
+        (o) => o.action === 'deactivated'
+      );
+      process.stderr.write(
+        `\nprice catalogue: ${
+          result.catalog.filter((o) => o.action === 'written').length
+        } written, ${
+          result.catalog.filter((o) => o.action === 'unchanged').length
+        } unchanged, ${unsellable.length} unsellable\n`
+      );
+      for (const outcome of unsellable) {
+        process.stderr.write(
+          `  ${outcome.planId}/${outcome.interval}: ${outcome.reason}\n`
+        );
+      }
+      if (unsellable.length > 0) process.exitCode = 1;
+    }
+
     process.stderr.write('\nSet these in the environment:\n');
     for (const [key, value] of Object.entries(result.env)) {
       const shown =
@@ -791,6 +824,239 @@ billing
           'reissued. Keep the STRIPE_ENDPOINT_SECRET you already have, or roll it\n' +
           'from the endpoint page in the Stripe dashboard.\n'
       );
+    }
+  });
+
+/**
+ * Stop selling a price whose amount has left the plan table.
+ *
+ * Separate from `provision`, which is safe to re-run and must never change what
+ * anybody is charged. This is still NOT a re-price: Stripe subscriptions
+ * reference a price object, so existing subscribers keep paying what they
+ * agreed to. All this does is take the old amount off the shelf.
+ */
+billing
+  .command('retire-prices')
+  .description(
+    'Deactivate our Stripe prices that no longer match the plan table'
+  )
+  .option('--apply', 'actually write; without this it only reports')
+  .option('--live', 'permit writing to a live-mode account')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to retire.');
+    }
+    const apply = Boolean(options.apply);
+    const live = !/^(sk|rk)_test_/.test(process.env['STRIPE_SECRET_KEY'] ?? '');
+    if (live && apply && !options.live) {
+      fail('Refusing to write to a LIVE account without --live.');
+    }
+
+    const retired = await deactivateStalePrices({ dryRun: !apply });
+    emit(retired, options.format);
+
+    if (retired.length === 0) {
+      process.stderr.write('Every price matches the plan table.\n');
+    } else if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
+      );
+    } else {
+      process.stderr.write(
+        `\n${retired.length} price(s) deactivated. Existing subscribers are ` +
+          'UNAFFECTED — they keep the price they signed up to.\n'
+      );
+    }
+  });
+
+/**
+ * Record, for workspaces that predate the field, whether they have ever
+ * subscribed.
+ *
+ * The free trial is for a workspace that has never subscribed, and that is now
+ * decided by the write-once `firstSubscribedAt`. Workspaces created before it
+ * existed have no value, so they all read as trial-eligible — including anyone
+ * who subscribed and cancelled, who would get a second free trial.
+ *
+ * STRIPE is the authority here, not our own data: cancellation clears
+ * `stripeSubscriptionId`, so the local record cannot tell "never subscribed"
+ * from "subscribed and cancelled". Only a customer with real subscription
+ * history is stamped; one that has genuinely never subscribed is left alone,
+ * because stamping it would deny a trial nobody has used.
+ */
+billing
+  .command('backfill-trial-history')
+  .description(
+    'Record first-subscription dates from Stripe for older workspaces'
+  )
+  .option('--apply', 'actually write; without this it only reports')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — Stripe is the source here.');
+    }
+    assertConnection();
+    const apply = Boolean(options.apply);
+
+    const candidates = await findWorkspacesWithoutTrialHistory();
+    if (candidates.length === 0) {
+      process.stderr.write(
+        'Every workspace with a Stripe customer already records one.\n'
+      );
+      emit([], options.format);
+      return;
+    }
+
+    const results: Array<Record<string, unknown>> = [];
+    for (const row of candidates) {
+      try {
+        const first = await firstSubscribedAtFor(row.stripeCustomerId);
+        if (first === null) {
+          results.push({
+            workspaceId: row.workspaceId,
+            name: row.name,
+            action: 'never subscribed — left trial-eligible',
+          });
+          continue;
+        }
+        if (!apply) {
+          results.push({
+            workspaceId: row.workspaceId,
+            name: row.name,
+            action: 'would stamp',
+            firstSubscribedAt: new Date(first).toISOString(),
+          });
+          continue;
+        }
+        await backfillFirstSubscribedAt(row.workspaceId, first);
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          action: 'stamped',
+          firstSubscribedAt: new Date(first).toISOString(),
+        });
+      } catch (error) {
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          error: describe(error),
+        });
+        process.exitCode = 1;
+      }
+    }
+
+    emit(results, options.format);
+    if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
+      );
+    }
+  });
+
+/**
+ * Rebuild the price catalogue from Stripe.
+ *
+ * `provision --apply` already does this, so this exists for the case where
+ * Stripe changed but nothing needs provisioning — a price deactivated in the
+ * dashboard, or a webhook delivery that was missed while the endpoint was
+ * misconfigured. Idempotent: it recomputes desired state rather than patching.
+ *
+ * Writes only what matches the plan table. A price whose amount has drifted
+ * makes its plan UNSELLABLE rather than mispriced, which is the safe direction:
+ * a 503 gets fixed today, a silent overcharge becomes a refund and an apology.
+ */
+billing
+  .command('sync-prices')
+  .description('Rebuild the billing_prices catalogue from Stripe')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to sync from.');
+    }
+    assertConnection();
+
+    const outcomes = await syncPriceCatalog();
+
+    emit(
+      outcomes.map((o) => ({
+        plan: o.planId,
+        interval: o.interval,
+        action: o.action,
+        price: o.priceId ?? '(none)',
+        detail: o.reason ?? '',
+      })),
+      options.format
+    );
+
+    const unsellable = outcomes.filter((o) => o.action === 'deactivated');
+    if (unsellable.length > 0) {
+      process.stderr.write(
+        `\n${unsellable.length} plan/interval pair(s) have NO sellable price. ` +
+          'Checkout for them will answer 503 until a Stripe price matching the ' +
+          'plan table exists.\n'
+      );
+      process.exitCode = 1;
+    }
+  });
+
+/**
+ * Check that what we CHARGE matches what the pricing page ADVERTISES.
+ *
+ * Starts from the price CATALOGUE — the row checkout actually reads — and walks
+ * it out to Stripe and back to the plan table, which is the path a real payment
+ * takes. `syncPriceCatalog` already refuses to write a row whose amount
+ * disagrees with the plan table, so most divergence is now prevented rather
+ * than found here; what remains is drift that happens nowhere near a write, of
+ * which a plan table edited AFTER the last sync is the important one.
+ *
+ * Read-only, and exits non-zero on any problem. Safe to run on a schedule
+ * against every environment, which is the point: it is wrong exactly when
+ * nobody looks.
+ *
+ * Reads Couchbase as well as Stripe now, because the catalogue lives there.
+ */
+billing
+  .command('verify')
+  .description('Check the catalogued Stripe prices against the plan table')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — nothing to verify against.');
+    }
+    assertConnection();
+
+    const result = await verifyConfiguredPrices();
+
+    emit(
+      result.findings.map((f) => ({
+        plan: f.planId,
+        interval: f.interval,
+        price: f.priceId ?? '(unset)',
+        status: f.problems.length === 0 ? 'ok' : 'PROBLEM',
+        detail: f.problems.join('; ') || '',
+      })),
+      options.format
+    );
+
+    for (const orphan of result.unexpected) {
+      process.stderr.write(
+        `note: ${orphan.priceId} ($${(orphan.amountCents / 100).toFixed(2)} ` +
+          `${orphan.interval}, planId=${orphan.planId}) is active on one of our ` +
+          `products but is not configured anywhere.\n`
+      );
+    }
+
+    if (result.ok) {
+      process.stderr.write(
+        '\nEvery configured price matches the plan table.\n'
+      );
+    } else {
+      process.stderr.write(
+        '\nMISMATCH: the page and the checkout disagree. Customers are being ' +
+          'quoted one amount and charged another.\n'
+      );
+      process.exitCode = 1;
     }
   });
 

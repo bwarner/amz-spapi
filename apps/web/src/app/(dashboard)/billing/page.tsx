@@ -1,13 +1,17 @@
 import type { Metadata } from 'next';
 import {
+  RECOMMENDED_PLAN,
   dailySpendCeilingUsd,
   effectivePlan,
+  planFeatures,
   purchasablePlans,
 } from '@farvisionllc/models';
+import { Badge } from '@/components/ui/badge';
 import { auth0 } from '../../../lib/auth0';
 import { currentWorkspace } from '../../../lib/workspace-context';
 import { spendTodayUsd } from '../../../lib/cost-ledger';
 import { BillingActions } from './billing-actions';
+import { BillingPortalButton } from './billing-portal-button';
 
 export const metadata: Metadata = { title: 'Billing' };
 
@@ -39,15 +43,27 @@ export default async function BillingPage() {
   const isOwner = membership.role === 'owner';
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8">
+    // max-w-4xl to match `team`, the page next to it in the nav. A 3xl column
+    // left the two upgrade cards noticeably narrower than the plan card above
+    // them on a wide display, which read as a layout accident.
+    <div className="container mx-auto max-w-4xl px-4 py-6 sm:py-8">
       <h1 className="text-2xl font-semibold tracking-tight">Billing</h1>
+      {/* Labelled, because a bare name under a "Billing" heading reads as
+          branding rather than data — especially when the workspace happens to
+          be named after the product. It answers "whose bill is this", which
+          only becomes a real question once somebody belongs to two. */}
       <p className="mt-2 text-sm leading-6 text-muted-foreground">
-        {workspace.name}
+        Workspace · {workspace.name}
       </p>
 
-      <div className="mt-8 rounded-lg border p-5">
+      {/* Accented, because the whole point of this card is "the one you are on"
+          and a plain border made it look like a third upgrade option. */}
+      <div className="mt-6 rounded-lg border border-primary/40 bg-primary/3 p-4 sm:mt-8 sm:p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-lg font-semibold">{plan.label}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">{plan.label}</h2>
+            <Badge variant="secondary">Current plan</Badge>
+          </div>
           {workspace.subscriptionStatus ? (
             <span className="text-sm text-muted-foreground">
               Subscription {workspace.subscriptionStatus}
@@ -59,10 +75,15 @@ export default async function BillingPage() {
           )}
         </div>
 
-        <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+        <dl className="mt-4 grid gap-3 sm:grid-cols-2 sm:gap-4">
           <div>
+            {/* "Today" said WHEN but never what, leaving the figure to be
+                explained by the helper line below it. "Spend" is the word the
+                plan table and the pricing page already use — `dailySpendUsd`,
+                "$5/day spend ceiling" — so the label matches what was
+                advertised. */}
             <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-              Today
+              Spend today
             </dt>
             <dd className="mt-1 text-2xl font-semibold tabular-nums">
               ${spent.toFixed(2)}
@@ -93,17 +114,34 @@ export default async function BillingPage() {
             ) : null}
           </div>
         </dl>
+
+        {/* Only the owner may reach the portal — it can cancel the
+            subscription and change the card. The route enforces that too; this
+            just avoids offering an action that would be refused. */}
+        {isOwner && workspace.stripeCustomerId ? (
+          <BillingPortalButton
+            // The same signal `BillingActions` uses, so the two halves of this
+            // page cannot disagree about whether a subscription exists.
+            hasSubscription={Boolean(workspace.stripeSubscriptionId)}
+          />
+        ) : null}
       </div>
 
       {isOwner ? (
         <BillingActions
           currentPlan={plan.id}
           hasSubscription={Boolean(workspace.stripeSubscriptionId)}
+          // Write-once, so it stays false after a cancellation — the page must
+          // not advertise a free trial the checkout route will refuse.
+          trialEligible={!workspace.firstSubscribedAt}
           plans={purchasablePlans().map((p) => ({
             id: p.id,
             label: p.label,
+            monthlyCents: p.monthlyCents,
             dailySpendUsd: p.dailySpendUsd,
             seats: p.seats,
+            features: planFeatures(p),
+            recommended: p.id === RECOMMENDED_PLAN,
           }))}
         />
       ) : (

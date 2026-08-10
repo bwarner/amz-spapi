@@ -107,6 +107,12 @@ recurring price per purchasable plan, a customer portal configuration, and a
 webhook endpoint. `billing provision` creates whatever is missing and prints the
 environment variables to set.
 
+> **Running this is a REQUIRED step for a new environment, not an optional
+> tidy-up.** `--apply` also writes the `billing_prices` catalogue, and checkout
+> reads its price ids from there — no env var carries them any more. Until the
+> catalogue is populated, every purchase answers 503. `billing verify` is the
+> quickest way to confirm it took.
+
 ```bash
 # Always look first. This is the default.
 ./admincli.sh billing provision
@@ -122,11 +128,13 @@ Idempotent — it matches on `metadata.product = sellavant` plus
 creates nothing twice. That matters because this Stripe account is shared with
 other products.
 
-Unlike the rest of this CLI it needs **no Couchbase connection**, only
-`STRIPE_SECRET_KEY` — so it works when standing up a new environment before the
-database exists.
+It needs both `STRIPE_SECRET_KEY` and a Couchbase connection: the Stripe half
+would work without a database, but the catalogue write is what makes the
+environment actually usable, so the two are done together on purpose. A run
+whose Stripe half succeeded and whose catalogue write failed says so and exits
+non-zero rather than reporting success.
 
-Three things to know:
+Four things to know:
 
 - **The account is printed before anything is written.** A test key and a live
   key differ by four characters, so live mode also requires `--live` on top of
@@ -140,6 +148,12 @@ Three things to know:
   subscribers, so it looks successful while changing nobody's bill. A price
   that disagrees with `PLAN_PRICE_CENTS` is reported and the command exits
   non-zero.
+- **A price is only catalogued if its amount MATCHES the plan table.** That is
+  what makes the pricing page and the checkout structurally unable to disagree,
+  and it means a mismatched price leaves its plan unsellable rather than
+  mispriced — a 503 you fix today instead of a mischarge you refund later.
+  `billing sync-prices` rebuilds the catalogue on its own when Stripe changed
+  but nothing needs provisioning.
 
 Omit `--webhook-url` for local development: Stripe cannot reach
 `local.sellavant.com`, so forward deliveries instead, and use the secret it

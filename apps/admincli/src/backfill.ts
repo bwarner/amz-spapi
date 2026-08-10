@@ -83,3 +83,62 @@ export async function attachCustomerToWorkspace(
     updatedAt: Date.now(),
   });
 }
+
+export type TrialHistoryCandidate = {
+  workspaceId: string;
+  name: string;
+  stripeCustomerId: string;
+};
+
+/**
+ * Workspaces with a Stripe customer but no `firstSubscribedAt`.
+ *
+ * These predate the field. Each has to be asked about individually, because
+ * nothing stored locally can distinguish "never subscribed" from "subscribed
+ * and cancelled" — cancellation clears `stripeSubscriptionId`, which is the
+ * whole reason the field was added.
+ */
+export async function findWorkspacesWithoutTrialHistory(): Promise<
+  TrialHistoryCandidate[]
+> {
+  const { rows } = await executeQuery<TrialHistoryCandidate>(
+    DOMAIN,
+    `SELECT w.workspaceId, w.name, w.stripeCustomerId
+       FROM \`identity_workspaces\` w
+      WHERE w.firstSubscribedAt IS MISSING
+        AND w.stripeCustomerId IS NOT MISSING`
+  );
+  return rows;
+}
+
+/**
+ * Stamp `firstSubscribedAt` on a workspace that predates it.
+ *
+ * Write-once here too: refuses if the field is already set, so re-running can
+ * never move the date forward. Moving it forward would be indistinguishable
+ * from a fresh customer and would hand out another free trial — the exact
+ * failure the field exists to prevent.
+ */
+export async function backfillFirstSubscribedAt(
+  workspaceId: string,
+  firstSubscribedAt: number
+): Promise<void> {
+  const doc = await getDocument<Record<string, unknown>>(
+    DOMAIN,
+    WORKSPACES,
+    workspaceId
+  );
+  if (!doc) throw new Error(`No workspace ${workspaceId}.`);
+  if (doc['firstSubscribedAt']) {
+    throw new Error(
+      `${workspaceId} already records a first subscription at ` +
+        `${String(doc['firstSubscribedAt'])}.`
+    );
+  }
+
+  await upsertDocument(DOMAIN, WORKSPACES, workspaceId, {
+    ...doc,
+    firstSubscribedAt,
+    updatedAt: Date.now(),
+  });
+}

@@ -16,6 +16,18 @@
       "env": {
         "CB_MCP_READ_ONLY_MODE": "true"
       }
+    },
+    "playwright": {
+      "command": "/Users/bwarner/.volta/bin/npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "env": {
+        "VOLTA_HOME": "/Users/bwarner/.volta",
+        "PATH": "/Users/bwarner/.volta/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
     }
   }
 }

@@ -153,13 +153,26 @@ export async function recordModelUsage(params: {
       chatId,
     }),
     captureServerEvent({
-      // The same opaque reference the ledger uses, so spend can be joined
-      // across the two without either carrying an Auth0 id.
-      distinctId: userRef(userId),
+      // The SAME id the browser identifies with — `posthog.identify(
+      // session.user.sub, …)` in `PostHogProvider`. This used to be
+      // `userRef(userId)`, a hash, which produced a second PostHog person that
+      // `identify` never merged with: AI usage could not be joined to the
+      // account that incurred it, or to any funnel, and the split was invisible
+      // because both populations looked plausible on their own.
+      //
+      // The hash bought no privacy here. `identify` already attaches the user's
+      // EMAIL, so PostHog holds a far more direct identifier than the Auth0
+      // subject either way.
+      distinctId: userId,
       event: 'ai_model_turn',
       properties: {
         feature,
         model: modelId,
+        // Kept as a PROPERTY, which is what the original comment was really
+        // after: `ops.cost_ledger` and the OTel spans key on this hash, so
+        // spend still joins across all three without the ledger having to
+        // carry an Auth0 id.
+        user_ref: userRef(userId),
         input_tokens: usage.inputTokens ?? 0,
         billed_input_tokens: billedInputTokens,
         cached_input_tokens: usage.cachedInputTokens ?? 0,

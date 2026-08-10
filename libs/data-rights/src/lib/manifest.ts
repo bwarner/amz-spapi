@@ -85,6 +85,20 @@ export const OWNERSHIP: CollectionOwnership[] = [
     },
   },
 
+  // ── Billing ───────────────────────────────────────────────────────────────
+  {
+    collection: 'billing_prices',
+    ownership: {
+      kind: 'not-personal',
+      because:
+        'The Stripe price catalogue — plan id, interval, price id and amount. ' +
+        'A projection of our own published pricing, identical for every ' +
+        'customer, holding no subject, no customer id and no subscription. ' +
+        'What a particular person BOUGHT lives on their workspace, which is ' +
+        'classified separately and is what a purge acts on.',
+    },
+  },
+
   // ── Identity ──────────────────────────────────────────────────────────────
   { collection: 'identity_members', ownership: userField() },
   {

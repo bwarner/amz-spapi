@@ -9,10 +9,87 @@ import { stripeClient, BillingNotConfiguredError } from './customers.js';
  * this library deliberately does not know what a workspace is.
  */
 
-/** The price id for a plan, or undefined when the deployment has not set one. */
-export function priceIdFor(priceEnvVar: string): string | undefined {
-  const value = process.env[priceEnvVar];
-  return value && value.trim() ? value.trim() : undefined;
+/** A promotion code as the customer sees it, resolved to what Stripe needs. */
+export type ResolvedPromotion = {
+  /** Stripe's `promo_…` id, which is what `discounts` takes. */
+  promotionCodeId: string;
+  /** The code as typed, for display. */
+  code: string;
+  /** Human-readable summary, e.g. "50% off for 3 months". */
+  description: string;
+};
+
+/**
+ * Look a customer-facing promotion code up.
+ *
+ * Stripe's `discounts` parameter takes a `promo_…` id, never the code someone
+ * types or puts in a URL, so this translation is unavoidable. It is also the
+ * validation step: an unknown, expired or exhausted code returns null here
+ * rather than failing the checkout call, which lets the caller decide between
+ * "show it applied" and "carry on without it".
+ *
+ * Deliberately tolerant. A promo code arrives from a query string on a landing
+ * page, so it is attacker-controlled and usually just stale. Refusing to create
+ * a checkout session because an old ad still points at a finished campaign
+ * would turn a marketing problem into a lost sale.
+ */
+export async function findPromotionCode(
+  code: string
+): Promise<ResolvedPromotion | null> {
+  const stripe = stripeClient();
+  if (!stripe) return null;
+
+  const trimmed = code.trim();
+  if (!trimmed) return null;
+
+  try {
+    const { data } = await stripe.promotionCodes.list({
+      code: trimmed,
+      active: true,
+      limit: 1,
+      // The coupon carries the AMOUNT; the promotion code is only the string
+      // somebody types. Without expanding it, `coupon` comes back as an id and
+      // the banner cannot say what the discount actually is.
+      expand: ['data.promotion.coupon'],
+    });
+    const promo = data[0];
+    if (!promo) return null;
+
+    const coupon = promo.promotion?.coupon;
+    return {
+      promotionCodeId: promo.id,
+      code: promo.code,
+      // Still a string if the expansion was dropped, which Stripe may do at
+      // depth. A vague label beats failing the lookup over a display detail.
+      description:
+        coupon && typeof coupon !== 'string'
+          ? describeCoupon(coupon)
+          : 'Discount applied',
+    };
+  } catch {
+    // A lookup failure must not block checkout; the customer can still type the
+    // code on Stripe's own page.
+    return null;
+  }
+}
+
+/** "50% off for 3 months", "$20 off once" — what the banner says. */
+function describeCoupon(coupon: Stripe.Coupon): string {
+  const amount =
+    coupon.percent_off != null
+      ? `${coupon.percent_off}% off`
+      : coupon.amount_off != null
+      ? `${(coupon.amount_off / 100).toLocaleString('en-US', {
+          style: 'currency',
+          currency: (coupon.currency ?? 'usd').toUpperCase(),
+        })} off`
+      : 'Discount';
+
+  if (coupon.duration === 'forever') return `${amount}, forever`;
+  if (coupon.duration === 'repeating' && coupon.duration_in_months) {
+    return `${amount} for ${coupon.duration_in_months} months`;
+  }
+  return `${amount} on your first invoice`;
 }
 
 /**
@@ -30,9 +107,16 @@ export async function createCheckoutSession(params: {
   workspaceId: string;
   successUrl: string;
   cancelUrl: string;
+  /** Days of free trial. Omitted or 0 means charge immediately. */
+  trialDays?: number;
+  /** A `promo_…` id from `findPromotionCode`, applied without the customer typing. */
+  promotionCodeId?: string;
 }): Promise<{ url: string }> {
   const stripe = stripeClient();
   if (!stripe) throw new BillingNotConfiguredError();
+
+  const trialDays =
+    params.trialDays && params.trialDays > 0 ? params.trialDays : undefined;
 
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
@@ -40,14 +124,26 @@ export async function createCheckoutSession(params: {
     line_items: [{ price: params.priceId, quantity: 1 }],
     success_url: params.successUrl,
     cancel_url: params.cancelUrl,
-    // Stamped on the SUBSCRIPTION, not just the session. The webhook receives
-    // subscription events long after the session is gone, and this is what
-    // lets it find the workspace without a reverse lookup.
     subscription_data: {
+      // Stamped on the SUBSCRIPTION, not just the session. The webhook receives
+      // subscription events long after the session is gone, and this is what
+      // lets it find the workspace without a reverse lookup.
       metadata: { workspaceId: params.workspaceId, product: 'sellavant' },
+      ...(trialDays ? { trial_period_days: trialDays } : {}),
     },
-    // Lets a returning customer reuse a saved card instead of retyping it.
+    // A card is taken even for a trial. The FREE tier is the no-card on-ramp,
+    // so nothing here is the only way to evaluate the product — and a card is
+    // most of what stops one person taking the trial repeatedly with throwaway
+    // addresses, which on a metered product is a direct cash cost.
     payment_method_collection: 'always',
+    // Mutually exclusive in Stripe, and the branch matters. A known code is
+    // applied silently, which is the good path. When we do not have one — most
+    // often because the customer started on another device and the cookie never
+    // followed them — Stripe's own field is what keeps the discount reachable
+    // at all. See `findPromotionCode`.
+    ...(params.promotionCodeId
+      ? { discounts: [{ promotion_code: params.promotionCodeId }] }
+      : { allow_promotion_codes: true }),
   });
 
   if (!session.url) {
@@ -85,6 +181,107 @@ export async function createPortalSession(params: {
     customer: params.customerId,
     return_url: params.returnUrl,
     ...(configuration ? { configuration } : {}),
+  });
+  return { url: session.url };
+}
+
+/**
+ * When this customer FIRST subscribed, in epoch ms, or null if they never have.
+ *
+ * Stripe is the only thing that can answer this after the fact. Our own record
+ * cannot: `stripeSubscriptionId` is cleared on cancellation, which is precisely
+ * the case worth finding — a customer who subscribed, cancelled, and would
+ * otherwise be handed a second free trial.
+ *
+ * `status: 'all'` for the same reason. The default listing omits cancelled
+ * subscriptions, so it would report "never subscribed" for exactly the
+ * population this exists to catch.
+ */
+export async function firstSubscribedAtFor(
+  customerId: string
+): Promise<number | null> {
+  const stripe = stripeClient();
+  if (!stripe) throw new BillingNotConfiguredError();
+
+  const { data } = await stripe.subscriptions.list({
+    customer: customerId,
+    status: 'all',
+    limit: 100,
+  });
+  if (data.length === 0) return null;
+
+  // Seconds from Stripe, milliseconds everywhere in this codebase.
+  const earliest = data.reduce(
+    (min, subscription) => Math.min(min, subscription.created),
+    Number.POSITIVE_INFINITY
+  );
+  return Number.isFinite(earliest) ? earliest * 1000 : null;
+}
+
+/**
+ * Move an EXISTING subscription to a different plan.
+ *
+ * ## Why this is not a Checkout session
+ *
+ * Checkout in `mode: 'subscription'` always CREATES a subscription; it has no
+ * notion of replacing one. Sending an existing subscriber through it leaves
+ * them paying for both plans, and the webhook then overwrites the workspace's
+ * `stripeSubscriptionId` with the new one — so the older subscription keeps
+ * billing with nothing in our data pointing at it. Silent double billing,
+ * discovered by the customer.
+ *
+ * The portal's update flow changes the price on the subscription that already
+ * exists, with proration, which is what "change plan" actually means.
+ *
+ * ## Two flows, chosen by shape
+ *
+ * `subscription_update_confirm` pre-fills the target price and shows a single
+ * confirmation with the proration — the better journey, and the one used
+ * whenever it is available. Stripe restricts it to subscriptions with exactly
+ * ONE item, and this product has a metered overage item planned, so a
+ * subscription with more falls back to `subscription_update`: the same portal,
+ * opened on the right subscription, with the customer picking the plan. Both
+ * land in the same place; only the number of clicks differs.
+ */
+export async function createPlanChangeSession(params: {
+  customerId: string;
+  subscriptionId: string;
+  /** The price to move TO. */
+  priceId: string;
+  returnUrl: string;
+}): Promise<{ url: string }> {
+  const stripe = stripeClient();
+  if (!stripe) throw new BillingNotConfiguredError();
+
+  const subscription = await stripe.subscriptions.retrieve(
+    params.subscriptionId
+  );
+  const items = subscription.items?.data ?? [];
+
+  const configuration = process.env['STRIPE_PORTAL_CONFIGURATION_ID']?.trim();
+  const base = {
+    customer: params.customerId,
+    return_url: params.returnUrl,
+    ...(configuration ? { configuration } : {}),
+  };
+
+  const flowData: Stripe.BillingPortal.SessionCreateParams.FlowData =
+    items.length === 1 && items[0]
+      ? {
+          type: 'subscription_update_confirm',
+          subscription_update_confirm: {
+            subscription: params.subscriptionId,
+            items: [{ id: items[0].id, price: params.priceId, quantity: 1 }],
+          },
+        }
+      : {
+          type: 'subscription_update',
+          subscription_update: { subscription: params.subscriptionId },
+        };
+
+  const session = await stripe.billingPortal.sessions.create({
+    ...base,
+    flow_data: flowData,
   });
   return { url: session.url };
 }
@@ -141,7 +338,14 @@ export type SubscriptionSnapshot = {
 export function readSubscription(
   subscription: Stripe.Subscription
 ): SubscriptionSnapshot {
-  const item = subscription.items?.data?.[0];
+  // Selected by METADATA, not by position. Once a metered overage item joins
+  // the subscription there are two items and Stripe does not promise an order;
+  // reading `data[0]` would find the overage price about half the time, whose
+  // `planId` is absent. Nothing would throw — `updateWorkspaceSubscription`
+  // leaves `plan` alone when no plan is named — so an upgrade from pilot to
+  // scale would simply stop taking effect, silently, for some customers.
+  const items = subscription.items?.data ?? [];
+  const item = items.find((i) => i.price?.metadata?.['planId']) ?? items[0];
   const price = item?.price;
   const periodEnd =
     (item as { current_period_end?: number } | undefined)?.current_period_end ??

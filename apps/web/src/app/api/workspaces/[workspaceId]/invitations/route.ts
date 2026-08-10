@@ -7,6 +7,7 @@ import {
   createInvitation,
   getMembership,
   listInvitations,
+  InvitationError,
 } from '@amz-spapi/identity';
 import { captureServerException } from '../../../../../lib/posthog-server';
 import { loggerFor } from '../../../../../lib/logger';
@@ -94,6 +95,15 @@ export async function POST(
     });
     return Response.json({ invitation }, { status: 201 });
   } catch (error) {
+    // A full workspace is the caller's situation, not our failure, and its
+    // message already says what to do about it. Reported as 409 with the real
+    // text — a generic 500 would tell an owner to "try again" at something that
+    // will never succeed until they upgrade or remove somebody.
+    if (error instanceof InvitationError && error.code === 'SEATS_EXCEEDED') {
+      log.info({ workspaceId }, 'invitation refused — no seats left');
+      return Response.json({ error: error.message }, { status: 409 });
+    }
+
     log.error(
       {
         workspaceId,
