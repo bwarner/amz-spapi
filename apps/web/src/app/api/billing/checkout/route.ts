@@ -16,7 +16,10 @@ import { auth0 } from '../../../../lib/auth0';
 import { currentWorkspace } from '../../../../lib/workspace-context';
 import { appBaseUrl } from '../../../../lib/config';
 import { loggerFor } from '../../../../lib/logger';
-import { captureServerException } from '../../../../lib/posthog-server';
+import {
+  captureServerEvent,
+  captureServerException,
+} from '../../../../lib/posthog-server';
 import { promoCodeSchema, readPromoCookie } from '../../../../lib/promo';
 
 const log = loggerFor('billing-checkout');
@@ -96,6 +99,18 @@ export async function POST(request: Request) {
       { plan: plan.data, interval: interval.data },
       'no catalogued price for this plan'
     );
+    // An unprovisioned environment is invisible from the outside — the pricing
+    // page renders perfectly and only the purchase fails. Worth counting.
+    await captureServerEvent({
+      distinctId: session.user.sub,
+      event: 'billing_checkout_unavailable',
+      properties: {
+        plan: plan.data,
+        interval: interval.data,
+        reason: 'no_catalogued_price',
+        source: 'billing_page',
+      },
+    });
     return Response.json(
       { error: 'Billing is not fully configured. Please contact support.' },
       { status: 503 }
@@ -147,6 +162,16 @@ export async function POST(request: Request) {
         priceId: price.priceId,
         returnUrl: `${base}/billing`,
       });
+      await captureServerEvent({
+        distinctId: session.user.sub,
+        event: 'billing_plan_change_started',
+        properties: {
+          plan_from: context.workspace.plan ?? 'none',
+          plan_to: plan.data,
+          interval: interval.data,
+          source: 'billing_page',
+        },
+      });
       return Response.json({ url });
     }
 
@@ -168,6 +193,23 @@ export async function POST(request: Request) {
       cancelUrl: `${base}/billing`,
       trialDays,
       ...(promotion ? { promotionCodeId: promotion.promotionCodeId } : {}),
+    });
+    // Started, NOT completed — the subscription only exists once Stripe says
+    // so on the webhook. Counting this as a sale would overstate conversion by
+    // every abandoned checkout.
+    await captureServerEvent({
+      distinctId: session.user.sub,
+      event: 'billing_checkout_started',
+      properties: {
+        plan: plan.data,
+        interval: interval.data,
+        trial_days: trialDays,
+        // False for somebody who subscribed before and cancelled; how often
+        // that happens is the question the trial policy turns on.
+        trial_eligible: trialDays > 0,
+        promotion_applied: Boolean(promotion),
+        source: 'billing_page',
+      },
     });
     return Response.json({ url });
   } catch (error) {

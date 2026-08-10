@@ -11,7 +11,10 @@ import { auth0 } from '../../lib/auth0';
 import { currentWorkspace } from '../../lib/workspace-context';
 import { appBaseUrl } from '../../lib/config';
 import { loggerFor } from '../../lib/logger';
-import { captureServerException } from '../../lib/posthog-server';
+import {
+  captureServerEvent,
+  captureServerException,
+} from '../../lib/posthog-server';
 import { decodePricingSelection } from '../../lib/pricing-token';
 import { PROMO_COOKIE, readPromoCookie } from '../../lib/promo';
 
@@ -110,20 +113,47 @@ export async function GET(request: NextRequest) {
         priceId: price.priceId,
         returnUrl: `${base}/billing`,
       });
+      await captureServerEvent({
+        distinctId: session.user.sub,
+        event: 'billing_plan_change_started',
+        properties: {
+          plan_from: context.workspace.plan ?? 'none',
+          plan_to: selection.plan,
+          interval: selection.interval,
+          // The property that makes these two routes comparable: an advert
+          // click and a click inside the app are different intents.
+          source: 'pricing_link',
+        },
+      });
       return NextResponse.redirect(url);
     }
 
+    // `firstSubscribedAt`, not `stripeSubscriptionId` — the latter is cleared
+    // when a subscription is cancelled, so it read as "never subscribed" again
+    // and handed out a fresh trial on every resubscribe. Hoisted out of the
+    // call so the analytics event below reports the value actually sent.
+    const trialDays = context.workspace.firstSubscribedAt ? 0 : TRIAL_DAYS;
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
       priceId: price.priceId,
       workspaceId: context.workspace.workspaceId,
       successUrl: `${base}/billing?subscribed=1`,
       cancelUrl: `${base}/pricing`,
-      // `firstSubscribedAt`, not `stripeSubscriptionId` — the latter is cleared
-      // when a subscription is cancelled, so it read as "never subscribed"
-      // again and handed out a fresh trial on every resubscribe.
-      trialDays: context.workspace.firstSubscribedAt ? 0 : TRIAL_DAYS,
+      trialDays,
       ...(promotion ? { promotionCodeId: promotion.promotionCodeId } : {}),
+    });
+
+    await captureServerEvent({
+      distinctId: session.user.sub,
+      event: 'billing_checkout_started',
+      properties: {
+        plan: selection.plan,
+        interval: selection.interval,
+        trial_days: trialDays,
+        trial_eligible: trialDays > 0,
+        promotion_applied: Boolean(promotion),
+        source: 'pricing_link',
+      },
     });
 
     const response = NextResponse.redirect(url);

@@ -33,6 +33,7 @@ const createCheckoutSession = vi.fn();
 const createPortalSession = vi.fn();
 const findPromotionCode = vi.fn();
 const priceForPlan = vi.fn();
+const captureServerEvent = vi.fn();
 const createPlanChangeSession = vi.fn();
 const cookieStore = { get: vi.fn() };
 
@@ -79,6 +80,10 @@ vi.mock('../../../../lib/logger', () => ({
 
 vi.mock('../../../../lib/posthog-server', () => ({
   captureServerException: vi.fn(),
+  // Added when the purchase funnel was instrumented. Without it the route's
+  // call is `undefined(...)`, which throws into the catch and turns every
+  // successful checkout into a 500 — which is exactly how this was noticed.
+  captureServerEvent: (...args: unknown[]) => captureServerEvent(...args),
 }));
 
 const { POST: checkout } = await import('./route');
@@ -224,6 +229,47 @@ describe('trial', () => {
 
     expect(createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({ trialDays: 7 })
+    );
+  });
+
+  it('reports the funnel step, and which step it was', async () => {
+    // A plan change and a first purchase look identical downstream — both end
+    // at a Stripe URL — so without distinct events the two are impossible to
+    // tell apart in the funnel, and `source` is what separates an advert click
+    // from a click inside the app.
+    await checkout(request({ plan: 'pilot' }));
+
+    expect(captureServerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'billing_checkout_started',
+        properties: expect.objectContaining({
+          plan: 'pilot',
+          interval: 'month',
+          trial_days: 7,
+          trial_eligible: true,
+          source: 'billing_page',
+        }),
+      })
+    );
+  });
+
+  it('reports a trial REFUSED to a returning subscriber', async () => {
+    const context = contextWithRole('owner');
+    (
+      context.workspace as unknown as { firstSubscribedAt: number }
+    ).firstSubscribedAt = 1_700_000_000_000;
+    currentWorkspace.mockResolvedValue(context);
+
+    await checkout(request({ plan: 'pilot' }));
+
+    expect(captureServerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'billing_checkout_started',
+        properties: expect.objectContaining({
+          trial_days: 0,
+          trial_eligible: false,
+        }),
+      })
     );
   });
 
