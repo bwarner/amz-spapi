@@ -1037,7 +1037,16 @@ function getToolsForAgent(spCache: SpCache, marketplaceId: string) {
       description:
         'List settlement/payout groups from Amazon Finances — each group is a payout ' +
         'period with its total, currency, dates, and processing status. Use this for ' +
-        '"when/what did Amazon pay me" questions.',
+        '"when was I last paid" and "has this period settled yet".\n' +
+        'NOT the tool for analysing settlements. It is a LIVE API call: it needs the ' +
+        'Finances role (403s without it), reaches back at most 180 days — so it cannot ' +
+        'answer "this year" at all — and returns payout headers, not the fee, refund ' +
+        'and reimbursement lines underneath them.\n' +
+        'For any question about what the settlements CONTAIN, or any window longer than ' +
+        'a few months, use the imported settlement report instead: ' +
+        'check-report-coverage then total-report-rows (kind "settlement", measure ' +
+        '"amount", group by amountType/amountDescription). That is free, instant, ' +
+        'covers any window and cannot 403.',
       inputSchema: z.object({
         days: z
           .number()
@@ -4613,6 +4622,20 @@ AVAILABLE TOOLS:
   Amazon pay me").
 - get-financial-events: itemized fees/charges/refunds for a date window or one
   order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
+
+DATA THE SELLER HAS ALREADY IMPORTED (check before fetching, every topic):
+- "I uploaded/imported X" does NOT mean an attachment. Reports are imported on the
+  IMPORT PAGE and stored, so the file is not in this conversation and never will be.
+  Asking them to attach it again is asking them to redo work they have already done —
+  run check-report-coverage instead, and only ask for a file if coverage is genuinely
+  empty.
+- This applies to MONEY questions as much as unit questions. An imported settlement
+  report is the richest source there is — every fee, refund and reimbursement Amazon
+  actually paid — and it is already stored. check-report-coverage then total-report-rows
+  answers "analyse my settlements this year" completely, offline, for any window.
+- Prefer stored rows over a live Amazon call whenever both could answer. Stored rows are
+  free, instant, cover any window, and cannot 403. Reach for the API when the question is
+  about something too recent to have been imported, or genuinely not in a report.
 
 FBA INVENTORY RECONCILIATION (where did my units go):
 - check-report-coverage FIRST, every time, before saying anything about lost, damaged,
