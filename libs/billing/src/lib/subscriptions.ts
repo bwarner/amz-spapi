@@ -186,6 +186,107 @@ export async function createPortalSession(params: {
 }
 
 /**
+ * When this customer FIRST subscribed, in epoch ms, or null if they never have.
+ *
+ * Stripe is the only thing that can answer this after the fact. Our own record
+ * cannot: `stripeSubscriptionId` is cleared on cancellation, which is precisely
+ * the case worth finding — a customer who subscribed, cancelled, and would
+ * otherwise be handed a second free trial.
+ *
+ * `status: 'all'` for the same reason. The default listing omits cancelled
+ * subscriptions, so it would report "never subscribed" for exactly the
+ * population this exists to catch.
+ */
+export async function firstSubscribedAtFor(
+  customerId: string
+): Promise<number | null> {
+  const stripe = stripeClient();
+  if (!stripe) throw new BillingNotConfiguredError();
+
+  const { data } = await stripe.subscriptions.list({
+    customer: customerId,
+    status: 'all',
+    limit: 100,
+  });
+  if (data.length === 0) return null;
+
+  // Seconds from Stripe, milliseconds everywhere in this codebase.
+  const earliest = data.reduce(
+    (min, subscription) => Math.min(min, subscription.created),
+    Number.POSITIVE_INFINITY
+  );
+  return Number.isFinite(earliest) ? earliest * 1000 : null;
+}
+
+/**
+ * Move an EXISTING subscription to a different plan.
+ *
+ * ## Why this is not a Checkout session
+ *
+ * Checkout in `mode: 'subscription'` always CREATES a subscription; it has no
+ * notion of replacing one. Sending an existing subscriber through it leaves
+ * them paying for both plans, and the webhook then overwrites the workspace's
+ * `stripeSubscriptionId` with the new one — so the older subscription keeps
+ * billing with nothing in our data pointing at it. Silent double billing,
+ * discovered by the customer.
+ *
+ * The portal's update flow changes the price on the subscription that already
+ * exists, with proration, which is what "change plan" actually means.
+ *
+ * ## Two flows, chosen by shape
+ *
+ * `subscription_update_confirm` pre-fills the target price and shows a single
+ * confirmation with the proration — the better journey, and the one used
+ * whenever it is available. Stripe restricts it to subscriptions with exactly
+ * ONE item, and this product has a metered overage item planned, so a
+ * subscription with more falls back to `subscription_update`: the same portal,
+ * opened on the right subscription, with the customer picking the plan. Both
+ * land in the same place; only the number of clicks differs.
+ */
+export async function createPlanChangeSession(params: {
+  customerId: string;
+  subscriptionId: string;
+  /** The price to move TO. */
+  priceId: string;
+  returnUrl: string;
+}): Promise<{ url: string }> {
+  const stripe = stripeClient();
+  if (!stripe) throw new BillingNotConfiguredError();
+
+  const subscription = await stripe.subscriptions.retrieve(
+    params.subscriptionId
+  );
+  const items = subscription.items?.data ?? [];
+
+  const configuration = process.env['STRIPE_PORTAL_CONFIGURATION_ID']?.trim();
+  const base = {
+    customer: params.customerId,
+    return_url: params.returnUrl,
+    ...(configuration ? { configuration } : {}),
+  };
+
+  const flowData: Stripe.BillingPortal.SessionCreateParams.FlowData =
+    items.length === 1 && items[0]
+      ? {
+          type: 'subscription_update_confirm',
+          subscription_update_confirm: {
+            subscription: params.subscriptionId,
+            items: [{ id: items[0].id, price: params.priceId, quantity: 1 }],
+          },
+        }
+      : {
+          type: 'subscription_update',
+          subscription_update: { subscription: params.subscriptionId },
+        };
+
+  const session = await stripe.billingPortal.sessions.create({
+    ...base,
+    flow_data: flowData,
+  });
+  return { url: session.url };
+}
+
+/**
  * Verify a webhook payload actually came from Stripe.
  *
  * Signature checked against the RAW body. Any reserialisation — even

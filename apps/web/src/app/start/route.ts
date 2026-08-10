@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { PLANS, TRIAL_DAYS, isPurchasable } from '@farvisionllc/models';
 import {
   createCheckoutSession,
+  createPlanChangeSession,
   findPromotionCode,
   priceForPlan,
 } from '@amz-spapi/billing';
@@ -97,13 +98,31 @@ export async function GET(request: NextRequest) {
     const promotion = code ? await findPromotionCode(code) : null;
 
     const base = appBaseUrl();
+
+    // An existing subscriber arriving from an advert is changing plan, not
+    // buying a second one. Same reasoning as the checkout API: Checkout in
+    // subscription mode always CREATES a subscription, so this path would
+    // otherwise leave two live subscriptions on one customer, both billing.
+    if (context.workspace.stripeSubscriptionId) {
+      const { url } = await createPlanChangeSession({
+        customerId: context.workspace.stripeCustomerId,
+        subscriptionId: context.workspace.stripeSubscriptionId,
+        priceId: price.priceId,
+        returnUrl: `${base}/billing`,
+      });
+      return NextResponse.redirect(url);
+    }
+
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
       priceId: price.priceId,
       workspaceId: context.workspace.workspaceId,
       successUrl: `${base}/billing?subscribed=1`,
       cancelUrl: `${base}/pricing`,
-      trialDays: context.workspace.stripeSubscriptionId ? 0 : TRIAL_DAYS,
+      // `firstSubscribedAt`, not `stripeSubscriptionId` — the latter is cleared
+      // when a subscription is cancelled, so it read as "never subscribed"
+      // again and handed out a fresh trial on every resubscribe.
+      trialDays: context.workspace.firstSubscribedAt ? 0 : TRIAL_DAYS,
       ...(promotion ? { promotionCodeId: promotion.promotionCodeId } : {}),
     });
 

@@ -8,6 +8,7 @@ import {
 } from '@farvisionllc/models';
 import {
   createCheckoutSession,
+  createPlanChangeSession,
   findPromotionCode,
   priceForPlan,
 } from '@amz-spapi/billing';
@@ -130,11 +131,33 @@ export async function POST(request: Request) {
       log.info({ code }, 'promotion code did not resolve; continuing without');
     }
 
-    // A trial is for people who have never subscribed. Without this check,
-    // cancelling and resubscribing is an unlimited supply of free weeks.
-    const trialDays = context.workspace.stripeSubscriptionId ? 0 : TRIAL_DAYS;
-
     const base = appBaseUrl();
+
+    // An existing subscriber is CHANGING plan, not buying a second one.
+    //
+    // Checkout in subscription mode always creates a subscription, so sending
+    // them through it would leave two live subscriptions on one customer — both
+    // billing, with only the newer one recorded on the workspace. The guard
+    // lives here rather than only in the UI because this route is a public API
+    // and the button is not the only way to reach it.
+    if (context.workspace.stripeSubscriptionId) {
+      const { url } = await createPlanChangeSession({
+        customerId: context.workspace.stripeCustomerId,
+        subscriptionId: context.workspace.stripeSubscriptionId,
+        priceId: price.priceId,
+        returnUrl: `${base}/billing`,
+      });
+      return Response.json({ url });
+    }
+
+    // A trial is for a workspace that has NEVER subscribed.
+    //
+    // Read from `firstSubscribedAt`, which is write-once, and NOT from
+    // `stripeSubscriptionId`, which the cancellation webhook clears. Keying it
+    // off the id meant the test passed again the moment somebody cancelled, so
+    // subscribe → cancel → resubscribe minted a fresh trial every time. The
+    // comment here used to claim that was handled; it was not.
+    const trialDays = context.workspace.firstSubscribedAt ? 0 : TRIAL_DAYS;
     const { url } = await createCheckoutSession({
       customerId: context.workspace.stripeCustomerId,
       priceId: price.priceId,

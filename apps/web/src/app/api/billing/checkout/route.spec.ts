@@ -33,6 +33,7 @@ const createCheckoutSession = vi.fn();
 const createPortalSession = vi.fn();
 const findPromotionCode = vi.fn();
 const priceForPlan = vi.fn();
+const createPlanChangeSession = vi.fn();
 const cookieStore = { get: vi.fn() };
 
 vi.mock('@amz-spapi/billing', async () => {
@@ -46,6 +47,8 @@ vi.mock('@amz-spapi/billing', async () => {
     createPortalSession: (...args: unknown[]) => createPortalSession(...args),
     findPromotionCode: (...args: unknown[]) => findPromotionCode(...args),
     priceForPlan: (...args: unknown[]) => priceForPlan(...args),
+    createPlanChangeSession: (...args: unknown[]) =>
+      createPlanChangeSession(...args),
   };
 });
 
@@ -126,6 +129,9 @@ beforeEach(() => {
   });
   createPortalSession.mockResolvedValue({
     url: 'https://billing.stripe.com/x',
+  });
+  createPlanChangeSession.mockResolvedValue({
+    url: 'https://billing.stripe.com/flow',
   });
 });
 
@@ -221,13 +227,44 @@ describe('trial', () => {
     );
   });
 
-  it('refuses a SECOND trial to a workspace that has subscribed before', async () => {
-    // Otherwise cancel-and-resubscribe is an unlimited supply of free weeks,
-    // each one real money against the gateway.
+  it('never sends an EXISTING subscriber through checkout at all', async () => {
+    // Checkout in subscription mode always CREATES a subscription, so this
+    // path would leave two live subscriptions on one customer — both billing,
+    // with only the newer recorded on the workspace. It also settles the trial
+    // question: no checkout means no second trial, so cancel-and-resubscribe
+    // cannot mint free weeks.
     const context = contextWithRole('owner');
     (
       context.workspace as unknown as { stripeSubscriptionId: string }
     ).stripeSubscriptionId = 'sub_old';
+    currentWorkspace.mockResolvedValue(context);
+
+    const response = await checkout(request({ plan: 'scale' }));
+
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(createPlanChangeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subscriptionId: 'sub_old',
+        customerId: CUSTOMER,
+        priceId: 'price_scale_month',
+      })
+    );
+    expect(await response.json()).toEqual({
+      url: 'https://billing.stripe.com/flow',
+    });
+  });
+
+  it('refuses a SECOND trial after a cancellation', async () => {
+    // THE loophole. Cancelling clears `stripeSubscriptionId`, so a check keyed
+    // on that field read "never subscribed" again and minted a fresh trial on
+    // every resubscribe — free weeks, forever, on the same card. The durable
+    // `firstSubscribedAt` is what actually answers "have they subscribed
+    // before"; this workspace has cancelled, so it has no live subscription
+    // but is NOT trial-eligible.
+    const context = contextWithRole('owner');
+    (
+      context.workspace as unknown as { firstSubscribedAt: number }
+    ).firstSubscribedAt = 1_700_000_000_000;
     currentWorkspace.mockResolvedValue(context);
 
     await checkout(request({ plan: 'pilot' }));
@@ -235,6 +272,20 @@ describe('trial', () => {
     expect(createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({ trialDays: 0 })
     );
+  });
+
+  it('guards the plan change in the ROUTE, not just in the button', async () => {
+    // This endpoint is a public API; the billing page is not the only caller.
+    // A hand-rolled POST must not be able to buy a second subscription.
+    const context = contextWithRole('owner');
+    (
+      context.workspace as unknown as { stripeSubscriptionId: string }
+    ).stripeSubscriptionId = 'sub_old';
+    currentWorkspace.mockResolvedValue(context);
+
+    await checkout(request({ plan: 'pilot', interval: 'year' }));
+
+    expect(createCheckoutSession).not.toHaveBeenCalled();
   });
 });
 

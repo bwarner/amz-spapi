@@ -27,6 +27,7 @@ import { writeFile } from 'node:fs/promises';
 import {
   createBillingCustomer,
   deactivateStalePrices,
+  firstSubscribedAtFor,
   linkCustomerToWorkspace,
   provisionBilling,
   syncPriceCatalog,
@@ -35,7 +36,9 @@ import {
 import { renderTable } from './format.js';
 import {
   attachCustomerToWorkspace,
+  backfillFirstSubscribedAt,
   findWorkspacesWithoutCustomer,
+  findWorkspacesWithoutTrialHistory,
 } from './backfill.js';
 import { createS3ObjectStore } from './object-store.js';
 
@@ -863,6 +866,90 @@ billing
       process.stderr.write(
         `\n${retired.length} price(s) deactivated. Existing subscribers are ` +
           'UNAFFECTED — they keep the price they signed up to.\n'
+      );
+    }
+  });
+
+/**
+ * Record, for workspaces that predate the field, whether they have ever
+ * subscribed.
+ *
+ * The free trial is for a workspace that has never subscribed, and that is now
+ * decided by the write-once `firstSubscribedAt`. Workspaces created before it
+ * existed have no value, so they all read as trial-eligible — including anyone
+ * who subscribed and cancelled, who would get a second free trial.
+ *
+ * STRIPE is the authority here, not our own data: cancellation clears
+ * `stripeSubscriptionId`, so the local record cannot tell "never subscribed"
+ * from "subscribed and cancelled". Only a customer with real subscription
+ * history is stamped; one that has genuinely never subscribed is left alone,
+ * because stamping it would deny a trial nobody has used.
+ */
+billing
+  .command('backfill-trial-history')
+  .description(
+    'Record first-subscription dates from Stripe for older workspaces'
+  )
+  .option('--apply', 'actually write; without this it only reports')
+  .addOption(formatOption)
+  .action(async (options) => {
+    if (!process.env['STRIPE_SECRET_KEY']) {
+      fail('STRIPE_SECRET_KEY is not set — Stripe is the source here.');
+    }
+    assertConnection();
+    const apply = Boolean(options.apply);
+
+    const candidates = await findWorkspacesWithoutTrialHistory();
+    if (candidates.length === 0) {
+      process.stderr.write(
+        'Every workspace with a Stripe customer already records one.\n'
+      );
+      emit([], options.format);
+      return;
+    }
+
+    const results: Array<Record<string, unknown>> = [];
+    for (const row of candidates) {
+      try {
+        const first = await firstSubscribedAtFor(row.stripeCustomerId);
+        if (first === null) {
+          results.push({
+            workspaceId: row.workspaceId,
+            name: row.name,
+            action: 'never subscribed — left trial-eligible',
+          });
+          continue;
+        }
+        if (!apply) {
+          results.push({
+            workspaceId: row.workspaceId,
+            name: row.name,
+            action: 'would stamp',
+            firstSubscribedAt: new Date(first).toISOString(),
+          });
+          continue;
+        }
+        await backfillFirstSubscribedAt(row.workspaceId, first);
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          action: 'stamped',
+          firstSubscribedAt: new Date(first).toISOString(),
+        });
+      } catch (error) {
+        results.push({
+          workspaceId: row.workspaceId,
+          name: row.name,
+          error: describe(error),
+        });
+        process.exitCode = 1;
+      }
+    }
+
+    emit(results, options.format);
+    if (!apply) {
+      process.stderr.write(
+        '\nDry run — nothing written. Re-run with --apply.\n'
       );
     }
   });

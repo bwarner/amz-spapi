@@ -505,6 +505,18 @@ export async function updateWorkspaceSubscription(params: {
   );
   if (!existing) return null;
 
+  // Write-once, and set HERE rather than at checkout because a checkout
+  // session can be abandoned — stamping it when the button is pressed would
+  // burn somebody's trial for a purchase they never completed. By the time an
+  // event carries a subscription id, the subscription exists.
+  //
+  // Deliberately not in the spread below: every other field there is assigned
+  // unconditionally, which is what made `stripeSubscriptionId` unusable as a
+  // "have they ever subscribed" signal in the first place.
+  const firstSubscribedAt =
+    (existing['firstSubscribedAt'] as number | undefined) ??
+    (params.stripeSubscriptionId ? Date.now() : undefined);
+
   const updated = workspaceSchema.parse({
     ...existing,
     // `plan` is left alone when the event does not name one — a status-only
@@ -513,6 +525,7 @@ export async function updateWorkspaceSubscription(params: {
     subscriptionStatus: params.subscriptionStatus,
     stripeSubscriptionId: params.stripeSubscriptionId,
     currentPeriodEnd: params.currentPeriodEnd,
+    ...(firstSubscribedAt === undefined ? {} : { firstSubscribedAt }),
     updatedAt: Date.now(),
   });
 
