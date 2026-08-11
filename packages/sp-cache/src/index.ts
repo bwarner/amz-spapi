@@ -83,6 +83,7 @@ export {
   purchaseGrouping,
   roleForRecognisedKind,
   setDocumentRole,
+  setDocumentShipment,
   storeExtractedDocument,
 } from './lib/document-store.js';
 export type {

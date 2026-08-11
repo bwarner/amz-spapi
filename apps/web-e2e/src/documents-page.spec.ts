@@ -193,12 +193,8 @@ test.describe('documents page', () => {
 
       // Only files with an extracted document are linked; box labels and
       // unread uploads have no figures to review.
-      await page
-        .getByRole('link', { name: /Review|Open/ })
-        .first()
-        .click();
+      await openFirstDocument(page);
 
-      await expect(page).toHaveURL(/\/documents\/asset_/);
       await expect(page.getByText(/checks? failed/i).first()).toBeVisible({
         timeout: 15_000,
       });
@@ -212,11 +208,7 @@ test.describe('documents page', () => {
       await expect(
         page.getByRole('heading', { name: /^Files \(/ })
       ).toBeVisible({ timeout: 15_000 });
-      await page
-        .getByRole('link', { name: /Review|Open/ })
-        .first()
-        .click();
-      await expect(page).toHaveURL(/\/documents\/asset_/);
+      await openFirstDocument(page);
 
       const url = page.url();
 
@@ -301,3 +293,21 @@ test.describe('documents page', () => {
     });
   });
 });
+
+/**
+ * Click through to the first document detail, retrying the click.
+ *
+ * The Library re-renders when its fetch resolves, and a click dispatched into
+ * a row React is replacing lands on a node no longer in the tree — the URL
+ * never changes and nothing errors. Retrying the click-then-navigated pair as
+ * one unit is the only version that is not a race.
+ */
+async function openFirstDocument(page: import('@playwright/test').Page) {
+  await expect(async () => {
+    await page
+      .getByRole('link', { name: /Review|Open/ })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/\/documents\/asset_/, { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+}

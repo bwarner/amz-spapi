@@ -114,6 +114,20 @@ export type StoredDocument = {
    */
   dismissedLinks?: string[];
   /**
+   * FBA shipments this document belongs to, confirmed by a human.
+   *
+   * Stored rather than derived because no derivation exists: a supplier's
+   * invoice does not mention Amazon's shipment id, and the ledger's
+   * `referenceId` joins receipts to shipments, never to paperwork. Box labels
+   * join themselves (they carry the id); everything else is a human saying
+   * "this invoice paid for what went out as FBA17K9QZ2X" — which is exactly
+   * the kind of answer that must not be re-asked after a re-import.
+   *
+   * A list, not a scalar: one invoice routinely covers goods that Amazon
+   * split into several shipments.
+   */
+  shipmentIds?: string[];
+  /**
    * Set when a human confirmed a grouping the joins could not make on their
    * own. Derived grouping is the default and stays consistent with the
    * documents; this exists because `groupPurchaseDocuments` deliberately
@@ -257,6 +271,7 @@ export async function storeExtractedDocument(
     confirmedPurchaseId: existing?.confirmedPurchaseId,
     // A human's answers survive re-import, for the same reason the role does.
     dismissedLinks: existing?.dismissedLinks,
+    shipmentIds: existing?.shipmentIds,
     storedAt: existing?.storedAt ?? now,
     updatedAt: now,
   };
@@ -378,6 +393,46 @@ export async function dismissSuggestedLink(params: {
   const record: StoredDocument = {
     ...existing,
     dismissedLinks: [...dismissed].sort(),
+    updatedAt: Date.now(),
+  };
+  await documentStorage.upsertDocument(
+    SCOPE,
+    COLLECTION,
+    record.documentId,
+    record
+  );
+  return record;
+}
+
+/**
+ * Attach a document to a shipment, or detach it.
+ *
+ * One function for both directions so the invariant lives in one place: the
+ * list stays sorted and deduplicated, and detaching the last shipment removes
+ * the field rather than leaving `[]` — an empty list would read as "confirmed
+ * to belong to no shipment", which is a different claim from "never asked".
+ */
+export async function setDocumentShipment(params: {
+  userId: string;
+  documentId: string;
+  shipmentId: string;
+  attached: boolean;
+}): Promise<StoredDocument> {
+  const existing = await getStoredDocument(params.userId, params.documentId);
+  if (!existing) {
+    throw new DocumentStoreError(`No document ${params.documentId}.`);
+  }
+  if (!params.shipmentId.trim()) {
+    throw new DocumentStoreError('A shipment link needs a shipment id.');
+  }
+
+  const shipments = new Set(existing.shipmentIds ?? []);
+  if (params.attached) shipments.add(params.shipmentId);
+  else shipments.delete(params.shipmentId);
+
+  const record: StoredDocument = {
+    ...existing,
+    shipmentIds: shipments.size ? [...shipments].sort() : undefined,
     updatedAt: Date.now(),
   };
   await documentStorage.upsertDocument(
