@@ -13,6 +13,18 @@ const DEFAULT_MODELS: Record<ModelTier, string> = {
   fast: 'anthropic/claude-haiku-4.5',
 };
 
+/**
+ * Embedding model for semantic search over stored documents.
+ *
+ * Its width is baked into the Search index, so CHANGING THIS INVALIDATES EVERY
+ * STORED VECTOR: the index declares a fixed dimension, and a 3072-wide vector
+ * queried against a 1536-wide index does not degrade gracefully, it fails.
+ * Changing the model means a new index and a re-embed of the corpus — which is
+ * why `embeddingModelId()` exists and each stored vector records the model that
+ * produced it, rather than the width being assumed to be whatever is current.
+ */
+const DEFAULT_EMBEDDING_MODEL = 'openai/text-embedding-3-small';
+
 type AppImageSize = NonNullable<
   Parameters<ImageGenerator['generate']>[0]['size']
 >;
@@ -82,6 +94,10 @@ function toAspectRatio(size: AppImageSize | undefined): string {
 
 export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
   const models = { ...DEFAULT_MODELS, ...config.models };
+  const embeddingModelId =
+    config.embeddingModelId ||
+    process.env['AI_EMBEDDING_MODEL'] ||
+    DEFAULT_EMBEDDING_MODEL;
 
   return {
     providerName: 'gateway',
@@ -92,6 +108,14 @@ export function createAIProvider(config: AIProviderConfig = {}): AIProvider {
 
     languageModel(tier: ModelTier = 'default'): LanguageModel {
       return gateway(models[tier]);
+    },
+
+    embeddingModelId(): string {
+      return embeddingModelId;
+    },
+
+    embeddingModel() {
+      return gateway.textEmbeddingModel(embeddingModelId);
     },
 
     imageGenerator(

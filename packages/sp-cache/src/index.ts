@@ -30,6 +30,9 @@ export {
   migrateReportRows,
   deleteReportRows,
   deleteReportImports,
+  listImports,
+  countRowsForImport,
+  deleteImport,
   ReportQueryError,
   LEDGER_AUTHORITY,
 } from './lib/report-store.js';
@@ -62,12 +65,17 @@ export type {
 export {
   storeBoxLabel,
   listBoxLabels,
+  deleteBoxLabelsForAsset,
   boxLabelStorage,
   BoxLabelError,
 } from './lib/box-label-store.js';
 export type { StoredBoxLabel, BoxLabelInput } from './lib/box-label-store.js';
 export {
   confirmPurchase,
+  DOCUMENTS_COLLECTION,
+  DOCUMENTS_DOMAIN,
+  deleteStoredDocument,
+  dismissSuggestedLink,
   documentStorage,
   DocumentStoreError,
   getStoredDocument,
@@ -75,6 +83,7 @@ export {
   purchaseGrouping,
   roleForRecognisedKind,
   setDocumentRole,
+  setDocumentShipment,
   storeExtractedDocument,
 } from './lib/document-store.js';
 export type {
@@ -117,6 +126,7 @@ export {
   listPurchaseOrders,
   poStorage,
   PoStoreError,
+  setPurchaseOrderShipment,
 } from './lib/po-store.js';
 export type {
   ListPurchaseOrdersFilters,
@@ -137,3 +147,21 @@ export type {
   SettlementReconciliation,
   SkuIdentity,
 } from './lib/settlement-report.js';
+export {
+  searchDocuments,
+  suggestLinks,
+  documentSearchText,
+  documentSearchTransport,
+  DocumentSearchError,
+  DOCUMENT_SEARCH_INDEX,
+  documentSearchIndexDefinition,
+  documentSearchTypeKey,
+  EMBEDDING_DIMENSIONS,
+} from './lib/document-search.js';
+export type {
+  DocumentSearchFilters,
+  DocumentSearchHit,
+  DocumentSearchResult,
+  SearchDocumentsParams,
+  SuggestedLink,
+} from './lib/document-search.js';

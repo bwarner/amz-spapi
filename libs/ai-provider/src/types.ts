@@ -46,7 +46,18 @@ export interface ImageGenerator {
 
 export interface AIProvider {
   languageModel(tier?: ModelTier): LanguageModel;
-  embeddingModel?(): import('@ai-sdk/provider').EmbeddingModelV2<string>;
+  /**
+   * Text embedding model, for semantic search over stored documents.
+   *
+   * Typed V3, not V2: the gateway returns `EmbeddingModelV3`, and while this
+   * said V2 the method could not be implemented without a cast — which is why
+   * it stayed unimplemented. Both types are still exported by
+   * `@ai-sdk/provider`, so the mismatch raised no error anywhere; it just left
+   * a declared capability that silently did not exist.
+   */
+  embeddingModel?(): import('@ai-sdk/provider').EmbeddingModelV3;
+  /** Resolved embedding model slug, so stored vectors can record their origin. */
+  embeddingModelId?(): string;
   imageGenerator?(variant?: ImageModelVariant): ImageGenerator;
   readonly providerName: string;
   modelId(tier?: ModelTier): string;

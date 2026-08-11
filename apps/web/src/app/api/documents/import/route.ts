@@ -9,6 +9,7 @@ import {
   ingestReportBuffer,
   isIngestError,
   REPORTS,
+  roleForRecognisedKind,
   storeBoxLabel,
   storeExtractedDocument,
 } from '@amz-spapi/sp-cache';
@@ -30,6 +31,7 @@ import {
   extractDocument,
   type ExtractionResult,
 } from '../../../../lib/document-extraction';
+import { embedDocument } from '../../../../lib/document-embedding';
 import { loggerFor } from '../../../../lib/logger';
 const log = loggerFor('documents');
 
@@ -307,6 +309,9 @@ export async function POST(request: Request) {
       // for the .ai should get a .ai back.
       extension: extension || extensionForMime(mimeType),
       feature: 'documents',
+      // A seller looks for "the Ruiyi invoice", not for asset_9f3c…. Keeping the
+      // name is also what keeps this file out of asset GC's reach.
+      originalFileName: file.name,
     });
 
     // A box label is only useful once it is a record that reconciliation can
@@ -353,7 +358,14 @@ export async function POST(request: Request) {
     // Cost extraction runs only for documents that carry cost, and only when
     // there is text to read. It is a paid model call, so it must never fire on
     // a box label, a design file or a scan with nothing in it.
-    const COST_BEARING = new Set(['commercial-invoice', 'receipt']);
+    const COST_BEARING = new Set([
+      'commercial-invoice',
+      'receipt',
+      // A PO carries the ORDERED side of every later comparison — quantities
+      // the invoice is checked against, the total the shipments view falls
+      // back to. Unextracted it is a file; extracted it is a baseline.
+      'purchase-order',
+    ]);
     let extraction: ExtractionResult | undefined;
     let extractionError: string | undefined;
     if (
@@ -390,10 +402,31 @@ export async function POST(request: Request) {
     let documentStoreError: string | undefined;
     if (extraction) {
       try {
+        // Embedded BEFORE the write, so a document is never briefly stored
+        // without the vector that makes it findable. Returns undefined when the
+        // gateway is unreachable — the document is still stored and listed, it
+        // is simply absent from semantic search until re-embedded.
+        const storedRole = roleForRecognisedKind(recognition.kind) ?? 'other';
+        const embedded = await embedDocument({
+          role: storedRole,
+          fileName: file.name,
+          recognition: {
+            kind: recognition.kind,
+            confidence: recognition.confidence,
+            needsUserChoice: recognition.needsUserChoice,
+            alternatives: recognition.alternatives.map((entry) => entry.kind),
+            signals: recognition.signals.map((signal) => signal.reason),
+          },
+          extracted: extraction.document,
+        });
+
         const record = await storeExtractedDocument({
           userId: session.user.sub,
           assetId: asset.assetId,
           fileName: file.name,
+          searchText: embedded?.searchText,
+          embedding: embedded?.embedding,
+          embeddingModelId: embedded?.embeddingModelId,
           recognition: {
             kind: recognition.kind,
             confidence: recognition.confidence,

@@ -30,6 +30,16 @@ vi.mock('@farvisionllc/models', async (importOriginal) => ({
 }));
 vi.mock('./media-assets', () => ({ loadAssetBytes, getAsset }));
 vi.mock('./document-extraction', () => ({ extractDocument }));
+/**
+ * Embedding is a paid network call, so it is stubbed out rather than mocked
+ * through `@amz-spapi/sp-cache`. Returning undefined is also the case worth
+ * pinning: filing must still store the document when the embedder is
+ * unavailable, leaving it findable by name and absent only from semantic
+ * search.
+ */
+vi.mock('./document-embedding', () => ({
+  embedDocument: async () => undefined,
+}));
 vi.mock('./pdf-text', () => ({ extractPdfText }));
 vi.mock('@amz-spapi/sp-cache', () => ({
   storeExtractedDocument,

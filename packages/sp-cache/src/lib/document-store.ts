@@ -24,6 +24,7 @@
 
 import {
   collectionName,
+  deleteDocument,
   executeQuery,
   getDocument as getCouchbaseDocument,
   upsertDocument,
@@ -42,11 +43,22 @@ import {
 export const documentStorage = {
   executeQuery,
   upsertDocument,
+  deleteDocument,
   getDocument: getCouchbaseDocument,
 };
 
-const SCOPE = 'purchases';
-const COLLECTION = 'documents';
+/**
+ * Where extracted documents live.
+ *
+ * Exported because the Search index has to name the same keyspace, and naming
+ * it twice is how the two drift apart — an index pointed at a collection
+ * nothing writes to builds cleanly and returns nothing forever.
+ */
+export const DOCUMENTS_DOMAIN = 'purchases';
+export const DOCUMENTS_COLLECTION = 'documents';
+
+const SCOPE = DOCUMENTS_DOMAIN;
+const COLLECTION = DOCUMENTS_COLLECTION;
 
 /** How a document came to have the role it has. */
 export type RoleSource =
@@ -80,6 +92,41 @@ export type StoredDocument = {
   needsReview: boolean;
   /** Which model produced the extraction, so a suspect figure is attributable. */
   modelId?: string;
+  /** Semantic index text, indexed by the Search service. */
+  searchText?: string;
+  /** Embedding of `searchText`. Absent until the document has been embedded. */
+  embedding?: number[];
+  /** Which model produced `embedding`, so stale vectors can be found. */
+  embeddingModelId?: string;
+  /**
+   * Suggestions a human has rejected, as document ids.
+   *
+   * Kept because a suggestion is a QUESTION, and a question that returns after
+   * it has been answered is worse than one never asked — the reviewer learns to
+   * ignore the panel, which is where the real joins live too. Stored on the
+   * document rather than in a second collection so it cannot outlive the
+   * document it belongs to.
+   *
+   * One-directional on purpose: rejecting B from A's panel hides it there.
+   * Meaning is not symmetric — A may be an obvious match for B while B is one
+   * of forty equally plausible matches for A — and a reviewer looking at B has
+   * not answered that question yet.
+   */
+  dismissedLinks?: string[];
+  /**
+   * FBA shipments this document belongs to, confirmed by a human.
+   *
+   * Stored rather than derived because no derivation exists: a supplier's
+   * invoice does not mention Amazon's shipment id, and the ledger's
+   * `referenceId` joins receipts to shipments, never to paperwork. Box labels
+   * join themselves (they carry the id); everything else is a human saying
+   * "this invoice paid for what went out as FBA17K9QZ2X" — which is exactly
+   * the kind of answer that must not be re-asked after a re-import.
+   *
+   * A list, not a scalar: one invoice routinely covers goods that Amazon
+   * split into several shipments.
+   */
+  shipmentIds?: string[];
   /**
    * Set when a human confirmed a grouping the joins could not make on their
    * own. Derived grouping is the default and stays consistent with the
@@ -121,6 +168,8 @@ export function roleForRecognisedKind(
       return 'customs-declaration';
     case 'packing-list':
       return 'packing-list';
+    case 'purchase-order':
+      return 'purchase-order';
     case 'amazon-report':
     case 'fba-box-label':
     case 'fnsku-label':
@@ -145,6 +194,23 @@ export type StoreDocumentParams = {
   modelId?: string;
   /** Overrides the role the recognition implies. Records the human as source. */
   role?: DocumentRole;
+  /**
+   * Semantic index of this document (from `documentSearchText`) and its
+   * embedding. Both optional: a document stored without them is still a
+   * document, it is simply absent from semantic search until re-embedded.
+   *
+   * Computed by the caller rather than here, so this package keeps no
+   * dependency on the AI provider — the import route already holds one.
+   */
+  searchText?: string;
+  embedding?: number[];
+  /**
+   * Which model produced `embedding`. Recorded rather than assumed: the vector
+   * width is baked into the Search index, so after a model change knowing
+   * WHICH rows are stale is the difference between re-embedding the corpus and
+   * rebuilding it blind.
+   */
+  embeddingModelId?: string;
 };
 
 /**
@@ -196,9 +262,18 @@ export async function storeExtractedDocument(
     issues: params.issues,
     needsReview: params.needsReview,
     modelId: params.modelId,
+    // Re-reading a file with no embedder configured must not silently strip
+    // the vector a previous import produced — that would drop the document
+    // out of semantic search with nothing to show for it.
+    searchText: params.searchText ?? existing?.searchText,
+    embedding: params.embedding ?? existing?.embedding,
+    embeddingModelId: params.embeddingModelId ?? existing?.embeddingModelId,
     // A confirmed grouping is about these documents' relationship, not their
     // content, so re-reading the file must not forget it.
     confirmedPurchaseId: existing?.confirmedPurchaseId,
+    // A human's answers survive re-import, for the same reason the role does.
+    dismissedLinks: existing?.dismissedLinks,
+    shipmentIds: existing?.shipmentIds,
     storedAt: existing?.storedAt ?? now,
     updatedAt: now,
   };
@@ -273,6 +348,102 @@ export async function getStoredDocument(
   // id cannot read another seller's evidence.
   if (!doc || doc.userId !== userId) return null;
   return doc;
+}
+
+/**
+ * Forget an extracted document.
+ *
+ * Deleted outright rather than flagged. A soft delete would leave the figures
+ * in place for anything that reads the collection without knowing to exclude
+ * them, and the point of removing a misread invoice is that its numbers stop
+ * counting — a half-deleted cost is worse than either state.
+ *
+ * Ownership-checked through `getStoredDocument`, so a guessed id deletes
+ * nothing. Returns false when there was nothing to delete, which is the same
+ * outcome the caller wanted and not an error.
+ */
+export async function deleteStoredDocument(params: {
+  userId: string;
+  documentId: string;
+}): Promise<boolean> {
+  const existing = await getStoredDocument(params.userId, params.documentId);
+  if (!existing) return false;
+  await documentStorage.deleteDocument(SCOPE, COLLECTION, params.documentId);
+  return true;
+}
+
+/**
+ * Record that a suggested link is not a real one.
+ *
+ * Idempotent, and it does not fail on an unknown id: the reviewer's intent is
+ * "stop showing me this", and a second click on a slow connection should be a
+ * no-op rather than an error.
+ */
+export async function dismissSuggestedLink(params: {
+  userId: string;
+  documentId: string;
+  dismissedDocumentId: string;
+}): Promise<StoredDocument> {
+  const existing = await getStoredDocument(params.userId, params.documentId);
+  if (!existing) {
+    throw new DocumentStoreError(`No document ${params.documentId}.`);
+  }
+
+  const dismissed = new Set(existing.dismissedLinks ?? []);
+  dismissed.add(params.dismissedDocumentId);
+
+  const record: StoredDocument = {
+    ...existing,
+    dismissedLinks: [...dismissed].sort(),
+    updatedAt: Date.now(),
+  };
+  await documentStorage.upsertDocument(
+    SCOPE,
+    COLLECTION,
+    record.documentId,
+    record
+  );
+  return record;
+}
+
+/**
+ * Attach a document to a shipment, or detach it.
+ *
+ * One function for both directions so the invariant lives in one place: the
+ * list stays sorted and deduplicated, and detaching the last shipment removes
+ * the field rather than leaving `[]` — an empty list would read as "confirmed
+ * to belong to no shipment", which is a different claim from "never asked".
+ */
+export async function setDocumentShipment(params: {
+  userId: string;
+  documentId: string;
+  shipmentId: string;
+  attached: boolean;
+}): Promise<StoredDocument> {
+  const existing = await getStoredDocument(params.userId, params.documentId);
+  if (!existing) {
+    throw new DocumentStoreError(`No document ${params.documentId}.`);
+  }
+  if (!params.shipmentId.trim()) {
+    throw new DocumentStoreError('A shipment link needs a shipment id.');
+  }
+
+  const shipments = new Set(existing.shipmentIds ?? []);
+  if (params.attached) shipments.add(params.shipmentId);
+  else shipments.delete(params.shipmentId);
+
+  const record: StoredDocument = {
+    ...existing,
+    shipmentIds: shipments.size ? [...shipments].sort() : undefined,
+    updatedAt: Date.now(),
+  };
+  await documentStorage.upsertDocument(
+    SCOPE,
+    COLLECTION,
+    record.documentId,
+    record
+  );
+  return record;
 }
 
 /**
