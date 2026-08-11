@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 import { recognizeDocument } from '@farvisionllc/models';
+import { PDFDocument } from 'pdf-lib';
 import { extractDocxText } from './docx-text';
+import { renderDocxAsPdf } from './evidence-packet';
+import { extractPdfText } from './pdf-text';
 
 /**
  * Word documents must READ the same as their PDF twins. The fixture is built
@@ -84,5 +87,25 @@ describe('extractDocxText', () => {
     const result = await extractDocxText(Buffer.from('%PDF-1.4 not a zip'));
     expect(result.notADocx).toBe(true);
     expect(result.text).toBe('');
+  });
+
+  it('renders as labelled PDF pages for the evidence packet', async () => {
+    const bytes = await docxOf([
+      'PURCHASE ORDER PO-2026-0009',
+      'Payment terms: Net 60',
+    ]);
+    const { text } = await extractDocxText(bytes);
+
+    const pdf = await renderDocxAsPdf('supplier-po.docx', text);
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBeGreaterThan(0);
+
+    // The words survive the round trip — and so does the label. Converted
+    // evidence must SAY it is converted; pages that could pass for the
+    // original would misrepresent what the reviewer is looking at.
+    const readBack = await extractPdfText(Buffer.from(pdf));
+    const flat = readBack.text.replace(/\s+/g, ' ');
+    expect(flat).toContain('PURCHASE ORDER PO-2026-0009');
+    expect(flat).toContain('Text rendering of a Word document');
+    expect(flat).toContain('original file is retained');
   });
 });

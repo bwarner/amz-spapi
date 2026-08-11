@@ -21,6 +21,7 @@ import {
   type StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
 import { summariseBoxLabels } from '@farvisionllc/models';
+import { extractDocxText } from './docx-text';
 import { resolveSellerContext } from './document-center';
 import { loadAssetBytes } from './media-assets';
 import { loggerFor } from './logger';
@@ -629,6 +630,44 @@ function LedgerSection({ plan }: { plan: PacketPlan }) {
 }
 
 /**
+ * A Word document, rendered as typeset text so the packet can carry it.
+ *
+ * A PDF cannot embed a .docx, and the platform has no Word renderer — but the
+ * text IS the evidence on the documents sellers actually send this way (POs,
+ * packing lists, quotes). So the extracted text is typeset onto pages that
+ * SAY what they are, in a banner a reviewer cannot miss: a text rendering,
+ * not the original, formatting and images not reproduced, original retained.
+ * Converted evidence presented as the original would be a misrepresentation;
+ * converted evidence labelled as converted is just legible.
+ */
+function DocxRendering({ fileName, text }: { fileName: string; text: string }) {
+  return (
+    <Document>
+      <Page size="A4" style={styles.page} wrap>
+        <Text style={styles.title}>{fileName}</Text>
+        <Text style={[styles.gap, { marginBottom: 12 }]}>
+          Text rendering of a Word document — formatting and images are not
+          reproduced. The original file is retained in Sellavant.
+        </Text>
+        {text.split('\n').map((line, index) => (
+          <Text key={index} style={{ marginBottom: 2 }}>
+            {line || ' '}
+          </Text>
+        ))}
+      </Page>
+    </Document>
+  );
+}
+
+/** Exported for tests: docx text in, labelled PDF bytes out. */
+export async function renderDocxAsPdf(
+  fileName: string,
+  text: string
+): Promise<Buffer> {
+  return renderToBuffer(<DocxRendering fileName={fileName} text={text} />);
+}
+
+/**
  * Compose the packet.
  *
  * Two passes because the cover cites page numbers: every section is loaded and
@@ -688,14 +727,28 @@ export async function buildPacketPdf(params: {
             height: image.height,
           });
           documents.push(wrapper);
+        } else if (asset.mimeType.includes('wordprocessingml')) {
+          // Convert rather than omit: the extracted text is typeset onto
+          // pages that state they are a rendering, not the original.
+          const docx = await extractDocxText(Buffer.from(asset.bytes));
+          if (docx.text.trim()) {
+            const rendered = await renderDocxAsPdf(item.label, docx.text);
+            documents.push(await PDFDocument.load(rendered));
+            item.label = `${item.label} (text rendering)`;
+          } else {
+            plan.gaps.push({
+              name: item.label,
+              reason:
+                'a Word document with no extractable text — export it to ' +
+                'PDF and attach that version',
+            });
+          }
         } else {
           plan.gaps.push({
             name: item.label,
-            reason: asset.mimeType.includes('wordprocessingml')
-              ? 'a Word document, which a PDF cannot carry — export it to ' +
-                'PDF and attach that version'
-              : `stored as ${asset.mimeType}, which a PDF cannot carry — ` +
-                'attach a PDF or image version',
+            reason:
+              `stored as ${asset.mimeType}, which a PDF cannot carry — ` +
+              'attach a PDF or image version',
           });
         }
       } catch (error) {
