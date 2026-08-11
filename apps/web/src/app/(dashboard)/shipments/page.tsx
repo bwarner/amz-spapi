@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, Loader2, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -135,6 +135,19 @@ export default function ShipmentsPage() {
     label: string;
   } | null>(null);
 
+  /**
+   * Card positions, frozen at first load.
+   *
+   * The server sorts least-complete first, which is right for ARRIVING at the
+   * page and wrong while working on it: attaching a PO moves a card from 1/6
+   * to 2/6, and re-sorting then pushes the card the seller just acted on below
+   * every 1/6 card — off the screen. Watched happen in a recording: the attach
+   * succeeded, the card vanished from view, and the seller reasonably read it
+   * as "didn't attach". A list must not reorder underneath the person using
+   * it; a fresh visit gets the fresh sort.
+   */
+  const cardOrder = useRef(new Map<string, number>());
+
   const load = useCallback(async () => {
     const [shipmentsResponse, documentsResponse] = await Promise.all([
       fetch('/api/shipments'),
@@ -149,7 +162,24 @@ export default function ShipmentsPage() {
       return;
     }
     setError(null);
-    setView(payload as ShipmentCenter);
+    const incoming = payload as ShipmentCenter;
+    if (cardOrder.current.size) {
+      const known = cardOrder.current;
+      incoming.shipments = [...incoming.shipments].sort((a, b) => {
+        const indexA = known.get(a.shipmentId);
+        const indexB = known.get(b.shipmentId);
+        if (indexA !== undefined && indexB !== undefined)
+          return indexA - indexB;
+        // Genuinely new shipments join at the end, in the server's order.
+        if (indexA !== undefined) return -1;
+        if (indexB !== undefined) return 1;
+        return 0;
+      });
+    }
+    cardOrder.current = new Map(
+      incoming.shipments.map((entry, index) => [entry.shipmentId, index])
+    );
+    setView(incoming);
 
     // The attach dialog's menu: every extracted document in the library, with
     // its role. Loaded alongside rather than on demand so opening the dialog

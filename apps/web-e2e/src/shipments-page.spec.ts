@@ -40,6 +40,103 @@ test.describe('shipments page', () => {
       });
     });
 
+    test('attaching does not move the card the seller is looking at', async ({
+      page,
+      context,
+    }) => {
+      // The recorded failure this pins: the list sorts least-complete first,
+      // so a successful attach re-sorted the acted-on card below every
+      // less-complete one — off the screen — and read as "didn't attach".
+      // The sort applies on arrival; positions must hold while the page is
+      // in use, so this drives the REAL UI attach rather than the API.
+      const documents = await (
+        await context.request.get('/api/documents')
+      ).json();
+      const invoices = (
+        documents.files as Array<{
+          assetId?: string;
+          produced: Array<{ kind: string; role?: string }>;
+        }>
+      ).filter((file) =>
+        file.produced.some(
+          (item) =>
+            item.kind === 'purchase-document' &&
+            item.role === 'commercial-invoice'
+        )
+      );
+      const center = await (await context.request.get('/api/shipments')).json();
+      const po = (center.orders ?? [])[0];
+      test.skip(
+        invoices.length < 2 || !po,
+        'Needs two invoices and an issued order.'
+      );
+
+      const A = 'FBA-E2E-STAY-A';
+      const B = 'FBA-E2E-STAY-B';
+      const link = (data: Record<string, unknown>): Promise<unknown> =>
+        context.request.post('/api/shipments/link', { data });
+
+      await link({
+        assetId: invoices[0].assetId,
+        shipmentId: A,
+        attached: true,
+      });
+      await link({
+        assetId: invoices[1].assetId,
+        shipmentId: B,
+        attached: true,
+      });
+      try {
+        await page.goto('/shipments');
+        await expect(page.getByText(A)).toBeVisible({ timeout: 15_000 });
+        await expect(page.getByText(B)).toBeVisible();
+
+        const order = async () => {
+          const text = await page.locator('body').innerText();
+          return [A, B].sort((x, y) => text.indexOf(x) - text.indexOf(y));
+        };
+        const before = await order();
+
+        // Attach through the dialog on the FIRST of the two cards — the one
+        // whose completeness change used to re-sort it past the other. Both
+        // seeded cards are the only ones with an empty PO slot, and DOM order
+        // is card order, so .first() is the first card.
+        await expect(async () => {
+          await page
+            .getByTitle(/Missing purchase order/)
+            .first()
+            .click();
+          await expect(page.getByRole('dialog')).toBeVisible({
+            timeout: 2_000,
+          });
+        }).toPass({ timeout: 20_000 });
+        await page.getByRole('dialog').getByText(po.poNumber).first().click();
+
+        // The in-page reload has landed once the acted-on card reads 2 of 6.
+        await expect(page.getByText('2 of 6').first()).toBeVisible({
+          timeout: 20_000,
+        });
+
+        // Both cards still on screen, in the same order.
+        await expect(page.getByText(A)).toBeVisible();
+        await expect(page.getByText(B)).toBeVisible();
+        expect(await order()).toEqual(before);
+      } finally {
+        await link({
+          assetId: invoices[0].assetId,
+          shipmentId: A,
+          attached: false,
+        });
+        await link({
+          assetId: invoices[1].assetId,
+          shipmentId: B,
+          attached: false,
+        });
+        await link({ poNumber: po?.poNumber, shipmentId: A, attached: false });
+        await link({ poNumber: po?.poNumber, shipmentId: B, attached: false });
+      }
+    });
+
     test('an order the app issued fills the PO slot, until detached', async ({
       page,
       context,
