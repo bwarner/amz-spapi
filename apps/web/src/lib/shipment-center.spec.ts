@@ -286,10 +286,17 @@ describe('buildShipmentView', () => {
     expect(entry.discrepancies).toBe(1);
   });
 
-  it('names what is missing, and sorts the least complete first', () => {
+  it('names what is missing, and sorts newest first', () => {
+    // Ordering is recency, NOT completeness. The first cut ranked
+    // least-complete first, which pushed a shipment down the page the moment
+    // the seller attached something to it — progress read as demotion, and
+    // today's shipment sat under months of stale backlog.
     const complete = 'FBA-FULL';
     const entries = view({
-      boxLabels: [label(complete, 1), label('FBA-THIN', 1)],
+      boxLabels: [
+        label(complete, 1, { createdAt: '2026-06-01' }),
+        label('FBA-THIN', 1, { createdAt: '2026-05-01' }),
+      ],
       reconciliations: [recon(complete)],
       documents: (
         [
@@ -303,11 +310,21 @@ describe('buildShipmentView', () => {
       ),
     });
 
-    expect(entries[0].shipmentId).toBe('FBA-THIN');
-    expect(entries[0].headline).toMatch(/^Missing purchase order, invoice/);
-    expect(entries[1].shipmentId).toBe(complete);
-    expect(entries[1].presentCount).toBe(6);
+    // FBA-FULL is complete AND newer — it leads because it is newer.
+    expect(entries[0].shipmentId).toBe(complete);
+    expect(entries[0].presentCount).toBe(6);
     // A fully documented shipment has earned silence.
-    expect(entries[1].headline).toBeUndefined();
+    expect(entries[0].headline).toBeUndefined();
+    expect(entries[1].shipmentId).toBe('FBA-THIN');
+    expect(entries[1].headline).toMatch(/^Missing purchase order, invoice/);
+  });
+
+  it('sorts a shipment with no dated evidence as newest of all', () => {
+    // Documents-only, just linked by hand: being worked on right now.
+    const entries = view({
+      boxLabels: [label('FBA-DATED', 1, { createdAt: '2026-06-01' })],
+      documents: [document({ assetId: 'a1', shipmentIds: ['FBA-NEW'] })],
+    });
+    expect(entries[0].shipmentId).toBe('FBA-NEW');
   });
 });

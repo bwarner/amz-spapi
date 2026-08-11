@@ -170,11 +170,17 @@ export function buildShipmentView(input: ShipmentViewInput): ShipmentEntry[] {
     )
   );
 
-  // Least complete first: the screen exists to surface what is missing, and a
-  // fully documented shipment needs nothing from anyone.
+  // Newest first. The first cut sorted least-complete first, which buried the
+  // shipment a seller was actively working on at the bottom the moment they
+  // attached anything to it — completeness RANKING punished progress. What is
+  // missing is already carried by the count badge and the Incomplete tab; the
+  // order's job is "what am I working on", and that is recency. A shipment
+  // with no dated evidence yet (documents only, just linked by hand) is being
+  // worked on right now, so it sorts as newest of all.
   return entries.sort(
     (a, b) =>
-      a.presentCount - b.presentCount || (b.to ?? '').localeCompare(a.to ?? '')
+      (b.to ?? '9999').localeCompare(a.to ?? '9999') ||
+      a.presentCount - b.presentCount
   );
 }
 
