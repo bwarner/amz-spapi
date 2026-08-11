@@ -578,11 +578,22 @@ function ShipmentCard({
         ) : null}
       </div>
 
-      {entry.discrepancies > 0 ? (
-        <Button asChild size="sm" variant="outline" className="mt-3">
-          <Link href="/reconciliation">Reconcile</Link>
-        </Button>
-      ) : null}
+      <div className="mt-3 flex gap-2">
+        {entry.discrepancies > 0 ? (
+          <Button asChild size="sm" variant="outline">
+            <Link href="/reconciliation">Reconcile</Link>
+          </Button>
+        ) : null}
+        {/* The payoff of the checklist: the slots ARE the packet's table of
+            contents, so any shipment with at least one document can build. */}
+        {entry.presentCount > 0 ? (
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/shipments/${entry.shipmentId}/packet`}>
+              Build packet
+            </Link>
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

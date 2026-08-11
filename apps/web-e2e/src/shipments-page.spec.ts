@@ -169,6 +169,22 @@ test.describe('shipments page', () => {
       }
     });
 
+    test('refuses to plan a packet while seller data is unreadable', async ({
+      context,
+    }) => {
+      // The packet's whole value is honesty about what evidence exists. Under
+      // a forged session the credential service is unreachable, and a packet
+      // built then would name the ledger and labels as MISSING when they are
+      // merely unreadable — so the route must refuse, and say why, rather
+      // than emit a PDF that misstates the gaps.
+      const response = await context.request.get(
+        '/api/shipments/FBA-E2E-ANY/packet?plan=1'
+      );
+      expect(response.status()).toBe(503);
+      const payload = await response.json();
+      expect(payload.error).toMatch(/could not be read/i);
+    });
+
     test('a document attached to a shipment fills its slot, until detached', async ({
       page,
       context,
