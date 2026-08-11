@@ -57,6 +57,7 @@ type Produced =
       documentId: string;
       role: DocumentRole;
       roleSource: string;
+      issuedPoNumber?: string;
       vendorName?: string;
       documentDate?: string;
       currency?: string;
@@ -754,6 +755,11 @@ function ProducedLine({ item }: { item: Produced }) {
         {item.vendorName ? ` — ${item.vendorName}` : ''}
         {item.documentDate ? `, ${item.documentDate}` : ''}
         {total ? `, ${total}` : ''}
+        {/* Same number as an order we issued: this file is that order's copy,
+            not a second PO. */}
+        {item.issuedPoNumber
+          ? ` — copy of ${item.issuedPoNumber}, issued in Sellavant`
+          : ''}
       </span>
       {item.needsReview ? (
         <span className="block text-xs text-amber-700">

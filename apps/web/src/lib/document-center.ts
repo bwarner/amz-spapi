@@ -4,11 +4,13 @@ import {
   deleteStoredDocument,
   listBoxLabels,
   listImports,
+  listPurchaseOrders,
   purchaseGrouping,
   REPORTS,
   type ReportImport,
   type StoredBoxLabel,
   type StoredDocument,
+  type StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
 import {
   PURCHASE_AUTHORITY,
@@ -81,6 +83,14 @@ export type Produced =
       needsReview: boolean;
       /** The purchase this document belongs to, derived or confirmed. */
       purchaseId?: string;
+      /**
+       * Set when this upload is a COPY of an order the app itself issued —
+       * its extracted number matches an issued PO's number, which is ours and
+       * sequential, so a match is identity rather than coincidence. Byte
+       * hashing cannot make this join: a re-render or a download that rewrites
+       * metadata changes every byte of "the same document".
+       */
+      issuedPoNumber?: string;
     }
   | {
       kind: 'box-labels';
@@ -158,7 +168,33 @@ export type FileViewInput = {
   imports: ReportImport[];
   boxLabels: StoredBoxLabel[];
   grouping: PurchaseGrouping & { documents: StoredDocument[] };
+  /** Issued orders, for folding uploaded copies onto their originals. */
+  purchaseOrders?: StoredPurchaseOrder[];
 };
+
+/** "po-2026-0001 " and "PO-2026-0001" are the same number. */
+function normalisePoNumber(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+/**
+ * Which issued order, if any, an uploaded document is a copy of.
+ *
+ * Only documents FILED as purchase orders are considered: an invoice that
+ * cites the PO it answers carries the same number, and folding it would file
+ * the bill as the order. The number is Sellavant's own — assigned
+ * sequentially at issue — so a match on it is identity, not resemblance.
+ */
+export function issuedOrderFor(
+  document: Pick<StoredDocument, 'role' | 'extracted'>,
+  ordersByNumber: Map<string, string>
+): string | undefined {
+  if (document.role !== 'purchase-order') return undefined;
+  const number =
+    document.extracted.invoiceNumber ?? document.extracted.receiptNumber;
+  if (!number) return undefined;
+  return ordersByNumber.get(normalisePoNumber(number));
+}
 
 /**
  * A file's display name.
@@ -217,6 +253,11 @@ export function buildFileView(input: FileViewInput): {
     documentsByAsset.set(document.assetId, document);
   }
 
+  const ordersByNumber = new Map<string, string>();
+  for (const po of input.purchaseOrders ?? []) {
+    ordersByNumber.set(normalisePoNumber(po.order.poNumber), po.order.poNumber);
+  }
+
   const labelsByAsset = new Map<string, StoredBoxLabel[]>();
   for (const label of input.boxLabels) {
     if (!label.assetId) continue;
@@ -268,6 +309,7 @@ export function buildFileView(input: FileViewInput): {
         total: document.extracted.total,
         needsReview: document.needsReview,
         purchaseId: purchaseByDocument.get(document.documentId),
+        issuedPoNumber: issuedOrderFor(document, ordersByNumber),
       });
     }
 
@@ -563,15 +605,24 @@ export async function loadDocumentCenter(params: {
 
   const { sellerId, status: sellerStatus } = await resolveSellerContext(userId);
 
-  const [assets, grouping, imports, boxLabels] = await Promise.all([
-    listAssets({ userId, feature: 'documents' }),
-    purchaseGrouping({ userId }),
-    sellerId ? listImports({ sellerId }) : Promise.resolve([]),
-    sellerId ? listBoxLabels({ sellerId }) : Promise.resolve([]),
-  ]);
+  const [assets, grouping, imports, boxLabels, purchaseOrders] =
+    await Promise.all([
+      listAssets({ userId, feature: 'documents' }),
+      purchaseGrouping({ userId }),
+      sellerId ? listImports({ sellerId }) : Promise.resolve([]),
+      sellerId ? listBoxLabels({ sellerId }) : Promise.resolve([]),
+      listPurchaseOrders({ userId }),
+    ]);
 
   return {
-    ...buildFileView({ userId, assets, imports, boxLabels, grouping }),
+    ...buildFileView({
+      userId,
+      assets,
+      imports,
+      boxLabels,
+      grouping,
+      purchaseOrders,
+    }),
     sellerStatus,
   };
 }

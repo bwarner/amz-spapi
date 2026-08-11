@@ -79,6 +79,8 @@ type Candidate = {
   documentDate?: string;
   total?: number;
   currency?: string;
+  /** Set when the upload is a copy of an issued order — see document-center. */
+  issuedPoNumber?: string;
 };
 
 /** Which roles can answer which slot — the attach dialog offers only these. */
@@ -157,6 +159,7 @@ export default function ShipmentsPage() {
                 assetId: file.assetId as string,
                 fileName: file.fileName,
                 role: item['role'] as string,
+                issuedPoNumber: item['issuedPoNumber'] as string | undefined,
                 vendorName: item['vendorName'] as string | undefined,
                 documentDate: item['documentDate'] as string | undefined,
                 total: item['total'] as number | undefined,
@@ -208,7 +211,14 @@ export default function ShipmentsPage() {
   const attachTargets = useMemo(() => {
     if (!attach) return [];
     const roles = ROLES_FOR_SLOT[attach.slot] ?? [];
-    return candidates.filter((candidate) => roles.includes(candidate.role));
+    return (
+      candidates
+        .filter((candidate) => roles.includes(candidate.role))
+        // A copy of an issued order is not offered beside the order itself:
+        // two rows for one PO reads as two POs, and attaching the copy would
+        // record a weaker fact than attaching the order.
+        .filter((candidate) => !candidate.issuedPoNumber)
+    );
   }, [attach, candidates]);
 
   // Orders the app issued, offered first: they are the record the PDF was

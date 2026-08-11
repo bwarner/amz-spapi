@@ -312,6 +312,60 @@ describe('buildFileView', () => {
     expect(view.suggestions[0].fileIds).toEqual(['a1', 'a2']);
   });
 
+  it('folds an uploaded PO onto the issued order it copies, by number', () => {
+    const copy = document({
+      assetId: 'a1',
+      role: 'purchase-order',
+      extracted: {
+        vendorName: 'Panama Select',
+        invoiceNumber: 'po-2026-0001 ', // as a model reads it: case and space
+        currency: 'USD',
+        total: 1600,
+        lines: [],
+      } as StoredDocument['extracted'],
+    });
+    // An invoice CITING the PO it answers carries the same number. Folding it
+    // would file the bill as the order, so only PO-role documents fold.
+    const citingInvoice = document({
+      assetId: 'a2',
+      role: 'commercial-invoice',
+      extracted: {
+        vendorName: 'Panama Select',
+        invoiceNumber: 'PO-2026-0001',
+        currency: 'USD',
+        total: 1600,
+        lines: [],
+      } as StoredDocument['extracted'],
+    });
+
+    const view = buildFileView({
+      userId: USER,
+      assets: [asset({ assetId: 'a1' }), asset({ assetId: 'a2' })],
+      imports: [],
+      boxLabels: [],
+      grouping: emptyGrouping([copy, citingInvoice]),
+      purchaseOrders: [
+        {
+          key: `${USER}::PO-2026-0001`,
+          userId: USER,
+          order: { poNumber: 'PO-2026-0001' },
+          renders: [],
+          storedAt: 1,
+          updatedAt: 1,
+        } as never,
+      ],
+    });
+
+    const produced = (assetId: string) =>
+      view.files
+        .find((file) => file.assetId === assetId)!
+        .produced.find((item) => item.kind === 'purchase-document') as {
+        issuedPoNumber?: string;
+      };
+    expect(produced('a1').issuedPoNumber).toBe('PO-2026-0001');
+    expect(produced('a2').issuedPoNumber).toBeUndefined();
+  });
+
   it('orders files and imports together, newest first', () => {
     const view = buildFileView({
       userId: USER,

@@ -10,7 +10,7 @@ import {
   type StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
 import { purchaseOrderTotals, summariseBoxLabels } from '@farvisionllc/models';
-import { resolveSellerContext } from './document-center';
+import { issuedOrderFor, resolveSellerContext } from './document-center';
 
 /**
  * Every inbound shipment, and which of its six documents exist.
@@ -132,6 +132,14 @@ export function buildShipmentView(input: ShipmentViewInput): ShipmentEntry[] {
     }
   }
 
+  const allOrderNumbers = new Map<string, string>();
+  for (const po of input.purchaseOrders ?? []) {
+    allOrderNumbers.set(
+      po.order.poNumber.trim().toUpperCase().replace(/\s+/g, ''),
+      po.order.poNumber
+    );
+  }
+
   const ordersByShipment = new Map<string, StoredPurchaseOrder[]>();
   for (const po of input.purchaseOrders ?? []) {
     if (po.order.status === 'cancelled') continue;
@@ -157,7 +165,8 @@ export function buildShipmentView(input: ShipmentViewInput): ShipmentEntry[] {
       labelsByShipment.get(shipmentId) ?? [],
       reconByShipment.get(shipmentId),
       documentsByShipment.get(shipmentId) ?? [],
-      ordersByShipment.get(shipmentId) ?? []
+      ordersByShipment.get(shipmentId) ?? [],
+      allOrderNumbers
     )
   );
 
@@ -174,13 +183,26 @@ function buildEntry(
   labels: StoredBoxLabel[],
   recon: ShipmentReconciliation | undefined,
   documents: StoredDocument[],
-  orders: StoredPurchaseOrder[]
+  orders: StoredPurchaseOrder[],
+  allOrderNumbers: Map<string, string>
 ): ShipmentEntry {
   const slots: Slot[] = [];
 
   // The app's own order outranks an uploaded copy of one: it is the record the
   // PDF was printed FROM, so where both exist the original answers.
   const nativePo = orders[0];
+  const uploadedPoSlot = documentSlot('po', documents);
+  if (!nativePo && uploadedPoSlot.present) {
+    // An uploaded document that IS one of our orders is named as such, so the
+    // card reads the same whichever record answered the slot.
+    const linkedPoDocument = documents.find(
+      (document) => document.role === 'purchase-order'
+    );
+    const copyOf = linkedPoDocument
+      ? issuedOrderFor(linkedPoDocument, allOrderNumbers)
+      : undefined;
+    if (copyOf) uploadedPoSlot.note = `copy of ${copyOf}`;
+  }
   slots.push(
     nativePo
       ? {
@@ -191,7 +213,7 @@ function buildEntry(
           fileName: nativePo.order.poNumber,
           note: 'issued in Sellavant',
         }
-      : documentSlot('po', documents)
+      : uploadedPoSlot
   );
   for (const key of ['invoice', 'packingList'] as const) {
     slots.push(documentSlot(key, documents));

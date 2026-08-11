@@ -183,22 +183,33 @@ test.describe('documents page', () => {
       await expect(page.locator('.border-primary').first()).toBeVisible();
     });
 
-    test('opens a document and leads with the failed checks', async ({
+    test('a document that failed its checks leads with them', async ({
       page,
+      context,
     }) => {
-      await page.goto('/documents');
-      await expect(
-        page.getByRole('heading', { name: /^Files \(/ })
-      ).toBeVisible({ timeout: 15_000 });
+      // Picked through the API rather than "the first document": the library
+      // is live data, and the first Open link stops having failed checks the
+      // moment the seller imports a clean invoice — which is exactly what
+      // broke the first version of this test.
+      const documents = await (
+        await context.request.get('/api/documents')
+      ).json();
+      const flagged = (
+        documents.files as Array<{
+          assetId?: string;
+          produced: Array<{ kind: string; needsReview?: boolean }>;
+        }>
+      ).find((file) =>
+        file.produced.some(
+          (item) => item.kind === 'purchase-document' && item.needsReview
+        )
+      );
+      test.skip(!flagged?.assetId, 'No needs-review document to open.');
 
-      // Only files with an extracted document are linked; box labels and
-      // unread uploads have no figures to review.
-      await openFirstDocument(page);
-
+      await page.goto(`/documents/${flagged!.assetId}`);
       await expect(page.getByText(/checks? failed/i).first()).toBeVisible({
         timeout: 15_000,
       });
-
       // Provenance: a suspect figure has to be attributable without asking.
       await expect(page.getByText(/read by /)).toBeVisible();
     });
@@ -240,10 +251,15 @@ test.describe('documents page', () => {
       const before = await page
         .getByRole('button', { name: 'Same purchase' })
         .count();
-      await notRelated.first().click();
-      await expect(
-        page.getByRole('button', { name: 'Same purchase' })
-      ).toHaveCount(before - 1);
+      // Click-and-check as one retried unit: the suggestions panel re-renders
+      // as data lands, and a click into a row React is replacing dies silently
+      // — the same race the Library rows had.
+      await expect(async () => {
+        await notRelated.first().click();
+        await expect(
+          page.getByRole('button', { name: 'Same purchase' })
+        ).toHaveCount(before - 1, { timeout: 2_000 });
+      }).toPass({ timeout: 20_000 });
 
       // The point of storing it. A suggestion that returns after being answered
       // teaches the reviewer to ignore the panel — real joins included.
