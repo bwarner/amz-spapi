@@ -37,6 +37,21 @@ const PURCHASE_ORDER =
   'Unit price Amount FB-COF-HGE-250 80 bags USD 20.00 USD 1,600.00 ' +
   'Goods subtotal USD 1,600.00 TOTAL USD 1,600.00 PAYMENT TERMS Net 60';
 
+/**
+ * Scrubbed from the real Word PO that came back "unknown, 0.27": headed
+ * PURCHASE ORDER, but the body instructs the supplier about packing lists and
+ * cartons, and ships to an FBA address — vocabulary three other matchers
+ * legitimately score on.
+ */
+const HEADED_PO_WITH_NOISY_BODY =
+  'PURCHASE ORDER\tAcme LLC\nBrand (brand)\n\tPO Number: PO-2026-0529\t' +
+  'Date: May 29, 2026\nSupplier\nExample Plantation\nBuyer / Ship-To\n' +
+  'Acme LLC\nFBA: Acme c/o Amazon.com Services LLC\nShip from origin port. ' +
+  'Ship to fulfilment centre.\nSKU Description Qty Unit price Amount\n' +
+  'AC-1 Beans 100 USD 5.00 USD 500.00 Subtotal USD 500.00 Total USD 500.00\n' +
+  'Include a packing list with each carton. Net weight and gross weight on ' +
+  'every carton label.';
+
 const recognise = (text: string, fileName = 'doc.pdf') =>
   recognizeDocument({ fileName, mimeType: 'application/pdf', text });
 
@@ -55,6 +70,17 @@ describe('recognizeDocument', () => {
     const result = recognise(PURCHASE_ORDER);
     expect(result.kind).toBe('purchase-order');
     expect(result.needsUserChoice).toBe(false);
+  });
+
+  it('trusts the heading of a PO whose body talks like three other documents', () => {
+    // The share rule punished a real PO for being thorough: instructions
+    // about packing lists, carton weights and FBA ship-to blocks let other
+    // matchers score nearly as high. The document names ITSELF in its first
+    // words, and that has to outweigh circumstantial body vocabulary.
+    const result = recognise(HEADED_PO_WITH_NOISY_BODY, 'supplier-po.docx');
+    expect(result.kind).toBe('purchase-order');
+    expect(result.needsUserChoice).toBe(false);
+    expect(result.signals.some((s) => s.reason.includes('headed'))).toBe(true);
   });
 
   it('keeps an invoice that merely cites its PO number as an invoice', () => {
