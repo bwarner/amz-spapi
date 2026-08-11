@@ -19,6 +19,7 @@ import {
   extensionForMime,
   persistGeneratedFileAsset,
 } from '../../../../lib/media-assets';
+import { extractDocxText, isDocx, DOCX_MIME } from '../../../../lib/docx-text';
 import { extractPdfText } from '../../../../lib/pdf-text';
 import {
   isBinaryWorkbook,
@@ -115,6 +116,8 @@ export async function POST(request: Request) {
       ? 'application/pdf'
       : extension === 'ai'
       ? 'application/illustrator'
+      : extension === 'docx'
+      ? DOCX_MIME
       : 'application/octet-stream';
 
   const bytes = Buffer.from(await file.arrayBuffer());
@@ -136,6 +139,13 @@ export async function POST(request: Request) {
     // CSV and TSV are text as far as recognition is concerned — an Amazon
     // report is identified by its header row.
     text = bytes.toString('utf8');
+  } else if (isDocx(mimeType, extension)) {
+    // Word documents are how suppliers actually send POs and packing lists.
+    // Extract the text so recognition and extraction see the same words a
+    // PDF of the same document would give them.
+    const docx = await extractDocxText(bytes);
+    text = docx.text;
+    noExtractableText = docx.notADocx;
   }
 
   // Spreadsheets are previewed rather than extracted. `.xlsx` is a zip and has

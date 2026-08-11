@@ -691,7 +691,11 @@ export async function buildPacketPdf(params: {
         } else {
           plan.gaps.push({
             name: item.label,
-            reason: `stored as ${asset.mimeType}, which a PDF cannot carry — attach a PDF or image version`,
+            reason: asset.mimeType.includes('wordprocessingml')
+              ? 'a Word document, which a PDF cannot carry — export it to ' +
+                'PDF and attach that version'
+              : `stored as ${asset.mimeType}, which a PDF cannot carry — ` +
+                'attach a PDF or image version',
           });
         }
       } catch (error) {

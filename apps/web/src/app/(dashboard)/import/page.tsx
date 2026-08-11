@@ -282,13 +282,14 @@ export default function ReportsPage() {
           Reports (.txt, .tsv, .csv) — ledger, stranded, removals,
           reimbursements, inbound performance, settlements, storage fees
           <br />
-          Documents (.pdf, .ai, images) — invoices, receipts, PODs, box designs
+          Documents (.pdf, .docx, .ai, images) — invoices, receipts, POs, PODs,
+          box designs
         </p>
         <input
           ref={inputRef}
           type="file"
           multiple
-          accept=".txt,.tsv,.csv,.pdf,.ai,.png,.jpg,.jpeg,.heic,text/plain,text/tab-separated-values,text/csv,application/pdf,image/*"
+          accept=".txt,.tsv,.csv,.pdf,.docx,.ai,.png,.jpg,.jpeg,.heic,text/plain,text/tab-separated-values,text/csv,application/pdf,image/*"
           className="hidden"
           onChange={(event) => {
             if (event.target.files?.length) upload(event.target.files);
