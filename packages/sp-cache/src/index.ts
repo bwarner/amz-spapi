@@ -30,6 +30,9 @@ export {
   migrateReportRows,
   deleteReportRows,
   deleteReportImports,
+  listImports,
+  countRowsForImport,
+  deleteImport,
   ReportQueryError,
   LEDGER_AUTHORITY,
 } from './lib/report-store.js';
@@ -62,12 +65,14 @@ export type {
 export {
   storeBoxLabel,
   listBoxLabels,
+  deleteBoxLabelsForAsset,
   boxLabelStorage,
   BoxLabelError,
 } from './lib/box-label-store.js';
 export type { StoredBoxLabel, BoxLabelInput } from './lib/box-label-store.js';
 export {
   confirmPurchase,
+  deleteStoredDocument,
   documentStorage,
   DocumentStoreError,
   getStoredDocument,

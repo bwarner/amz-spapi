@@ -191,6 +191,14 @@ export const INDEXES: IndexSpec[] = [
     keys: ['`sellerId`', '(`fields`.`referenceId`)'],
   },
   {
+    // Which rows one import actually brought in — asked before deleting a file,
+    // and by the delete itself. Without it both statements scan every row the
+    // seller has (tens of thousands) to find the few thousand they mean.
+    collection: 'reports_rows',
+    name: 'idx_report_rows_import',
+    keys: ['`sellerId`', '`importId`'],
+  },
+  {
     collection: 'reports_imports',
     name: 'idx_report_imports_seller_kind',
     keys: ['`sellerId`', '`kind`', '`observedFrom`'],
@@ -214,6 +222,16 @@ export const INDEXES: IndexSpec[] = [
     collection: 'credentials_profiles',
     name: 'idx_profiles_user_apitype',
     keys: ['`user_id`', '`api_type`'],
+  },
+  {
+    // "What have I uploaded?" — the file manager's only read. There was no
+    // index here at all because nothing had ever listed this collection: every
+    // other caller arrives holding an asset id. `createdForFeature` sits in the
+    // middle so the documents screen scans only documents and not every
+    // generated A+ image, which outnumber them heavily.
+    collection: 'media_assets',
+    name: 'idx_assets_user_feature_created',
+    keys: ['`userId`', '`createdForFeature`', '`createdAt`'],
   },
   {
     collection: 'media_asset_links',

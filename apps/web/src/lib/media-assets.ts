@@ -8,7 +8,9 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import {
+  collectionName,
   deleteDocument,
+  executeQuery,
   getDocument,
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
@@ -156,6 +158,48 @@ export async function getDuplicateAsset(params: {
   return asset;
 }
 
+/**
+ * One user's assets, newest first.
+ *
+ * The only listing there has ever been on this collection — everything else
+ * reads an asset the caller already had the id of, which is why a seller could
+ * upload thirty files and have no way to see them. Backed by
+ * `idx_assets_user_created`; there is no primary index on this cluster
+ * (ADR-0004), so the `userId` leading key is required, not merely faster.
+ *
+ * Ordered by `createdAt`, unlike `listDocuments`, which orders by the date on
+ * the document. This list answers "what did I upload", and for that the upload
+ * time IS the answer.
+ */
+export async function listAssets(params: {
+  userId: string;
+  /** Narrow to one feature's uploads — `documents` for the file manager. */
+  feature?: MediaAssetFeature;
+  limit?: number;
+}): Promise<MediaAsset[]> {
+  if (!params.userId) return [];
+
+  const conditions = ['d.`userId` = $userId', "d.`status` != 'pending_upload'"];
+  const parameters: Record<string, unknown> = {
+    userId: params.userId,
+    limit: params.limit ?? 500,
+  };
+  if (params.feature) {
+    conditions.push('d.`createdForFeature` = $feature');
+    parameters['feature'] = params.feature;
+  }
+
+  const { rows } = await executeQuery<MediaAsset>(
+    SCOPE,
+    `SELECT RAW d FROM \`${collectionName(SCOPE, ASSETS_COLLECTION)}\` AS d
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY d.\`createdAt\` DESC
+      LIMIT $limit`,
+    { parameters, readonly: true }
+  );
+  return rows;
+}
+
 export async function upsertHashPointer(asset: MediaAsset): Promise<void> {
   await upsertDocument<MediaAssetHashPointer>(
     SCOPE,
@@ -255,14 +299,46 @@ export async function persistGeneratedFileAsset(params: {
   mimeType: string;
   extension: string;
   feature?: MediaAssetFeature;
+  /**
+   * The name the seller's file already had. Pass it for anything a HUMAN
+   * uploaded; omit it for bytes this app generated.
+   *
+   * Two things follow from it, and both are why it is worth threading through.
+   * `invoice-8821.pdf` is what the file manager has to show — `generated-
+   * asset_9f3c….pdf` is not a name anyone can find a document by, and it is
+   * also a recognition signal in its own right, so re-reading a stored file
+   * classified it worse than the upload that stored it did. And the
+   * `generated-` prefix is precisely what marks an asset collectable
+   * (`a-plus-asset-cleanup`), so a real name is also what keeps an uploaded
+   * invoice out of GC's reach.
+   */
+  originalFileName?: string;
 }): Promise<MediaAsset> {
   const sha256 = crypto.createHash('sha256').update(params.bytes).digest('hex');
 
   const existing = await getDuplicateAsset({ userId: params.userId, sha256 });
-  if (existing) return existing;
+  if (existing) {
+    // Re-uploading a file we already hold under a generated name is the repair
+    // for one stored before names were kept: adopt the name now that we know
+    // it, rather than returning a record the seller cannot identify.
+    if (
+      params.originalFileName &&
+      existing.originalFileName.startsWith('generated-')
+    ) {
+      const renamed: MediaAsset = {
+        ...existing,
+        originalFileName: params.originalFileName,
+        updatedAt: Date.now(),
+      };
+      await upsertAsset(renamed);
+      return renamed;
+    }
+    return existing;
+  }
 
   const assetId = createAssetId();
-  const fileName = `generated-${assetId}.${params.extension}`;
+  const fileName =
+    params.originalFileName || `generated-${assetId}.${params.extension}`;
   const bucket = getAssetBucket();
   const key = createAssetKey({ userId: params.userId, assetId, fileName });
   const client = createAssetS3Client();

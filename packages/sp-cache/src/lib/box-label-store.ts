@@ -122,16 +122,26 @@ export async function storeBoxLabel(params: {
   return record;
 }
 
-/** Every stored label for a seller, optionally for one shipment. */
+/** Every stored label for a seller, optionally for one shipment or one file. */
 export async function listBoxLabels(params: {
   sellerId: string;
   shipmentId?: string;
+  /**
+   * Labels read from one uploaded PDF. Amazon prints every box of a shipment
+   * into a single file, so this is how a file says what it contributed — and
+   * how deleting that file knows what goes with it.
+   */
+  assetId?: string;
 }): Promise<StoredBoxLabel[]> {
   const conditions = ['d.sellerId = $sellerId'];
   const parameters: Record<string, unknown> = { sellerId: params.sellerId };
   if (params.shipmentId) {
     conditions.push('d.shipmentId = $shipmentId');
     parameters['shipmentId'] = params.shipmentId;
+  }
+  if (params.assetId) {
+    conditions.push('d.assetId = $assetId');
+    parameters['assetId'] = params.assetId;
   }
 
   const { rows } = await boxLabelStorage.executeQuery<StoredBoxLabel>(
@@ -142,4 +152,26 @@ export async function listBoxLabels(params: {
     { parameters, readonly: true }
   );
   return rows;
+}
+
+/**
+ * Delete the labels one uploaded file produced.
+ *
+ * Scoped by seller as well as asset: an asset id is a client-supplied string,
+ * and the shipped side of a reconciliation is not something another account
+ * should be able to reach.
+ */
+export async function deleteBoxLabelsForAsset(params: {
+  sellerId: string;
+  assetId: string;
+}): Promise<number> {
+  if (!params.assetId) return 0;
+  const { rows } = await boxLabelStorage.executeQuery<number>(
+    SCOPE,
+    `DELETE FROM \`${collectionName(SCOPE, COLLECTION)}\` AS d
+       WHERE d.sellerId = $sellerId AND d.assetId = $assetId
+       RETURNING RAW 1`,
+    { parameters: { sellerId: params.sellerId, assetId: params.assetId } }
+  );
+  return rows.length;
 }

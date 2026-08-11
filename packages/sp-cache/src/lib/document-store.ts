@@ -24,6 +24,7 @@
 
 import {
   collectionName,
+  deleteDocument,
   executeQuery,
   getDocument as getCouchbaseDocument,
   upsertDocument,
@@ -42,6 +43,7 @@ import {
 export const documentStorage = {
   executeQuery,
   upsertDocument,
+  deleteDocument,
   getDocument: getCouchbaseDocument,
 };
 
@@ -273,6 +275,28 @@ export async function getStoredDocument(
   // id cannot read another seller's evidence.
   if (!doc || doc.userId !== userId) return null;
   return doc;
+}
+
+/**
+ * Forget an extracted document.
+ *
+ * Deleted outright rather than flagged. A soft delete would leave the figures
+ * in place for anything that reads the collection without knowing to exclude
+ * them, and the point of removing a misread invoice is that its numbers stop
+ * counting — a half-deleted cost is worse than either state.
+ *
+ * Ownership-checked through `getStoredDocument`, so a guessed id deletes
+ * nothing. Returns false when there was nothing to delete, which is the same
+ * outcome the caller wanted and not an error.
+ */
+export async function deleteStoredDocument(params: {
+  userId: string;
+  documentId: string;
+}): Promise<boolean> {
+  const existing = await getStoredDocument(params.userId, params.documentId);
+  if (!existing) return false;
+  await documentStorage.deleteDocument(SCOPE, COLLECTION, params.documentId);
+  return true;
 }
 
 /**

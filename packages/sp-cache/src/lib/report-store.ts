@@ -253,6 +253,112 @@ export async function recordImport(params: {
   return record;
 }
 
+/**
+ * The import ledger for one seller, newest first.
+ *
+ * The file-level view of what has been ingested: which file, when, how many
+ * rows it actually contributed, and the window it covers. `getCoverage` answers
+ * the same question per KIND and derives it from the rows, which is right for
+ * "can this reconciliation be trusted" and useless for "what did I upload, and
+ * can I get rid of that one".
+ *
+ * Uses `idx_report_imports_seller_kind` by its leading key. The sort is done
+ * after the scan — an import ledger is tens of rows per seller, not thousands.
+ */
+export async function listImports(params: {
+  sellerId: string;
+  kind?: ReportKind;
+  limit?: number;
+}): Promise<ReportImport[]> {
+  if (!params.sellerId) return [];
+
+  const conditions = ['d.sellerId = $sellerId'];
+  const parameters: Record<string, unknown> = {
+    sellerId: params.sellerId,
+    limit: params.limit ?? 500,
+  };
+  if (params.kind) {
+    conditions.push('d.kind = $kind');
+    parameters['kind'] = params.kind;
+  }
+
+  const { rows } = await reportStorage.executeQuery<ReportImport>(
+    SCOPE,
+    `SELECT RAW d FROM ${IMPORTS} AS d
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY d.createdAt DESC
+       LIMIT $limit`,
+    { parameters, readonly: true }
+  );
+  return rows;
+}
+
+/**
+ * How many stored rows still carry this import's id — what deleting it costs.
+ *
+ * Asked separately from the delete so a seller can be shown the price before
+ * they agree to pay it. It is NOT `rowsNew` off the import record: rows expire
+ * at `REPORT_ROW_TTL_DAYS`, and a two-year-old import whose rows are long gone
+ * would otherwise offer to delete 1,043 rows and delete none.
+ */
+export async function countRowsForImport(params: {
+  sellerId: string;
+  importId: string;
+}): Promise<number> {
+  const { rows } = await reportStorage.executeQuery<number>(
+    SCOPE,
+    `SELECT RAW COUNT(*) FROM ${ROWS} AS d
+       WHERE d.sellerId = $sellerId AND d.importId = $importId`,
+    {
+      parameters: { sellerId: params.sellerId, importId: params.importId },
+      readonly: true,
+    }
+  );
+  return rows[0] ?? 0;
+}
+
+/**
+ * Delete one import: the rows it brought in, and its ledger entry.
+ *
+ * The per-file counterpart to `deleteReportRows`, which can only take a whole
+ * report kind — too blunt for "this settlement was for the wrong account".
+ *
+ * One consequence worth stating, because it is not obvious and cannot be fixed
+ * here. A row's `importId` is the import that FIRST stored it, and a later
+ * import that re-supplied the same row keeps that original id (see
+ * `storeReportRows`). So deleting the first import removes rows a second import
+ * also covered, and the second import's coverage shrinks with it. That is the
+ * honest outcome — the rows really are gone — and the repair is what it has
+ * always been: import the file again.
+ */
+export async function deleteImport(params: {
+  sellerId: string;
+  importId: string;
+}): Promise<{ rowsDeleted: number; importDeleted: boolean }> {
+  const { rows: deletedRows } = await reportStorage.executeQuery<number>(
+    SCOPE,
+    `DELETE FROM ${ROWS} AS d
+       WHERE d.sellerId = $sellerId AND d.importId = $importId
+       RETURNING RAW 1`,
+    { parameters: { sellerId: params.sellerId, importId: params.importId } }
+  );
+
+  // Scoped by sellerId as well as the id, so a guessed import id cannot delete
+  // another seller's ledger entry.
+  const { rows: deletedImports } = await reportStorage.executeQuery<number>(
+    SCOPE,
+    `DELETE FROM ${IMPORTS} AS d
+       WHERE d.sellerId = $sellerId AND d.importId = $importId
+       RETURNING RAW 1`,
+    { parameters: { sellerId: params.sellerId, importId: params.importId } }
+  );
+
+  return {
+    rowsDeleted: deletedRows.length,
+    importDeleted: deletedImports.length > 0,
+  };
+}
+
 export type Coverage = {
   kind: ReportKind;
   /** Merged windows actually ingested, ascending. */

@@ -307,6 +307,9 @@ export async function POST(request: Request) {
       // for the .ai should get a .ai back.
       extension: extension || extensionForMime(mimeType),
       feature: 'documents',
+      // A seller looks for "the Ruiyi invoice", not for asset_9f3c…. Keeping the
+      // name is also what keeps this file out of asset GC's reach.
+      originalFileName: file.name,
     });
 
     // A box label is only useful once it is a record that reconciliation can
