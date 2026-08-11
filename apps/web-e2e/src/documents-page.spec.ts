@@ -183,6 +183,87 @@ test.describe('documents page', () => {
       await expect(page.locator('.border-primary').first()).toBeVisible();
     });
 
+    test('opens a document and leads with the failed checks', async ({
+      page,
+    }) => {
+      await page.goto('/documents');
+      await expect(
+        page.getByRole('heading', { name: /^Files \(/ })
+      ).toBeVisible({ timeout: 15_000 });
+
+      // Only files with an extracted document are linked; box labels and
+      // unread uploads have no figures to review.
+      await page
+        .getByRole('link', { name: /Review|Open/ })
+        .first()
+        .click();
+
+      await expect(page).toHaveURL(/\/documents\/asset_/);
+      await expect(page.getByText(/checks? failed/i).first()).toBeVisible({
+        timeout: 15_000,
+      });
+
+      // Provenance: a suspect figure has to be attributable without asking.
+      await expect(page.getByText(/read by /)).toBeVisible();
+    });
+
+    test('a rejected suggestion stays rejected', async ({ page }) => {
+      await page.goto('/documents');
+      await expect(
+        page.getByRole('heading', { name: /^Files \(/ })
+      ).toBeVisible({ timeout: 15_000 });
+      await page
+        .getByRole('link', { name: /Review|Open/ })
+        .first()
+        .click();
+      await expect(page).toHaveURL(/\/documents\/asset_/);
+
+      const url = page.url();
+
+      // Wait for the panel to SETTLE before counting. Suggestions arrive from a
+      // search on the server, so counting immediately after navigation finds
+      // zero and the test skips itself while reporting success — which is how a
+      // broken feature keeps a green suite.
+      await expect(page.getByText(/Suggested links/i)).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect
+        .poll(
+          async () =>
+            (await page
+              .getByRole('button', { name: 'Same purchase' })
+              .count()) +
+            (await page
+              .getByText(/Nothing else reads as part|not been indexed/)
+              .count()),
+          { timeout: 15_000 }
+        )
+        .toBeGreaterThan(0);
+
+      const notRelated = page.getByRole('button', { name: 'Not related' });
+      if (!(await notRelated.count())) {
+        test.skip(true, 'No suggestion on this document to reject.');
+      }
+
+      const before = await page
+        .getByRole('button', { name: 'Same purchase' })
+        .count();
+      await notRelated.first().click();
+      await expect(
+        page.getByRole('button', { name: 'Same purchase' })
+      ).toHaveCount(before - 1);
+
+      // The point of storing it. A suggestion that returns after being answered
+      // teaches the reviewer to ignore the panel — real joins included.
+      await page.goto(url);
+      await expect(page.getByText(/Suggested links/i)).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(
+        page.getByRole('button', { name: 'Same purchase' })
+      ).toHaveCount(before - 1);
+    });
+
     test('every facet states how many files it holds', async ({ page }) => {
       await page.goto('/documents');
       await expect(

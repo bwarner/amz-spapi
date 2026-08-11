@@ -597,15 +597,31 @@ function FileRow({
       <div className="flex items-center gap-2">
         <FileIcon file={file} />
         {/* A file stored before names were kept has no name to show. Italic and
-            muted, so it does not read as a file actually called that. */}
-        <span
-          className={cn(
-            'truncate text-sm font-medium',
-            file.nameUnknown && 'italic text-muted-foreground'
-          )}
-        >
-          {file.fileName}
-        </span>
+            muted, so it does not read as a file actually called that.
+
+            Linked only when there is a document behind it: the detail view is
+            about extracted figures, and a box-label PDF or an unread upload has
+            none — a link to an empty page is worse than no link. */}
+        {document && file.assetId ? (
+          <Link
+            href={`/documents/${file.assetId}`}
+            className={cn(
+              'truncate text-sm font-medium underline-offset-4 hover:underline',
+              file.nameUnknown && 'italic text-muted-foreground'
+            )}
+          >
+            {file.fileName}
+          </Link>
+        ) : (
+          <span
+            className={cn(
+              'truncate text-sm font-medium',
+              file.nameUnknown && 'italic text-muted-foreground'
+            )}
+          >
+            {file.fileName}
+          </span>
+        )}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {formatDay(file.uploadedAt)}
         </span>
@@ -664,6 +680,14 @@ function FileRow({
               ))}
             </select>
           </label>
+        ) : null}
+
+        {document && file.assetId ? (
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/documents/${file.assetId}`}>
+              {document.needsReview ? 'Review' : 'Open'}
+            </Link>
+          </Button>
         ) : null}
 
         <Button

@@ -75,6 +75,7 @@ export {
   DOCUMENTS_COLLECTION,
   DOCUMENTS_DOMAIN,
   deleteStoredDocument,
+  dismissSuggestedLink,
   documentStorage,
   DocumentStoreError,
   getStoredDocument,

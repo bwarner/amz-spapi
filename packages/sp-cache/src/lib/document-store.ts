@@ -99,6 +99,21 @@ export type StoredDocument = {
   /** Which model produced `embedding`, so stale vectors can be found. */
   embeddingModelId?: string;
   /**
+   * Suggestions a human has rejected, as document ids.
+   *
+   * Kept because a suggestion is a QUESTION, and a question that returns after
+   * it has been answered is worse than one never asked — the reviewer learns to
+   * ignore the panel, which is where the real joins live too. Stored on the
+   * document rather than in a second collection so it cannot outlive the
+   * document it belongs to.
+   *
+   * One-directional on purpose: rejecting B from A's panel hides it there.
+   * Meaning is not symmetric — A may be an obvious match for B while B is one
+   * of forty equally plausible matches for A — and a reviewer looking at B has
+   * not answered that question yet.
+   */
+  dismissedLinks?: string[];
+  /**
    * Set when a human confirmed a grouping the joins could not make on their
    * own. Derived grouping is the default and stays consistent with the
    * documents; this exists because `groupPurchaseDocuments` deliberately
@@ -240,6 +255,8 @@ export async function storeExtractedDocument(
     // A confirmed grouping is about these documents' relationship, not their
     // content, so re-reading the file must not forget it.
     confirmedPurchaseId: existing?.confirmedPurchaseId,
+    // A human's answers survive re-import, for the same reason the role does.
+    dismissedLinks: existing?.dismissedLinks,
     storedAt: existing?.storedAt ?? now,
     updatedAt: now,
   };
@@ -336,6 +353,40 @@ export async function deleteStoredDocument(params: {
   if (!existing) return false;
   await documentStorage.deleteDocument(SCOPE, COLLECTION, params.documentId);
   return true;
+}
+
+/**
+ * Record that a suggested link is not a real one.
+ *
+ * Idempotent, and it does not fail on an unknown id: the reviewer's intent is
+ * "stop showing me this", and a second click on a slow connection should be a
+ * no-op rather than an error.
+ */
+export async function dismissSuggestedLink(params: {
+  userId: string;
+  documentId: string;
+  dismissedDocumentId: string;
+}): Promise<StoredDocument> {
+  const existing = await getStoredDocument(params.userId, params.documentId);
+  if (!existing) {
+    throw new DocumentStoreError(`No document ${params.documentId}.`);
+  }
+
+  const dismissed = new Set(existing.dismissedLinks ?? []);
+  dismissed.add(params.dismissedDocumentId);
+
+  const record: StoredDocument = {
+    ...existing,
+    dismissedLinks: [...dismissed].sort(),
+    updatedAt: Date.now(),
+  };
+  await documentStorage.upsertDocument(
+    SCOPE,
+    COLLECTION,
+    record.documentId,
+    record
+  );
+  return record;
 }
 
 /**
