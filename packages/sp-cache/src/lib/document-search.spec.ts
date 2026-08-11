@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DOCUMENT_SEARCH_INDEX,
   documentSearchIndexDefinition,
+  DOCUMENT_SEARCH_FIELDS,
   documentSearchTypeKey,
   DocumentSearchError,
   EMBEDDING_DIMENSIONS,
@@ -179,7 +180,8 @@ describe('query construction', () => {
       expect(
         all.some(
           (clause) =>
-            (clause as Record<string, unknown>)['field'] === 'documentDate'
+            (clause as Record<string, unknown>)['field'] ===
+            'extracted.documentDate'
         )
       ).toBe(true);
     }
@@ -194,8 +196,10 @@ describe('query construction', () => {
 
   it('asks for the fields a result row needs, so rendering needs no second fetch', async () => {
     await searchDocuments({ userId: 'seller-a', text: 'x' });
-    expect(lastBody()['fields']).toContain('vendorName');
-    expect(lastBody()['fields']).toContain('total');
+    // The full paths, which is how the index names nested fields. Asking for
+    // 'vendorName' returns nothing and the row renders with no supplier.
+    expect(lastBody()['fields']).toContain('extracted.vendorName');
+    expect(lastBody()['fields']).toContain('extracted.total');
   });
 });
 
@@ -205,10 +209,12 @@ describe('results', () => {
       {
         id: 'seller-a::asset-1',
         score: 1.2,
+        // Verbatim the shape Couchbase returns: nested fields come back under
+        // their full path, not flattened to the name given in the mapping.
         fields: {
-          vendorName: 'Guangzhou Weilong',
-          total: 4102.04,
-          currency: 'USD',
+          'extracted.vendorName': 'Guangzhou Weilong',
+          'extracted.total': 4102.04,
+          'extracted.currency': 'USD',
           role: 'commercial-invoice',
         },
       },
@@ -416,6 +422,73 @@ describe('the index definition and the queries agree', () => {
     for (const field of ['vendorName', 'documentDate', 'total', 'currency']) {
       expect(stored).toContain(field);
     }
+  });
+
+  it('addresses nested fields by their full path, as the index names them', () => {
+    // The defect this pins. A child field under an object mapping is addressed
+    // as `extracted.vendorName`; the `name` in the mapping does not flatten it.
+    // Queried as `vendorName` it matches nothing and returns empty rather than
+    // erroring — and the vector half keeps returning documents, so the search
+    // looks like it works while the keyword half is dead.
+    expect(DOCUMENT_SEARCH_FIELDS.vendorName).toBe('extracted.vendorName');
+    expect(DOCUMENT_SEARCH_FIELDS.documentDate).toBe('extracted.documentDate');
+    expect(DOCUMENT_SEARCH_FIELDS.total).toBe('extracted.total');
+    expect(DOCUMENT_SEARCH_FIELDS.currency).toBe('extracted.currency');
+    // Top-level fields stay unprefixed.
+    expect(DOCUMENT_SEARCH_FIELDS.userId).toBe('userId');
+    expect(DOCUMENT_SEARCH_FIELDS.searchText).toBe('searchText');
+  });
+
+  it('every field the queries name is one the index defines', () => {
+    // Walks the mapping and rebuilds the addressable names, so a field renamed
+    // or moved under `extracted` fails here rather than in production silence.
+    const addressable = new Set<string>();
+    const walk = (
+      properties: Record<string, unknown>,
+      prefix: string
+    ): void => {
+      for (const [key, value] of Object.entries(properties)) {
+        const node = value as {
+          fields?: Array<{ name?: string }>;
+          properties?: Record<string, unknown>;
+        };
+        for (const field of node.fields ?? []) {
+          if (field.name) addressable.add(`${prefix}${field.name}`);
+        }
+        if (node.properties) walk(node.properties, `${prefix}${key}.`);
+      }
+    };
+    walk(mapping.properties as Record<string, unknown>, '');
+
+    for (const name of Object.values(DOCUMENT_SEARCH_FIELDS)) {
+      expect(addressable).toContain(name);
+    }
+  });
+
+  it('puts the free-text fields in _all, or unfielded search finds nothing', () => {
+    // `searchDocuments` sends a query_string with no field, which searches the
+    // composite `_all` field. A field only joins `_all` when it says so, and
+    // omitting it is silent: keyword search matches nothing while the vector
+    // half still answers.
+    const inAll = new Set<string>();
+    const collect = (node: unknown, prefix: string): void => {
+      if (!node || typeof node !== 'object') return;
+      const record = node as {
+        fields?: Array<{ name?: string; include_in_all?: boolean }>;
+        properties?: Record<string, unknown>;
+      };
+      for (const field of record.fields ?? []) {
+        if (field.include_in_all && field.name) inAll.add(field.name);
+      }
+      for (const [key, value] of Object.entries(record.properties ?? {})) {
+        collect(value, `${prefix}${key}.`);
+      }
+    };
+    collect(mapping, '');
+
+    expect(inAll).toContain('searchText');
+    expect(inAll).toContain('vendorName');
+    expect(inAll).toContain('fileName');
   });
 
   it('is named the same as the index the queries hit', () => {

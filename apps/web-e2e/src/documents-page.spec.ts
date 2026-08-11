@@ -135,6 +135,36 @@ test.describe('documents page', () => {
       });
     });
 
+    test('marks exactly one result, and the arrows move it', async ({
+      page,
+    }) => {
+      await page.goto('/documents');
+      await expect(
+        page.getByRole('heading', { name: /^Files \(/ })
+      ).toBeVisible({ timeout: 15_000 });
+
+      await page.keyboard.press('ControlOrMeta+k');
+      await page.getByPlaceholder(/Search by file name/i).fill('supplier');
+      // Server round trip, then a moment for the list to settle.
+      await expect
+        .poll(async () => page.locator('[cmdk-item]').count(), {
+          timeout: 15_000,
+        })
+        .toBeGreaterThan(1);
+
+      // The regression this pins: the two search paths disagreed about whether
+      // a hit is keyed `id` or `documentId`, so every row rendered with the
+      // same undefined value. cmdk treated them as ONE item — the whole list
+      // highlighted and the arrow keys did nothing, with no error anywhere.
+      const selected = page.locator('[cmdk-item][aria-selected="true"]');
+      await expect(selected).toHaveCount(1);
+
+      const first = await selected.textContent();
+      await page.keyboard.press('ArrowDown');
+      await expect(selected).toHaveCount(1);
+      expect(await selected.textContent()).not.toBe(first);
+    });
+
     test('jumping from the palette highlights the file', async ({ page }) => {
       await page.goto('/documents');
       await expect(

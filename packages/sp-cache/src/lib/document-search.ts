@@ -43,6 +43,43 @@ export const EMBEDDING_DIMENSIONS = 1536;
 
 export class DocumentSearchError extends Error {}
 
+/**
+ * What each field is called INSIDE the Search index.
+ *
+ * Not cosmetic, and not guessable. A child field under an object mapping is
+ * addressed by its full path — `extracted.vendorName`, never `vendorName` —
+ * and the `name` given in the mapping does not flatten it. Every way of getting
+ * this wrong is silent:
+ *
+ *  - a query on `vendorName` matches nothing and returns an empty result, not
+ *    an error;
+ *  - a `documentDate` range filter matches nothing, so adding a date range
+ *    makes every search return zero and reads as "no documents in that period";
+ *  - asking for `total` in `fields` returns it as absent, so a result row
+ *    renders with no supplier and no amount.
+ *
+ * All three were live: the vector half still returned documents, so the search
+ * looked like it worked while the keyword half matched nothing at all. The
+ * query builder, the stored-field request and the result reader now all read
+ * from here, and the index definition below is built from the same names.
+ */
+const FIELD = {
+  userId: 'userId',
+  role: 'role',
+  fileName: 'fileName',
+  searchText: 'searchText',
+  embedding: 'embedding',
+  vendorName: 'extracted.vendorName',
+  documentDate: 'extracted.documentDate',
+  invoiceNumber: 'extracted.invoiceNumber',
+  trackingNumber: 'extracted.trackingNumber',
+  total: 'extracted.total',
+  currency: 'extracted.currency',
+} as const;
+
+/** Exported so tests can assert the queries and the index agree. */
+export const DOCUMENT_SEARCH_FIELDS = FIELD;
+
 // ---------------------------------------------------------------------------
 // What gets indexed
 // ---------------------------------------------------------------------------
@@ -106,7 +143,7 @@ export function documentSearchText(
  * compared byte for byte.
  */
 function tenantClause(userId: string): Record<string, unknown> {
-  return { field: 'userId', term: userId };
+  return { field: FIELD.userId, term: userId };
 }
 
 function requireUser(userId: string | undefined): string {
@@ -131,12 +168,15 @@ function filterClauses(filters: DocumentSearchFilters): unknown[] {
   const clauses: unknown[] = [];
   if (filters.roles?.length) {
     clauses.push({
-      disjuncts: filters.roles.map((role) => ({ field: 'role', term: role })),
+      disjuncts: filters.roles.map((role) => ({
+        field: FIELD.role,
+        term: role,
+      })),
     });
   }
   if (filters.from || filters.to) {
     clauses.push({
-      field: 'documentDate',
+      field: FIELD.documentDate,
       ...(filters.from ? { start: filters.from, inclusive_start: true } : {}),
       ...(filters.to ? { end: filters.to, inclusive_end: true } : {}),
     });
@@ -187,22 +227,24 @@ function toHit(hit: {
   return {
     id: hit.id,
     score: hit.score,
-    ...(text('fileName') ? { fileName: text('fileName') } : {}),
-    ...(text('role') ? { role: text('role') } : {}),
-    ...(text('vendorName') ? { vendorName: text('vendorName') } : {}),
-    ...(text('documentDate') ? { documentDate: text('documentDate') } : {}),
-    ...(num('total') !== undefined ? { total: num('total') } : {}),
-    ...(text('currency') ? { currency: text('currency') } : {}),
+    ...(text(FIELD.fileName) ? { fileName: text(FIELD.fileName) } : {}),
+    ...(text(FIELD.role) ? { role: text(FIELD.role) } : {}),
+    ...(text(FIELD.vendorName) ? { vendorName: text(FIELD.vendorName) } : {}),
+    ...(text(FIELD.documentDate)
+      ? { documentDate: text(FIELD.documentDate) }
+      : {}),
+    ...(num(FIELD.total) !== undefined ? { total: num(FIELD.total) } : {}),
+    ...(text(FIELD.currency) ? { currency: text(FIELD.currency) } : {}),
   };
 }
 
 const STORED_FIELDS = [
-  'fileName',
-  'role',
-  'vendorName',
-  'documentDate',
-  'total',
-  'currency',
+  FIELD.fileName,
+  FIELD.role,
+  FIELD.vendorName,
+  FIELD.documentDate,
+  FIELD.total,
+  FIELD.currency,
 ];
 
 // ---------------------------------------------------------------------------
@@ -278,7 +320,7 @@ export async function searchDocuments(
   if (params.vector?.length) {
     body['knn'] = [
       {
-        field: 'embedding',
+        field: FIELD.embedding,
         vector: params.vector,
         k: limit,
         // The pre-filter is not optional. Without it the vector half searches
@@ -452,13 +494,30 @@ export function documentSearchIndexDefinition(params: {
               fileName: {
                 enabled: true,
                 fields: [
-                  { name: 'fileName', type: 'text', index: true, store: true },
+                  {
+                    name: 'fileName',
+                    type: 'text',
+                    index: true,
+                    store: true,
+                    include_in_all: true,
+                  },
                 ],
               },
               // The embedded meaning of the document, and the vector beside it.
               searchText: {
                 enabled: true,
-                fields: [{ name: 'searchText', type: 'text', index: true }],
+                fields: [
+                  {
+                    name: 'searchText',
+                    type: 'text',
+                    index: true,
+                    // The one that matters most: this field carries the whole
+                    // document's meaning — vendor, references, line
+                    // descriptions — so an unfielded keyword search that
+                    // excludes it is searching almost nothing.
+                    include_in_all: true,
+                  },
+                ],
               },
               embedding: {
                 enabled: true,
@@ -485,6 +544,7 @@ export function documentSearchIndexDefinition(params: {
                         type: 'text',
                         index: true,
                         store: true,
+                        include_in_all: true,
                       },
                     ],
                   },
@@ -508,6 +568,7 @@ export function documentSearchIndexDefinition(params: {
                         type: 'text',
                         analyzer: 'keyword',
                         index: true,
+                        include_in_all: true,
                       },
                     ],
                   },
@@ -519,6 +580,7 @@ export function documentSearchIndexDefinition(params: {
                         type: 'text',
                         analyzer: 'keyword',
                         index: true,
+                        include_in_all: true,
                       },
                     ],
                   },

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Loader2, Search, Sparkles } from 'lucide-react';
 import {
   CommandDialog,
+  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -144,35 +145,23 @@ export function DocumentPalette({
         </kbd>
       </button>
 
-      <CommandDialog
-        open={open}
-        onOpenChange={setOpen}
-        // Both lists arrive filtered — one locally by name, one by the server.
-        // Letting cmdk filter again would discard every semantic hit whose text
-        // does not literally contain the query, which is most of them.
-        commandProps={{ shouldFilter: false }}
-      >
+      <CommandDialog open={open} onOpenChange={setOpen}>
         <CommandInput
           value={query}
           onValueChange={setQuery}
           placeholder="Search by file name, supplier, or what a document says…"
         />
         <CommandList>
-          {/* With cmdk's own filtering off, CommandEmpty would always render —
-              it counts the items cmdk filtered, and cmdk is filtering nothing.
-              So emptiness is decided here, from the two lists we control. */}
-          {!matchingFiles.length && !semantic?.hits.length ? (
-            <div className="py-6 text-center text-sm text-muted-foreground">
-              {searching ? 'Searching…' : 'Nothing matches that.'}
-            </div>
-          ) : null}
+          <CommandEmpty>
+            {searching ? 'Searching…' : 'Nothing matches that.'}
+          </CommandEmpty>
 
           {matchingFiles.length ? (
             <CommandGroup heading="Files">
               {matchingFiles.map((file) => (
                 <CommandItem
                   key={file.id}
-                  value={`file-${file.id}`}
+                  value={itemValue('file', file.id, query)}
                   onSelect={() => choose(file.id)}
                 >
                   <FileText className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
@@ -198,7 +187,7 @@ export function DocumentPalette({
               {semantic.hits.map((hit) => (
                 <CommandItem
                   key={hit.documentId}
-                  value={`doc-${hit.documentId}`}
+                  value={itemValue('doc', hit.documentId, query)}
                   onSelect={() => choose(fileIdOf(hit.documentId))}
                 >
                   <Sparkles className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
@@ -238,6 +227,24 @@ export function DocumentPalette({
       </CommandDialog>
     </>
   );
+}
+
+/**
+ * An item's cmdk value: the query, then what makes the row unique.
+ *
+ * cmdk filters items itself by matching this against what was typed, and that
+ * filter is the wrong tool for a list the server already chose — a semantic hit
+ * is returned BECAUSE it means the same thing, not because its text contains
+ * those words, so cmdk would discard exactly the results worth showing.
+ *
+ * Turning the filter off is the obvious fix and the wrong one: cmdk derives
+ * keyboard selection from the same pass, so with it off every row reports
+ * itself selected and nothing indicates what Enter will open. Folding the query
+ * into the value keeps cmdk doing its job — every row matches, so every row
+ * survives — while selection, arrow keys and Enter keep working as built.
+ */
+function itemValue(kind: string, id: string, query: string): string {
+  return `${query} ${kind}-${id}`;
 }
 
 /**

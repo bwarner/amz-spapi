@@ -138,6 +138,26 @@ function drift(
     problems.push(`vector width ${dims} — wanted ${EMBEDDING_DIMENSIONS}`);
   }
 
+  // Whether the free-text fields join `_all`. Checked because it is the third
+  // silent one: without it an unfielded query — which is every search a seller
+  // types — matches nothing, while the vector half keeps returning documents.
+  // A live index missed this exact change, since the checks above all passed.
+  const searchTextField = (
+    observedMapping as
+      | {
+          properties?: Record<
+            string,
+            { fields?: Array<{ include_in_all?: boolean }> }
+          >;
+        }
+      | undefined
+  )?.properties?.['searchText']?.fields?.[0];
+  if (searchTextField && !searchTextField.include_in_all) {
+    problems.push(
+      'searchText is not in _all — unfielded keyword search matches nothing'
+    );
+  }
+
   return problems;
 }
 
@@ -147,12 +167,25 @@ async function main() {
   const env = requireEnv(args[args.indexOf('--env') + 1]);
   const apply = args.includes('--apply');
   const verify = args.includes('--verify');
+  const json = args.includes('--json');
 
   const wanted = documentSearchIndexDefinition({
     bucket: config.bucket,
     environmentScope: env,
   });
   const typeKey = documentSearchTypeKey(env);
+
+  // The definition on stdout, for creating the index by hand in the Capella UI.
+  //
+  // Worth having as a first-class option rather than a workaround: creating a
+  // Search index is a ONE-OFF administrative act, and doing it here requires
+  // giving the application's own credential bucket-wide write for the lifetime
+  // of the app. Pasted into the UI instead, the credential keeps read-only
+  // access and can still query — which is all the running app ever does.
+  if (json) {
+    console.log(JSON.stringify(wanted, null, 2));
+    return;
+  }
 
   console.log(`${apply ? 'APPLYING' : 'PLAN'} → ${config.bucket}.${env}`);
   console.log(`  index    ${wanted.name}`);

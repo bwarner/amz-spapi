@@ -83,7 +83,17 @@ export async function POST(request: Request) {
     });
 
     return Response.json({
-      hits: result.hits,
+      // Renamed from the index's `id` so BOTH answers below have one shape.
+      // They did not: the index calls it `id` and the fallback built
+      // `documentId`, so every consumer worked against whichever path it
+      // happened to be tested on. The palette read `documentId`, which made it
+      // correct while search was unavailable and broken the moment it came up —
+      // rendering `doc-undefined` for every row, which cmdk then treated as one
+      // item, so the whole list highlighted and arrow keys did nothing.
+      hits: result.hits.map(({ id, ...rest }) => ({
+        documentId: id,
+        ...rest,
+      })),
       total: result.total,
       mode: embedded ? 'hybrid' : 'keyword',
       // A partitioned index can answer 200 with partitions failed — a SUBSET
