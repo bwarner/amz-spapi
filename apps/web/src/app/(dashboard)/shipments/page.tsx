@@ -34,6 +34,7 @@ type Slot = {
   label: string;
   present: boolean;
   assetId?: string;
+  poNumber?: string;
   fileName?: string;
   disputed?: boolean;
   note?: string;
@@ -54,9 +55,19 @@ type ShipmentEntry = {
   discrepancies: number;
 };
 
+type PoCandidate = {
+  poNumber: string;
+  vendorName: string;
+  issueDate: string;
+  total: number;
+  currency: string;
+  shipmentIds: string[];
+};
+
 type ShipmentCenter = {
   shipments: ShipmentEntry[];
   sellerStatus: 'connected' | 'not-connected' | 'unavailable';
+  orders: PoCandidate[];
 };
 
 /** A library document that could fill a confirmed slot. */
@@ -115,14 +126,12 @@ export default function ShipmentsPage() {
       fetch('/api/shipments'),
       fetch('/api/documents'),
     ]);
-    const payload = await shipmentsResponse
-      .json()
-      .catch(() => ({
-        error: `Server error (HTTP ${shipmentsResponse.status}).`,
-      }));
+    const payload = await shipmentsResponse.json().catch(() => ({
+      error: `Server error (HTTP ${shipmentsResponse.status}).`,
+    }));
     if (!shipmentsResponse.ok) {
       setError(payload.error ?? 'Could not load your shipments.');
-      setView({ shipments: [], sellerStatus: 'not-connected' });
+      setView({ shipments: [], sellerStatus: 'not-connected', orders: [] });
       return;
     }
     setError(null);
@@ -164,13 +173,18 @@ export default function ShipmentsPage() {
   }, [load]);
 
   const setLink = useCallback(
-    async (assetId: string, shipmentId: string, attached: boolean) => {
-      setBusy(assetId);
+    async (
+      target: { assetId?: string; poNumber?: string },
+      shipmentId: string,
+      attached: boolean
+    ) => {
+      const busyKey = target.assetId ?? target.poNumber ?? '';
+      setBusy(busyKey);
       try {
         const response = await fetch('/api/shipments/link', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ assetId, shipmentId, attached }),
+          body: JSON.stringify({ ...target, shipmentId, attached }),
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
@@ -196,6 +210,16 @@ export default function ShipmentsPage() {
     const roles = ROLES_FOR_SLOT[attach.slot] ?? [];
     return candidates.filter((candidate) => roles.includes(candidate.role));
   }, [attach, candidates]);
+
+  // Orders the app issued, offered first: they are the record the PDF was
+  // printed from. Ones already on this shipment are omitted — offering an
+  // attach that is already true reads as the previous click having failed.
+  const poTargets = useMemo(() => {
+    if (!attach) return [];
+    return (view?.orders ?? []).filter(
+      (po) => !po.shipmentIds.includes(attach.shipmentId)
+    );
+  }, [attach, view]);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
@@ -261,7 +285,14 @@ export default function ShipmentsPage() {
               setAttach({ shipmentId: entry.shipmentId, slot })
             }
             onDetach={(slot) =>
-              slot.assetId && setLink(slot.assetId, entry.shipmentId, false)
+              (slot.assetId || slot.poNumber) &&
+              setLink(
+                slot.poNumber
+                  ? { poNumber: slot.poNumber }
+                  : { assetId: slot.assetId },
+                entry.shipmentId,
+                false
+              )
             }
           />
         ))}
@@ -298,6 +329,36 @@ export default function ShipmentsPage() {
             </DialogDescription>
           </DialogHeader>
 
+          {attach?.slot === 'po' && poTargets.length ? (
+            <ul className="space-y-2">
+              {poTargets.map((po) => (
+                <li key={po.poNumber}>
+                  <button
+                    type="button"
+                    disabled={busy === po.poNumber}
+                    onClick={() =>
+                      attach &&
+                      setLink(
+                        { poNumber: po.poNumber },
+                        attach.shipmentId,
+                        true
+                      )
+                    }
+                    className="w-full rounded-lg border p-3 text-left text-sm transition-colors hover:border-primary"
+                  >
+                    <span className="font-medium">
+                      {po.poNumber} · {po.vendorName}
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      issued in Sellavant · {po.issueDate} ·{' '}
+                      {money(po.total, po.currency)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
           {attachTargets.length ? (
             <ul className="space-y-2">
               {attachTargets.map((candidate) => (
@@ -307,7 +368,11 @@ export default function ShipmentsPage() {
                     disabled={busy === candidate.assetId}
                     onClick={() =>
                       attach &&
-                      setLink(candidate.assetId, attach.shipmentId, true)
+                      setLink(
+                        { assetId: candidate.assetId },
+                        attach.shipmentId,
+                        true
+                      )
                     }
                     className="w-full rounded-lg border p-3 text-left text-sm transition-colors hover:border-primary"
                   >
@@ -327,13 +392,18 @@ export default function ShipmentsPage() {
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : null}
+
+          {!attachTargets.length &&
+          !(attach?.slot === 'po' && poTargets.length) ? (
             <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
               Nothing in the library is filed as a{' '}
-              {attach ? SLOT_NAMES[attach.slot] : 'document'} yet. Import it, or
-              re-file an existing document under that role.
+              {attach ? SLOT_NAMES[attach.slot] : 'document'} yet.
+              {attach?.slot === 'po'
+                ? ' Create one on the Orders page, or import a PDF.'
+                : ' Import it, or re-file an existing document under that role.'}
             </p>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

@@ -40,6 +40,38 @@ test.describe('shipments page', () => {
       });
     });
 
+    test('an order the app issued fills the PO slot, until detached', async ({
+      page,
+      context,
+    }) => {
+      const center = await (await context.request.get('/api/shipments')).json();
+      const po = (center.orders ?? [])[0];
+      test.skip(!po, 'No issued orders in this environment.');
+
+      const SHIPMENT = 'FBA-E2E-PO-CYCLE';
+      const link = (attached: boolean) =>
+        context.request.post('/api/shipments/link', {
+          data: { poNumber: po.poNumber, shipmentId: SHIPMENT, attached },
+        });
+
+      await link(true);
+      try {
+        await page.goto('/shipments');
+        await expect(page.getByText(SHIPMENT)).toBeVisible({ timeout: 15_000 });
+        // What the page VISIBLY says when a native order answers the PO slot:
+        // the vendor, and a value marked as the PO's. The PO number itself
+        // lives in the chip's tooltip, so asserting it would pass on a hover
+        // style and fail on the rendered page. (Filtering divs by text and
+        // taking .last() lands on the innermost matching div — the card
+        // header — which is how the first version of this test missed a
+        // correctly rendered vendor.)
+        await expect(page.getByText(po.vendorName).first()).toBeVisible();
+        await expect(page.getByText('(PO)').first()).toBeVisible();
+      } finally {
+        await link(false);
+      }
+    });
+
     test('a document attached to a shipment fills its slot, until detached', async ({
       page,
       context,

@@ -1,4 +1,7 @@
-import { setDocumentShipment } from '@amz-spapi/sp-cache';
+import {
+  setDocumentShipment,
+  setPurchaseOrderShipment,
+} from '@amz-spapi/sp-cache';
 import { z } from 'zod';
 import { denyIfWithoutAccess } from '../../../../lib/access';
 import { auth0 } from '../../../../lib/auth0';
@@ -8,12 +11,20 @@ const log = loggerFor('shipments');
 
 export const runtime = 'nodejs';
 
-const bodySchema = z.object({
-  /** Asset id of the document, as everywhere else the client speaks. */
-  assetId: z.string().min(1),
-  shipmentId: z.string().trim().min(1),
-  attached: z.boolean(),
-});
+const bodySchema = z
+  .object({
+    /** Asset id of an uploaded document, as everywhere else the client speaks. */
+    assetId: z.string().min(1).optional(),
+    /** Number of an order the app issued — the other kind of PO-slot answer. */
+    poNumber: z.string().min(1).optional(),
+    shipmentId: z.string().trim().min(1),
+    attached: z.boolean(),
+  })
+  // Exactly one target. Accepting both would silently link only one of them,
+  // and the caller would have no way to know which.
+  .refine((body) => Boolean(body.assetId) !== Boolean(body.poNumber), {
+    message: 'Send exactly one of assetId or poNumber.',
+  });
 
 /**
  * "This document belongs to that shipment" — or does not.
@@ -43,6 +54,19 @@ export async function POST(request: Request) {
   const userId = session.user.sub;
 
   try {
+    if (parsed.data.poNumber) {
+      const updated = await setPurchaseOrderShipment({
+        userId,
+        poNumber: parsed.data.poNumber,
+        shipmentId: parsed.data.shipmentId,
+        attached: parsed.data.attached,
+      });
+      return Response.json({
+        poNumber: updated.order.poNumber,
+        shipmentIds: updated.shipmentIds ?? [],
+      });
+    }
+
     const updated = await setDocumentShipment({
       userId,
       documentId: `${userId}::${parsed.data.assetId}`,
@@ -57,6 +81,7 @@ export async function POST(request: Request) {
     log.error(
       {
         assetId: parsed.data.assetId,
+        poNumber: parsed.data.poNumber,
         shipmentId: parsed.data.shipmentId,
         error: error instanceof Error ? error.message : error,
       },

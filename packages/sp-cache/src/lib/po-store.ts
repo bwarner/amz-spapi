@@ -52,6 +52,16 @@ export type StoredPurchaseOrder = {
   order: PurchaseOrder;
   /** Latest render per format; re-rendering replaces, never accumulates. */
   renders: RenderedPo[];
+  /**
+   * FBA shipments this order's goods went out as, confirmed by a human.
+   *
+   * The same fact `StoredDocument.shipmentIds` records for uploaded paperwork,
+   * kept here for orders the app itself issued — a PO created in Sellavant
+   * never passes through the import pipeline, so without this it could not
+   * fill a shipment's PO slot at all. A list: one order routinely becomes
+   * several shipments.
+   */
+  shipmentIds?: string[];
   storedAt: number;
   updatedAt: number;
 };
@@ -110,10 +120,43 @@ export async function storePurchaseOrder(params: {
       existing && contentChanged(existing.order, order)
         ? []
         : existing?.renders ?? [],
+    // A human's shipment links survive edits, like every other human answer.
+    shipmentIds: existing?.shipmentIds,
     storedAt: existing?.storedAt ?? now,
     updatedAt: now,
   };
   await poStorage.upsertDocument(SCOPE, COLLECTION, key, record);
+  return record;
+}
+
+/**
+ * Attach an issued order to a shipment, or detach it. Mirrors
+ * `setDocumentShipment`: sorted, deduplicated, and the field is removed rather
+ * than left `[]` — an empty list would claim "belongs to no shipment", which
+ * is a different statement from "never asked".
+ */
+export async function setPurchaseOrderShipment(params: {
+  userId: string;
+  poNumber: string;
+  shipmentId: string;
+  attached: boolean;
+}): Promise<StoredPurchaseOrder> {
+  const existing = await getPurchaseOrder(params.userId, params.poNumber);
+  if (!existing) throw new PoStoreError(`No order ${params.poNumber}.`);
+  if (!params.shipmentId.trim()) {
+    throw new PoStoreError('A shipment link needs a shipment id.');
+  }
+
+  const shipments = new Set(existing.shipmentIds ?? []);
+  if (params.attached) shipments.add(params.shipmentId);
+  else shipments.delete(params.shipmentId);
+
+  const record: StoredPurchaseOrder = {
+    ...existing,
+    shipmentIds: shipments.size ? [...shipments].sort() : undefined,
+    updatedAt: Date.now(),
+  };
+  await poStorage.upsertDocument(SCOPE, COLLECTION, existing.key, record);
   return record;
 }
 

@@ -4,6 +4,7 @@ import type {
   ShipmentReconciliation,
   StoredBoxLabel,
   StoredDocument,
+  StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
 
 /**
@@ -100,7 +101,77 @@ function view(input: Partial<ShipmentViewInput>) {
   });
 }
 
+function nativePo(
+  poNumber: string,
+  overrides: Partial<StoredPurchaseOrder> = {}
+): StoredPurchaseOrder {
+  return {
+    key: `${USER}::${poNumber}`,
+    userId: USER,
+    order: {
+      poNumber,
+      issueDate: '2026-08-11',
+      revision: 1,
+      status: 'open',
+      vendorId: 'panama-select',
+      currency: 'USD',
+      lines: [
+        {
+          description: 'Honey Process Geisha 250g',
+          quantity: 80,
+          unitPrice: 20,
+        },
+      ],
+    } as StoredPurchaseOrder['order'],
+    renders: [],
+    storedAt: 1_000,
+    updatedAt: 1_000,
+    ...overrides,
+  };
+}
+
 describe('buildShipmentView', () => {
+  it('fills the PO slot from an order the app itself issued', () => {
+    // The gap this pins: a PO created in Sellavant never passes through the
+    // import pipeline, so it used to be invisible to the checklist — the
+    // seller who made an order could not point a shipment at it.
+    const [entry] = view({
+      boxLabels: [label('FBA19LGH61WZ', 1)],
+      purchaseOrders: [
+        nativePo('PO-2026-0003', { shipmentIds: ['FBA19LGH61WZ'] }),
+      ],
+    });
+
+    const po = entry.slots.find((slot) => slot.key === 'po');
+    expect(po?.present).toBe(true);
+    expect(po?.poNumber).toBe('PO-2026-0003');
+    // Value derived from the order's own lines — 80 × $20 — because the store
+    // refuses to persist a total, and stated as the PO's, not an invoice's.
+    expect(entry.value).toBe(1600);
+    expect(entry.valueSource).toBe('po');
+    expect(entry.vendorName).toBe('Panama Select');
+  });
+
+  it('does not surface a cancelled order, and an unlinked one claims nothing', () => {
+    const entries = view({
+      boxLabels: [label('FBA17K', 1)],
+      purchaseOrders: [
+        nativePo('PO-2026-0009'), // no shipmentIds — never attached
+        nativePo('PO-2026-0010', {
+          shipmentIds: ['FBA17K'],
+          order: {
+            ...nativePo('PO-2026-0010').order,
+            status: 'cancelled',
+          } as StoredPurchaseOrder['order'],
+        }),
+      ],
+    });
+
+    expect(entries).toHaveLength(1);
+    const po = entries[0].slots.find((slot) => slot.key === 'po');
+    expect(po?.present).toBe(false);
+  });
+
   it('derives the box and ledger slots, and only those', () => {
     const [entry] = view({
       boxLabels: [label('FBA17K', 1), label('FBA17K', 2)],

@@ -1,13 +1,15 @@
 import {
   listBoxLabels,
   listDocuments,
+  listPurchaseOrders,
   queryReceiptAggregates,
   reconcileShipments,
   type ShipmentReconciliation,
   type StoredBoxLabel,
   type StoredDocument,
+  type StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
-import { summariseBoxLabels } from '@farvisionllc/models';
+import { purchaseOrderTotals, summariseBoxLabels } from '@farvisionllc/models';
 import { resolveSellerContext } from './document-center';
 
 /**
@@ -46,6 +48,8 @@ export type Slot = {
   present: boolean;
   /** Set for document-backed slots, so the UI can link to the detail view. */
   assetId?: string;
+  /** Set when the slot is answered by an order the app itself issued. */
+  poNumber?: string;
   fileName?: string;
   /** Present, but carrying a blocker — shown as disputed rather than done. */
   disputed?: boolean;
@@ -98,6 +102,13 @@ export type ShipmentViewInput = {
   boxLabels: StoredBoxLabel[];
   reconciliations: ShipmentReconciliation[];
   documents: StoredDocument[];
+  /**
+   * Orders the app itself issued. A PO created in Sellavant never passes
+   * through the import pipeline, so without these the PO slot could only ever
+   * be filled by printing the order and re-uploading it — which is how the gap
+   * was found: a seller made an order and the picker could not see it.
+   */
+  purchaseOrders?: StoredPurchaseOrder[];
 };
 
 export function buildShipmentView(input: ShipmentViewInput): ShipmentEntry[] {
@@ -121,12 +132,23 @@ export function buildShipmentView(input: ShipmentViewInput): ShipmentEntry[] {
     }
   }
 
+  const ordersByShipment = new Map<string, StoredPurchaseOrder[]>();
+  for (const po of input.purchaseOrders ?? []) {
+    if (po.order.status === 'cancelled') continue;
+    for (const shipmentId of po.shipmentIds ?? []) {
+      const list = ordersByShipment.get(shipmentId) ?? [];
+      list.push(po);
+      ordersByShipment.set(shipmentId, list);
+    }
+  }
+
   // The union, not any one source: a shipment whose labels were never uploaded
   // still received units, and one that never received anything still shipped.
   const shipmentIds = new Set<string>([
     ...labelsByShipment.keys(),
     ...reconByShipment.keys(),
     ...documentsByShipment.keys(),
+    ...ordersByShipment.keys(),
   ]);
 
   const entries = [...shipmentIds].map((shipmentId) =>
@@ -134,7 +156,8 @@ export function buildShipmentView(input: ShipmentViewInput): ShipmentEntry[] {
       shipmentId,
       labelsByShipment.get(shipmentId) ?? [],
       reconByShipment.get(shipmentId),
-      documentsByShipment.get(shipmentId) ?? []
+      documentsByShipment.get(shipmentId) ?? [],
+      ordersByShipment.get(shipmentId) ?? []
     )
   );
 
@@ -150,11 +173,27 @@ function buildEntry(
   shipmentId: string,
   labels: StoredBoxLabel[],
   recon: ShipmentReconciliation | undefined,
-  documents: StoredDocument[]
+  documents: StoredDocument[],
+  orders: StoredPurchaseOrder[]
 ): ShipmentEntry {
   const slots: Slot[] = [];
 
-  for (const key of ['po', 'invoice', 'packingList'] as const) {
+  // The app's own order outranks an uploaded copy of one: it is the record the
+  // PDF was printed FROM, so where both exist the original answers.
+  const nativePo = orders[0];
+  slots.push(
+    nativePo
+      ? {
+          key: 'po',
+          label: SLOT_LABELS.po,
+          present: true,
+          poNumber: nativePo.order.poNumber,
+          fileName: nativePo.order.poNumber,
+          note: 'issued in Sellavant',
+        }
+      : documentSlot('po', documents)
+  );
+  for (const key of ['invoice', 'packingList'] as const) {
     slots.push(documentSlot(key, documents));
   }
 
@@ -198,12 +237,34 @@ function buildEntry(
   const invoice = documents.find(
     (document) => document.role === 'commercial-invoice'
   );
-  const po = documents.find((document) => document.role === 'purchase-order');
-  const costDocument = invoice ?? po;
+  const poDocument = documents.find(
+    (document) => document.role === 'purchase-order'
+  );
 
-  const vendorName = documents
-    .map((document) => document.extracted.vendorName)
-    .find(Boolean);
+  // Value: invoice first (the cost authority), then the issued order, then an
+  // uploaded PO document. Totals on a native order are DERIVED — the store
+  // refuses to persist one — so they are computed here the same way the
+  // printed PDF computes them.
+  const nativeTotals = nativePo
+    ? purchaseOrderTotals(nativePo.order)
+    : undefined;
+  const value =
+    invoice?.extracted.total ??
+    nativeTotals?.total ??
+    poDocument?.extracted.total;
+  const valueCurrency =
+    invoice?.extracted.currency ??
+    (nativePo ? nativePo.order.currency : undefined) ??
+    poDocument?.extracted.currency;
+  const valueSource: ShipmentEntry['valueSource'] = invoice
+    ? 'invoice'
+    : nativePo || poDocument
+    ? 'po'
+    : undefined;
+
+  const vendorName =
+    documents.map((document) => document.extracted.vendorName).find(Boolean) ??
+    (nativePo ? vendorNameFromId(nativePo.order.vendorId) : undefined);
 
   const dates = [
     ...labels.map((label) => label.createdAt).filter(Boolean),
@@ -221,11 +282,23 @@ function buildEntry(
     slots,
     presentCount,
     headline: headline(slots, discrepancies, invoice),
-    value: costDocument?.extracted.total,
-    valueCurrency: costDocument?.extracted.currency,
-    valueSource: costDocument ? (invoice ? 'invoice' : 'po') : undefined,
+    value,
+    valueCurrency,
+    valueSource: value !== undefined ? valueSource : undefined,
     discrepancies,
   };
+}
+
+/**
+ * "panama-select" → "Panama Select". The order stores the vendor as a slug;
+ * the vendor record holds the display name, but a listing should not need a
+ * per-shipment vendor lookup to say who a PO was issued to.
+ */
+function vendorNameFromId(vendorId: string): string {
+  return vendorId
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function documentSlot(key: SlotKey, documents: StoredDocument[]): Slot {
@@ -278,9 +351,20 @@ function headline(
   return undefined;
 }
 
+export type PoCandidate = {
+  poNumber: string;
+  vendorName: string;
+  issueDate: string;
+  total: number;
+  currency: string;
+  shipmentIds: string[];
+};
+
 export type ShipmentCenter = {
   shipments: ShipmentEntry[];
   sellerStatus: 'connected' | 'not-connected' | 'unavailable';
+  /** Orders the app issued — the native half of the PO attach picker. */
+  orders: PoCandidate[];
 };
 
 export async function loadShipmentCenter(params: {
@@ -289,10 +373,11 @@ export async function loadShipmentCenter(params: {
   const { userId } = params;
   const { sellerId, status: sellerStatus } = await resolveSellerContext(userId);
 
-  const [documents, boxLabels, receipts] = await Promise.all([
+  const [documents, boxLabels, receipts, purchaseOrders] = await Promise.all([
     listDocuments({ userId, limit: 500 }),
     sellerId ? listBoxLabels({ sellerId }) : Promise.resolve([]),
     sellerId ? queryReceiptAggregates({ sellerId }) : Promise.resolve([]),
+    listPurchaseOrders({ userId }),
   ]);
 
   const reconciliations = reconcileShipments({
@@ -301,8 +386,28 @@ export async function loadShipmentCenter(params: {
   });
 
   return {
-    shipments: buildShipmentView({ boxLabels, reconciliations, documents }),
+    shipments: buildShipmentView({
+      boxLabels,
+      reconciliations,
+      documents,
+      purchaseOrders,
+    }),
     sellerStatus,
+    // The attach picker's native half: every open order, whether or not it is
+    // linked to anything yet.
+    orders: purchaseOrders
+      .filter((po) => po.order.status !== 'cancelled')
+      .map((po) => {
+        const totals = purchaseOrderTotals(po.order);
+        return {
+          poNumber: po.order.poNumber,
+          vendorName: vendorNameFromId(po.order.vendorId),
+          issueDate: po.order.issueDate,
+          total: totals.total,
+          currency: po.order.currency,
+          shipmentIds: po.shipmentIds ?? [],
+        };
+      }),
   };
 }
 

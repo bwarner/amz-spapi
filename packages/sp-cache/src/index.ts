@@ -126,6 +126,7 @@ export {
   listPurchaseOrders,
   poStorage,
   PoStoreError,
+  setPurchaseOrderShipment,
 } from './lib/po-store.js';
 export type {
   ListPurchaseOrdersFilters,
