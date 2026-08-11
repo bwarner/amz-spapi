@@ -29,6 +29,14 @@ const WAYBILL =
   'DHL EXPRESS WAYBILL Air waybill 3583595831 Shipper Name Consignee ' +
   'Number of Pieces 1 Chargeable weight 10.00 kg Declared value for customs 700.00 USD';
 
+/** Verbatim structure of the PO that shipped as "invoice, confidence 1.00". */
+const PURCHASE_ORDER =
+  'PURCHASE ORDER PO-2026-0001 Issue date: 2026-08-04 Currency: USD ' +
+  'FROM (BUYER) Farvision LLC TO (VENDOR) Panama Select SHIP TO FBA: ' +
+  'Farvision LLC c/o Amazon.com Services LLC SKU Description Quantity ' +
+  'Unit price Amount FB-COF-HGE-250 80 bags USD 20.00 USD 1,600.00 ' +
+  'Goods subtotal USD 1,600.00 TOTAL USD 1,600.00 PAYMENT TERMS Net 60';
+
 const recognise = (text: string, fileName = 'doc.pdf') =>
   recognizeDocument({ fileName, mimeType: 'application/pdf', text });
 
@@ -38,6 +46,24 @@ describe('recognizeDocument', () => {
     expect(recognise(INVOICE).kind).toBe('commercial-invoice');
     expect(recognise(POD).kind).toBe('proof-of-delivery');
     expect(recognise(WAYBILL).kind).toBe('transport-document');
+  });
+
+  it('recognises a purchase order, not the invoice its table resembles', () => {
+    // The exact misfile this pins: a PO shares description / unit price /
+    // subtotal / total with an invoice, and with no PO matcher those 8 points
+    // made it a "commercial-invoice — confidence 1.00". The heading has to win.
+    const result = recognise(PURCHASE_ORDER);
+    expect(result.kind).toBe('purchase-order');
+    expect(result.needsUserChoice).toBe(false);
+  });
+
+  it('keeps an invoice that merely cites its PO number as an invoice', () => {
+    // Suppliers routinely print the PO they are answering. The citation must
+    // not flip the document; at most the PO surfaces as an alternative.
+    const result = recognise(
+      INVOICE + ' Ref: purchase order PO-1043 as agreed'
+    );
+    expect(result.kind).toBe('commercial-invoice');
   });
 
   it('does not file a proof of delivery as the carriage contract', () => {

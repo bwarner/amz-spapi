@@ -63,6 +63,7 @@ type DocumentResult = {
 /** What each recognised kind is called in the UI. */
 const DOCUMENT_LABELS: Record<string, string> = {
   'commercial-invoice': 'Commercial invoice',
+  'purchase-order': 'Purchase order',
   receipt: 'Receipt',
   'proof-of-delivery': 'Proof of delivery',
   'transport-document': 'Transport document',

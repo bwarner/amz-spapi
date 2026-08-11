@@ -168,6 +168,8 @@ export function roleForRecognisedKind(
       return 'customs-declaration';
     case 'packing-list':
       return 'packing-list';
+    case 'purchase-order':
+      return 'purchase-order';
     case 'amazon-report':
     case 'fba-box-label':
     case 'fnsku-label':

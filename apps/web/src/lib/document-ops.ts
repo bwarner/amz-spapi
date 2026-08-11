@@ -146,7 +146,14 @@ async function readAndExtract(
 
   // Extraction is metered, so it runs only where there is cost to read. A box
   // label, a design file or a scan with no text must never trigger it.
-  const COST_BEARING = new Set(['commercial-invoice', 'receipt']);
+  const COST_BEARING = new Set([
+    'commercial-invoice',
+    'receipt',
+    // A PO carries the ORDERED side of every later comparison — quantities
+    // the invoice is checked against, the total the shipments view falls
+    // back to. Unextracted it is a file; extracted it is a baseline.
+    'purchase-order',
+  ]);
   if (!COST_BEARING.has(verdict.kind) || !text.trim() || noExtractableText) {
     return {
       fileName,

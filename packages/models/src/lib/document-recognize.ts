@@ -19,6 +19,14 @@ export type RecognisedKind =
   /** Tabular Amazon export — hand to the report parser. */
   | 'amazon-report'
   | 'commercial-invoice'
+  /**
+   * The seller's OWN order to a supplier. Shares almost all of an invoice's
+   * table vocabulary — description, unit price, subtotal, total — which is why
+   * it needs its own matcher: without one, every PO scored as a
+   * commercial-invoice at threshold with nothing else in the running, and the
+   * misfile arrived with "confidence 1.00" attached.
+   */
+  | 'purchase-order'
   | 'receipt'
   | 'proof-of-delivery'
   | 'transport-document'
@@ -154,6 +162,24 @@ const MATCHERS: Matcher[] = [
       { text: 'payment method', weight: 3 },
       { text: 'paid on', weight: 3 },
     ],
+  },
+  {
+    kind: 'purchase-order',
+    phrases: [
+      // The heading is the identity. Weighted so a document HEADED "purchase
+      // order" beats its own invoice-like table below — but low enough that a
+      // real invoice merely CITING its PO ("your order: PO-1043") keeps the
+      // invoice matcher ahead and, at worst, surfaces this as an alternative.
+      { text: 'purchase order', weight: 8 },
+      { text: 'payment terms', weight: 2 },
+      { text: 'buyer', weight: 2 },
+      { text: 'vendor', weight: 2 },
+      { text: 'issue date', weight: 1 },
+    ],
+    patterns: [{ regex: /\bPO[-\s]?\d{2,}/i, weight: 3, label: 'PO number' }],
+    // A PO never records money already moved; a document that does is the
+    // paper trail of a transaction, not an instruction to start one.
+    disqualifiers: ['amount paid', 'payment history', 'proof of delivery'],
   },
   {
     kind: 'commercial-invoice',

@@ -358,7 +358,14 @@ export async function POST(request: Request) {
     // Cost extraction runs only for documents that carry cost, and only when
     // there is text to read. It is a paid model call, so it must never fire on
     // a box label, a design file or a scan with nothing in it.
-    const COST_BEARING = new Set(['commercial-invoice', 'receipt']);
+    const COST_BEARING = new Set([
+      'commercial-invoice',
+      'receipt',
+      // A PO carries the ORDERED side of every later comparison — quantities
+      // the invoice is checked against, the total the shipments view falls
+      // back to. Unextracted it is a file; extracted it is a baseline.
+      'purchase-order',
+    ]);
     let extraction: ExtractionResult | undefined;
     let extractionError: string | undefined;
     if (
