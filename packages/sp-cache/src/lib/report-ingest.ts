@@ -270,13 +270,37 @@ export function parseReport(params: {
     for (const alias of aliases) {
       const index = normalized.indexOf(alias);
       if (index < 0) continue;
+      // Already claimed by an earlier field — try this field's NEXT alias
+      // rather than overwriting.
+      //
+      // Two fields may legitimately share an alias. The settlement report is
+      // the live case: `date` and `postedDate` both list `posteddate`, and the
+      // real file carries `posted-date` AND `posted-date-time`. Overwriting
+      // meant `postedDate` took the column `date` had claimed, `date` was
+      // stored nowhere, and `posted-date-time` was reported unrecognised —
+      // while `foundFields` still listed `date`, so `missingFields` said
+      // nothing. Silent, and it cost the settlement report its date: no
+      // ordering, no joins, and an empty coverage window on every import.
+      //
+      // Skipping instead makes the pairing order-independent: `date` takes
+      // `posted-date`, `postedDate` falls through to `posted-date-time`, and a
+      // field that genuinely finds nothing is reported by `missingFields`
+      // because it never reaches `foundFields`.
+      if (fieldByIndex.has(index)) continue;
       fieldByIndex.set(index, field);
       foundFields.add(field);
       break;
     }
   }
 
-  const hasUnmapped = headers.some((_, index) => !fieldByIndex.has(index));
+  // A column is "unrecognised" only if it is neither mapped nor deliberately
+  // ignored. Both the warning and the decision to keep `raw` read from this, so
+  // they cannot disagree about what counts.
+  const ignored = new Set(definition.ignoredColumns ?? []);
+  const isUnrecognised = (index: number) =>
+    !fieldByIndex.has(index) && !ignored.has(normalized[index] ?? '');
+
+  const hasUnmapped = headers.some((_, index) => isUnrecognised(index));
 
   // One fingerprint for the whole file: it describes the MAPPING, not any row's
   // contents, so a row whose cell happened to be empty is not mistaken for a
@@ -371,9 +395,7 @@ export function parseReport(params: {
     });
   }
 
-  const unmappedHeaders = headers.filter(
-    (_, index) => !fieldByIndex.has(index)
-  );
+  const unmappedHeaders = headers.filter((_, index) => isUnrecognised(index));
   const missingFields = (
     Object.keys(definition.fields) as ReportFieldName[]
   ).filter(

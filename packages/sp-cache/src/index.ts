@@ -124,3 +124,16 @@ export type {
   RenderedPo,
   StoredPurchaseOrder,
 } from './lib/po-store.js';
+export {
+  reconcileSettlements,
+  isPassThroughTax,
+  economicRows,
+  passThroughTaxResidual,
+  resolveSku,
+  collectKnownSkus,
+  GRADE_CONDITIONS,
+} from './lib/settlement-report.js';
+export type {
+  SettlementReconciliation,
+  SkuIdentity,
+} from './lib/settlement-report.js';

@@ -218,3 +218,106 @@ describe('detectReportKind', () => {
     expect(detectReportKind('"Foo","Bar"\n"1","2"').kind).toBeFalsy();
   });
 });
+
+/**
+ * The settlement report's two date columns.
+ *
+ * Header and rows below are verbatim from a real V2 flat file (settlement
+ * 25889786381). It carries BOTH `posted-date` and `posted-date-time`, and the
+ * registry has `date` and `postedDate` each listing `posteddate` first — so
+ * before the fix the second field overwrote the first's column, `date` was
+ * stored nowhere, and `posted-date-time` was reported unrecognised.
+ *
+ * Nothing threw. The report simply had no date: unorderable, unjoinable, and
+ * an empty coverage window on every import. For the money report, that is the
+ * column that matters most.
+ */
+describe('settlement date columns', () => {
+  const HEADER = [
+    'settlement-id',
+    'settlement-start-date',
+    'settlement-end-date',
+    'deposit-date',
+    'total-amount',
+    'currency',
+    'transaction-type',
+    'order-id',
+    'merchant-order-id',
+    'adjustment-id',
+    'shipment-id',
+    'marketplace-name',
+    'amount-type',
+    'amount-description',
+    'amount',
+    'fulfillment-id',
+    'posted-date',
+    'posted-date-time',
+    'order-item-code',
+    'merchant-order-item-id',
+    'merchant-adjustment-item-id',
+    'sku',
+    'quantity-purchased',
+    'promotion-id',
+  ].join('\t');
+
+  // The header row (settlement totals, no transaction) then one order line.
+  const ROWS = [
+    '25889786381\t2026-03-13 20:21:38 UTC\t2026-03-27 20:21:38 UTC\t2026-03-29 20:21:38 UTC\t3711.36\tUSD\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t',
+    '25889786381\t\t\t\t\t\tOrder\t111-5784799-3571457\t111-5784799-3571457\t\tPxRHfj7GG\tAmazon.com\tItemPrice\tPrincipal\t19.50\tAFN\t2026-03-14\t2026-03-14 08:49:04 UTC\t155037952465161\t\t\tFB-COF-GEI-75\t1\t',
+  ].join('\n');
+
+  const parsed = parseReport({
+    kind: 'settlement',
+    sellerId: 'SELLER1',
+    text: `${HEADER}\n${ROWS}\n`,
+  });
+
+  it('stores a date, which is what the coverage window is built from', () => {
+    const order = parsed.rows.find((r) => r.fields['amount'] !== undefined);
+    expect(order?.fields['date']).toBe('2026-03-14');
+  });
+
+  it('gives postedDate the timestamp column rather than stealing date it', () => {
+    // The two fields share `posteddate` as their first alias. `postedDate`
+    // must fall through to `posteddatetime` instead of taking the column
+    // `date` already claimed.
+    const order = parsed.rows.find((r) => r.fields['amount'] !== undefined);
+    expect(order?.fields['postedDate']).toContain('2026-03-14');
+    expect(order?.fields['postedDate']).not.toBe(order?.fields['date']);
+  });
+
+  it('no longer reports posted-date-time as unrecognised', () => {
+    expect(parsed.unmappedHeaders).not.toContain('posted-date-time');
+    expect(parsed.unmappedHeaders).not.toContain('posted-date');
+  });
+
+  it('says nothing about columns we have decided not to index', () => {
+    // These four are real columns we choose not to map. Reporting them on every
+    // import made the warning permanently non-empty, which is how the genuine
+    // `posted-date-time` problem stayed invisible inside it.
+    expect(parsed.unmappedHeaders).toEqual([]);
+  });
+
+  it('stops keeping a verbatim copy of every row', () => {
+    // One unrecognised column makes the parser store `raw` — all 24 columns
+    // again — on EVERY row. Four permanently-ignored columns therefore doubled
+    // the stored size of the settlement report to buy optionality on
+    // identifiers nobody queries.
+    expect(parsed.rows.every((row) => row.raw === undefined)).toBe(true);
+  });
+
+  it('STILL reports a column nobody has classified', () => {
+    // The point is to quieten decisions, not to disable the warning. A column
+    // that is neither mapped nor deliberately ignored is exactly the drift this
+    // exists to catch, and it must still force `raw` so the values survive
+    // until someone maps them.
+    const withNewColumn = parseReport({
+      kind: 'settlement',
+      sellerId: 'SELLER1',
+      text: `${HEADER}\tsome-new-amazon-column\n${ROWS}\tvalue\n`,
+    });
+
+    expect(withNewColumn.unmappedHeaders).toEqual(['some-new-amazon-column']);
+    expect(withNewColumn.rows.some((row) => row.raw !== undefined)).toBe(true);
+  });
+});
