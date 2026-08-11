@@ -9,6 +9,7 @@ export {
   deleteDocument,
   incrementCounter,
   executeQuery,
+  searchQuery,
   setConnectionProvider,
   resetConnectionProvider,
 } from './couchbase-utils.js';
@@ -16,4 +17,6 @@ export {
 export type {
   CouchbaseConnection,
   ConnectionProvider,
+  SearchHit,
+  SearchResponse,
 } from './couchbase-utils.js';

@@ -207,6 +207,10 @@ function getQueryContext(bucket: string, scopeName: string): string {
 const DATA_API_TIMEOUT_MS = {
   document: 10_000,
   query: 30_000,
+  // Search is a single index lookup, not a scan. A search that has not
+  // answered in ten seconds is not going to; the caller is a user waiting on a
+  // list, and a slow spinner is worse than "search is unavailable".
+  search: 10_000,
 } as const;
 
 /**
@@ -340,6 +344,101 @@ async function executeDataApiQuery<T>(params: {
   }
 
   return { rows: payload.results ?? [], meta: payload };
+}
+
+/**
+ * One hit from the Search service. `fields` is present only for fields the
+ * index was told to store; everything else must be fetched by id.
+ */
+export type SearchHit = {
+  id: string;
+  score: number;
+  fields?: Record<string, unknown>;
+};
+
+export type SearchResponse = {
+  hits: SearchHit[];
+  /** Total matches before `size` was applied — for "showing 10 of 412". */
+  total: number;
+  /** Per-partition errors. A search can be PARTIALLY successful; see below. */
+  errors?: Record<string, string>;
+};
+
+/**
+ * Run a query against a scoped Search index.
+ *
+ * Reaches the Search service through the Data API's passthrough, the same way
+ * `executeQuery` reaches the query service — `_p/fts/...` rather than
+ * `_p/query/...`. Going through the SDK instead is not an option here: this
+ * runs on Vercel, and `createCouchbaseCluster` throws for that reason.
+ *
+ * The body is passed through verbatim, so this supports plain FTS (`query`),
+ * vector search (`knn`), and both together, without this layer needing to know
+ * which. What it will not do is let a caller omit the index.
+ *
+ * Retried like a read, because it is one: a search mutates nothing, so a
+ * repeated attempt after a transient 5xx costs a little latency and nothing
+ * else.
+ */
+export async function searchQuery(params: {
+  /** Search index name, scoped to the bucket and environment scope. */
+  index: string;
+  /** Request body — `query`, `knn`, `size`, `fields`, `sort`, and so on. */
+  body: Record<string, unknown>;
+}): Promise<SearchResponse> {
+  if (!params.index) {
+    throw new Error('A search needs an index name.');
+  }
+  const config = await getDataApiConfig();
+
+  const response = await fetchWithTimeout(
+    `${config.baseUrl}/_p/fts/api/bucket/${encodeURIComponent(config.bucket)}` +
+      `/scope/${encodeURIComponent(config.environmentScope)}` +
+      `/index/${encodeURIComponent(params.index)}/query`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: getAuthHeader(config.username, config.password),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(params.body),
+    },
+    DATA_API_TIMEOUT_MS.search,
+    'search',
+    true
+  );
+
+  const payload = (await response.json()) as {
+    hits?: Array<{
+      id: string;
+      score: number;
+      fields?: Record<string, unknown>;
+    }>;
+    total_hits?: number;
+    status?: { failed?: number; errors?: Record<string, string> } | string;
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(
+      payload.error ||
+        `Couchbase Search request failed with status ${response.status}`
+    );
+  }
+
+  // A search over a partitioned index can answer 200 with some partitions
+  // failed. Those hits are a SUBSET presented as if complete, which for a
+  // reimbursement claim means silently omitting evidence — so the partial
+  // failure is surfaced rather than folded into the happy path.
+  const status =
+    typeof payload.status === 'object' ? payload.status : undefined;
+
+  return {
+    hits: payload.hits ?? [],
+    total: payload.total_hits ?? payload.hits?.length ?? 0,
+    ...(status?.failed ? { errors: status.errors ?? {} } : {}),
+  };
 }
 
 export async function createCouchbaseCluster(): Promise<never> {

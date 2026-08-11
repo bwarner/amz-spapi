@@ -142,3 +142,20 @@ export type {
   SettlementReconciliation,
   SkuIdentity,
 } from './lib/settlement-report.js';
+export {
+  searchDocuments,
+  suggestLinks,
+  documentSearchText,
+  documentSearchTransport,
+  DocumentSearchError,
+  DOCUMENT_SEARCH_INDEX,
+  DOCUMENT_SEARCH_INDEX_DEFINITION,
+  EMBEDDING_DIMENSIONS,
+} from './lib/document-search.js';
+export type {
+  DocumentSearchFilters,
+  DocumentSearchHit,
+  DocumentSearchResult,
+  SearchDocumentsParams,
+  SuggestedLink,
+} from './lib/document-search.js';

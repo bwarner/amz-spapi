@@ -82,6 +82,12 @@ export type StoredDocument = {
   needsReview: boolean;
   /** Which model produced the extraction, so a suspect figure is attributable. */
   modelId?: string;
+  /** Semantic index text, indexed by the Search service. */
+  searchText?: string;
+  /** Embedding of `searchText`. Absent until the document has been embedded. */
+  embedding?: number[];
+  /** Which model produced `embedding`, so stale vectors can be found. */
+  embeddingModelId?: string;
   /**
    * Set when a human confirmed a grouping the joins could not make on their
    * own. Derived grouping is the default and stays consistent with the
@@ -147,6 +153,23 @@ export type StoreDocumentParams = {
   modelId?: string;
   /** Overrides the role the recognition implies. Records the human as source. */
   role?: DocumentRole;
+  /**
+   * Semantic index of this document (from `documentSearchText`) and its
+   * embedding. Both optional: a document stored without them is still a
+   * document, it is simply absent from semantic search until re-embedded.
+   *
+   * Computed by the caller rather than here, so this package keeps no
+   * dependency on the AI provider — the import route already holds one.
+   */
+  searchText?: string;
+  embedding?: number[];
+  /**
+   * Which model produced `embedding`. Recorded rather than assumed: the vector
+   * width is baked into the Search index, so after a model change knowing
+   * WHICH rows are stale is the difference between re-embedding the corpus and
+   * rebuilding it blind.
+   */
+  embeddingModelId?: string;
 };
 
 /**
@@ -198,6 +221,12 @@ export async function storeExtractedDocument(
     issues: params.issues,
     needsReview: params.needsReview,
     modelId: params.modelId,
+    // Re-reading a file with no embedder configured must not silently strip
+    // the vector a previous import produced — that would drop the document
+    // out of semantic search with nothing to show for it.
+    searchText: params.searchText ?? existing?.searchText,
+    embedding: params.embedding ?? existing?.embedding,
+    embeddingModelId: params.embeddingModelId ?? existing?.embeddingModelId,
     // A confirmed grouping is about these documents' relationship, not their
     // content, so re-reading the file must not forget it.
     confirmedPurchaseId: existing?.confirmedPurchaseId,
