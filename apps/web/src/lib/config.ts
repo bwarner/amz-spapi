@@ -2,18 +2,40 @@
  * Where this deployment is reachable, for URLs a third party will send a
  * browser back to.
  *
- * `APP_BASE_URL` first, because it is the one value that is deliberately
- * correct: it is what Auth0 already redirects to, and locally it is PORTLESS
- * on purpose — a proxy maps 443 to the dev server, so "fixing" it by appending
- * a port breaks the callback.
+ * Every caller hands the result to somebody else — Auth0 as `redirect_uri`,
+ * Stripe as a checkout return URL — and those third parties will only send a
+ * browser to a URL that was registered in advance. So the requirement is not
+ * merely "a URL that resolves"; it is a url that is the SAME on the next
+ * deploy, because a URL nobody can register in advance is a URL that has to be
+ * re-registered after every push.
  *
- * Distinct from `getBaseUrl()` below, which prefers `VERCEL_URL`. That is right
- * for a preview deployment talking about itself, and wrong here: a Stripe
- * redirect has to land on the stable host the user actually signed in on.
+ * `APP_BASE_URL` first, because it is the one value that is deliberately
+ * correct: it is what Auth0 already redirects to, and locally it is PORTLESS on
+ * purpose — a proxy maps 443 to the dev server, so "fixing" it by appending a
+ * port breaks the callback.
+ *
+ * Then `VERCEL_BRANCH_URL`, not `VERCEL_URL`. Both exist on every deployment
+ * and the difference is exactly the one that matters here:
+ *
+ *   VERCEL_URL         sellavant-4izyez8zc-<team>.vercel.app   ← new every push
+ *   VERCEL_BRANCH_URL  sellavant-git-<branch>-<team>.vercel.app ← stable
+ *
+ * Preferring `VERCEL_URL` meant a preview asked Auth0 to call back on a host
+ * that had never existed before that build. The observed failure was a sign-up
+ * that reached Auth0, got a valid code, and was then handed to a URL nobody had
+ * allowed — or, once allowed, to a host that was gone by the next deployment.
+ * The branch URL is registrable once and keeps working.
+ *
+ * Still distinct from `getBaseUrl()` below, which prefers `VERCEL_URL` because
+ * it is for a deployment talking about ITSELF. That is the right answer for
+ * "which build am I", and the wrong one for "where do I send the user back to".
  */
 export function appBaseUrl(): string {
   const configured = process.env.APP_BASE_URL;
   if (configured) return configured.replace(/\/$/, '');
+  if (process.env.VERCEL_BRANCH_URL) {
+    return `https://${process.env.VERCEL_BRANCH_URL}`;
+  }
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return 'https://local.sellavant.com';
 }
