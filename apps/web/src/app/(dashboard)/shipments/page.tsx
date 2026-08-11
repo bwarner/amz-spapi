@@ -122,6 +122,18 @@ export default function ShipmentsPage() {
     slot: SlotKey;
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * The link whose write-and-reload is still in flight, shown ON the card.
+   *
+   * Without this the dialog closes instantly and the card changes only after
+   * the full refetch — seconds of an unchanged screen that reads as a failed
+   * click. A seller did exactly that: attached the same PO to two shipments
+   * because the first attach showed nothing while it worked.
+   */
+  const [pending, setPending] = useState<{
+    shipmentId: string;
+    label: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     const [shipmentsResponse, documentsResponse] = await Promise.all([
@@ -183,6 +195,12 @@ export default function ShipmentsPage() {
     ) => {
       const busyKey = target.assetId ?? target.poNumber ?? '';
       setBusy(busyKey);
+      setPending({
+        shipmentId,
+        label: attached
+          ? `Attaching ${target.poNumber ?? 'document'}…`
+          : `Detaching ${target.poNumber ?? 'document'}…`,
+      });
       try {
         const response = await fetch('/api/shipments/link', {
           method: 'POST',
@@ -198,6 +216,7 @@ export default function ShipmentsPage() {
         await load();
       } finally {
         setBusy(null);
+        setPending(null);
       }
     },
     [load]
@@ -291,6 +310,11 @@ export default function ShipmentsPage() {
           <ShipmentCard
             key={entry.shipmentId}
             entry={entry}
+            pending={
+              pending?.shipmentId === entry.shipmentId
+                ? pending.label
+                : undefined
+            }
             onEmptySlot={(slot) =>
               setAttach({ shipmentId: entry.shipmentId, slot })
             }
@@ -422,10 +446,13 @@ export default function ShipmentsPage() {
 
 function ShipmentCard({
   entry,
+  pending,
   onEmptySlot,
   onDetach,
 }: {
   entry: ShipmentEntry;
+  /** In-flight link work on THIS card, so a slow reload is not a silent one. */
+  pending?: string;
   onEmptySlot: (slot: SlotKey) => void;
   onDetach: (slot: Slot) => void;
 }) {
@@ -492,14 +519,21 @@ function ShipmentCard({
       </div>
 
       <div className="mt-3 flex items-baseline gap-2">
-        <span
-          className={cn(
-            'text-sm',
-            entry.headline ? 'text-amber-800' : 'text-muted-foreground'
-          )}
-        >
-          {entry.headline ?? 'Fully documented'}
-        </span>
+        {pending ? (
+          <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {pending}
+          </span>
+        ) : (
+          <span
+            className={cn(
+              'text-sm',
+              entry.headline ? 'text-amber-800' : 'text-muted-foreground'
+            )}
+          >
+            {entry.headline ?? 'Fully documented'}
+          </span>
+        )}
         {value ? (
           <span className="ml-auto text-sm font-semibold">
             {value}

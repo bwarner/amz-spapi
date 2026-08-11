@@ -58,6 +58,7 @@ type Produced =
       role: DocumentRole;
       roleSource: string;
       issuedPoNumber?: string;
+      shipmentIds?: string[];
       vendorName?: string;
       documentDate?: string;
       currency?: string;
@@ -759,6 +760,9 @@ function ProducedLine({ item }: { item: Produced }) {
             not a second PO. */}
         {item.issuedPoNumber
           ? ` — copy of ${item.issuedPoNumber}, issued in Sellavant`
+          : ''}
+        {item.shipmentIds?.length
+          ? ` — shipment ${item.shipmentIds.join(', ')}`
           : ''}
       </span>
       {item.needsReview ? (

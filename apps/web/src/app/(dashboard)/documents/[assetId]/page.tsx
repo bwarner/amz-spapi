@@ -75,6 +75,7 @@ type StoredDoc = {
   searchText?: string;
   embedded?: boolean;
   confirmedPurchaseId?: string;
+  shipmentIds?: string[];
 };
 
 type Suggestion = {
@@ -254,6 +255,16 @@ export default function DocumentDetailPage({
             Needs review
           </span>
         ) : null}
+        {/* The other end of the Shipments screen's attach — without this, a
+            successful attach is invisible from the document's side. */}
+        {(doc.shipmentIds ?? []).map((shipmentId) => (
+          <span
+            key={shipmentId}
+            className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-xs font-medium text-primary"
+          >
+            {shipmentId}
+          </span>
+        ))}
       </div>
 
       {error ? (

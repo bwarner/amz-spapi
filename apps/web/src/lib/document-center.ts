@@ -83,6 +83,9 @@ export type Produced =
       needsReview: boolean;
       /** The purchase this document belongs to, derived or confirmed. */
       purchaseId?: string;
+      /** Shipments this document is attached to — the other end of the link
+          the Shipments screen writes, so an attach is visible from BOTH sides. */
+      shipmentIds?: string[];
       /**
        * Set when this upload is a COPY of an order the app itself issued —
        * its extracted number matches an issued PO's number, which is ours and
@@ -310,6 +313,7 @@ export function buildFileView(input: FileViewInput): {
         needsReview: document.needsReview,
         purchaseId: purchaseByDocument.get(document.documentId),
         issuedPoNumber: issuedOrderFor(document, ordersByNumber),
+        shipmentIds: document.shipmentIds,
       });
     }
 
