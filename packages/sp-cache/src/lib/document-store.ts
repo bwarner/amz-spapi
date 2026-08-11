@@ -47,8 +47,18 @@ export const documentStorage = {
   getDocument: getCouchbaseDocument,
 };
 
-const SCOPE = 'purchases';
-const COLLECTION = 'documents';
+/**
+ * Where extracted documents live.
+ *
+ * Exported because the Search index has to name the same keyspace, and naming
+ * it twice is how the two drift apart — an index pointed at a collection
+ * nothing writes to builds cleanly and returns nothing forever.
+ */
+export const DOCUMENTS_DOMAIN = 'purchases';
+export const DOCUMENTS_COLLECTION = 'documents';
+
+const SCOPE = DOCUMENTS_DOMAIN;
+const COLLECTION = DOCUMENTS_COLLECTION;
 
 /** How a document came to have the role it has. */
 export type RoleSource =

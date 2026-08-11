@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
+import { DocumentPalette } from './document-palette';
 
 /**
  * What has been imported, what it became, and what belongs with what.
@@ -181,6 +182,12 @@ export default function DocumentsPage() {
   const [query, setQuery] = useState('');
   const [pending, setPending] = useState<FileEntry | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * The file ⌘K jumped to. Cleared on the next interaction rather than after a
+   * timer: a highlight that vanishes on its own leaves the seller looking for
+   * the row they just chose.
+   */
+  const [highlighted, setHighlighted] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const response = await fetch('/api/documents');
@@ -297,6 +304,20 @@ export default function DocumentsPage() {
     [load]
   );
 
+  const jumpToFile = useCallback((fileId: string) => {
+    // Clear the filters first: the chosen file may not be in the current facet,
+    // and scrolling to a row that is filtered out looks like nothing happened.
+    setFilter('all');
+    setQuery('');
+    setHighlighted(fileId);
+    // After the state above has rendered the row, not before.
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`file-${fileId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, []);
+
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -307,9 +328,14 @@ export default function DocumentsPage() {
             what.
           </p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href="/import">Import files</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          {view?.files.length ? (
+            <DocumentPalette files={view.files} onSelectFile={jumpToFile} />
+          ) : null}
+          <Button asChild variant="outline" size="sm">
+            <Link href="/import">Import files</Link>
+          </Button>
+        </div>
       </div>
 
       {error ? (
@@ -423,21 +449,33 @@ export default function DocumentsPage() {
                 ['labels', 'Box labels'],
                 ['other', 'Everything else'],
               ] as Array<[Filter, string]>
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setFilter(value)}
-                className={cn(
-                  'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                  filter === value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {label}
-              </button>
-            ))}
+            ).map(([value, label]) => {
+              // Counted from the whole library, not the visible rows, so the
+              // number does not change as the seller types in the box above.
+              const count = (view?.files ?? []).filter((file) =>
+                matchesFilter(file, value)
+              ).length;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setFilter(value)}
+                  disabled={count === 0 && value !== 'all'}
+                  className={cn(
+                    'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                    filter === value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-muted-foreground hover:text-foreground',
+                    count === 0 && value !== 'all' && 'opacity-40'
+                  )}
+                >
+                  {label}
+                  <span className="ml-1.5 tabular-nums opacity-70">
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="mt-4 space-y-2">
@@ -445,6 +483,7 @@ export default function DocumentsPage() {
               <FileRow
                 key={file.id}
                 file={file}
+                highlighted={highlighted === file.id}
                 busy={busy}
                 onDelete={() => setPending(file)}
                 onRoleChange={changeRole}
@@ -532,10 +571,12 @@ function PurchaseCard({
 function FileRow({
   file,
   busy,
+  highlighted,
   onDelete,
   onRoleChange,
 }: {
   file: FileEntry;
+  highlighted?: boolean;
   busy: string | null;
   onDelete: () => void;
   onRoleChange: (documentId: string, role: DocumentRole) => void;
@@ -546,7 +587,13 @@ function FileRow({
   );
 
   return (
-    <div className="rounded-lg border p-4">
+    <div
+      id={`file-${file.id}`}
+      className={cn(
+        'rounded-lg border p-4 transition-colors',
+        highlighted && 'border-primary bg-primary/5'
+      )}
+    >
       <div className="flex items-center gap-2">
         <FileIcon file={file} />
         {/* A file stored before names were kept has no name to show. Italic and

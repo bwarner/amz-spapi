@@ -25,7 +25,7 @@ test.describe('documents page', () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test('is not reachable by a signed-in stranger', async ({
+  test('is not reachable by an account with no workspace', async ({
     context,
     page,
     baseURL,
@@ -37,7 +37,12 @@ test.describe('documents page', () => {
 
     await page.goto('/documents');
 
-    await expect(page).toHaveURL(/\/no-access/);
+    // Onboarding rather than the old invite-only dead end — self-serve
+    // workspaces changed where an account with nothing lands. What has NOT
+    // changed, and is the point of this test, is that it does not land on
+    // somebody's document library.
+    await expect(page).not.toHaveURL(/\/documents/);
+    await expect(page).toHaveURL(/\/onboarding|\/no-access/);
   });
 
   test('refuses the listing API to a stranger', async ({
@@ -108,14 +113,80 @@ test.describe('documents page', () => {
       await expect(dialog).toBeHidden();
     });
 
-    test('filters without emptying the page', async ({ page }) => {
+    test('opens the palette on \u2318K and finds a supplier', async ({
+      page,
+    }) => {
       await page.goto('/documents');
       await expect(
         page.getByRole('heading', { name: /^Files \(/ })
       ).toBeVisible({ timeout: 15_000 });
 
-      await page.getByRole('button', { name: 'Reports' }).click();
-      await expect(page.getByText(/rows/).first()).toBeVisible();
+      await page.keyboard.press('ControlOrMeta+k');
+
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+
+      // A supplier name, which lives on the extracted document rather than in
+      // any file name — so a hit proves the search reached the server, not the
+      // in-memory name filter.
+      await page.getByPlaceholder(/Search by file name/i).fill('Wuhan');
+      await expect(dialog.getByText(/Wuhan/i).first()).toBeVisible({
+        timeout: 15_000,
+      });
+    });
+
+    test('jumping from the palette highlights the file', async ({ page }) => {
+      await page.goto('/documents');
+      await expect(
+        page.getByRole('heading', { name: /^Files \(/ })
+      ).toBeVisible({ timeout: 15_000 });
+
+      await page.keyboard.press('ControlOrMeta+k');
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+
+      await dialog.getByRole('option').first().click();
+
+      // The dialog closes and the chosen row is marked, rather than the seller
+      // being dropped back into an unchanged list.
+      await expect(dialog).toBeHidden();
+      await expect(page.locator('.border-primary').first()).toBeVisible();
+    });
+
+    test('every facet states how many files it holds', async ({ page }) => {
+      await page.goto('/documents');
+      await expect(
+        page.getByRole('heading', { name: /^Files \(/ })
+      ).toBeVisible({ timeout: 15_000 });
+
+      // The count is the point: a facet that would show nothing says so
+      // before it is clicked, rather than after, when an empty list reads as
+      // a fault. An empty facet is disabled for the same reason.
+      const all = page.getByRole('button', { name: /^All ?\d+$/ });
+      await expect(all).toBeVisible();
+
+      const empty = page
+        .getByRole('button', {
+          name: /(Reports|Box labels|Everything else) ?0$/,
+        })
+        .first();
+      if (await empty.count()) await expect(empty).toBeDisabled();
+    });
+
+    test('a facet with files narrows the list without emptying it', async ({
+      page,
+    }) => {
+      await page.goto('/documents');
+      await expect(
+        page.getByRole('heading', { name: /^Files \(/ })
+      ).toBeVisible({ timeout: 15_000 });
+
+      const facet = page
+        .getByRole('button', { name: /Invoices & receipts ?\d+/ })
+        .first();
+      await facet.click();
+
+      await expect(page.getByText('Nothing matches that.')).toBeHidden();
     });
   });
 });

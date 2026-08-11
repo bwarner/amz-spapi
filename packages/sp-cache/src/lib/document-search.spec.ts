@@ -14,7 +14,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DOCUMENT_SEARCH_INDEX,
-  DOCUMENT_SEARCH_INDEX_DEFINITION,
+  documentSearchIndexDefinition,
+  documentSearchTypeKey,
   DocumentSearchError,
   EMBEDDING_DIMENSIONS,
   documentSearchText,
@@ -22,7 +23,12 @@ import {
   searchDocuments,
   suggestLinks,
 } from './document-search.js';
-import type { StoredDocument } from './document-store.js';
+import { collectionName } from '@amz-spapi/couchbase-utils';
+import {
+  DOCUMENTS_COLLECTION,
+  DOCUMENTS_DOMAIN,
+  type StoredDocument,
+} from './document-store.js';
 
 const vector = (length = EMBEDDING_DIMENSIONS, fill = 0.1) =>
   Array.from({ length }, () => fill);
@@ -339,10 +345,43 @@ describe('what gets embedded', () => {
 });
 
 describe('the index definition and the queries agree', () => {
-  const mapping =
-    DOCUMENT_SEARCH_INDEX_DEFINITION.params.mapping.types[
-      'purchases.documents'
-    ];
+  const definition = documentSearchIndexDefinition({
+    bucket: 'sell-avant',
+    environmentScope: 'dev',
+  });
+  const mapping = definition.params.mapping.types[documentSearchTypeKey('dev')];
+
+  it('maps the keyspace documents are actually written to', () => {
+    // The other silent-empty failure. `mode: scope.collection.type_field` keys
+    // this mapping by `<scope>.<collection>`, and ADR-0005 moved both halves:
+    // the scope is the environment, the collection is flat. Keyed the old way
+    // (`purchases.documents`) the index builds, holds zero documents, and every
+    // search returns nothing — indistinguishable on screen from an empty
+    // library. Asserted against `collectionName` so it cannot drift.
+    expect(documentSearchTypeKey('dev')).toBe(
+      `dev.${collectionName(DOCUMENTS_DOMAIN, DOCUMENTS_COLLECTION)}`
+    );
+    expect(mapping).toBeDefined();
+  });
+
+  it('follows the environment scope rather than hardcoding one', () => {
+    const prod = documentSearchIndexDefinition({
+      bucket: 'sell-avant',
+      environmentScope: 'prod',
+    });
+    expect(
+      prod.params.mapping.types[documentSearchTypeKey('prod')]
+    ).toBeDefined();
+    // ...and does NOT still carry dev's key, which would index the wrong scope.
+    expect(
+      prod.params.mapping.types[documentSearchTypeKey('dev')]
+    ).toBeUndefined();
+  });
+
+  it('names the bucket it reads from', () => {
+    // Without sourceName the Search service has no source to index.
+    expect(definition.sourceName).toBe('sell-avant');
+  });
 
   it('indexes userId, or every search silently returns nothing', () => {
     // The quiet failure: `tenantClause` matches an unindexed field, finds
@@ -380,6 +419,6 @@ describe('the index definition and the queries agree', () => {
   });
 
   it('is named the same as the index the queries hit', () => {
-    expect(DOCUMENT_SEARCH_INDEX_DEFINITION.name).toBe(DOCUMENT_SEARCH_INDEX);
+    expect(definition.name).toBe(DOCUMENT_SEARCH_INDEX);
   });
 });

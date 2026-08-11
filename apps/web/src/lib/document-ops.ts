@@ -19,6 +19,7 @@ import {
   type FbaBoxLabel,
 } from '@farvisionllc/models';
 import { extractDocument } from './document-extraction';
+import { embedDocument } from './document-embedding';
 import { getAsset, loadAssetBytes } from './media-assets';
 import { extractPdfText } from './pdf-text';
 
@@ -311,6 +312,18 @@ export function createDocumentOps(params: {
         );
       }
 
+      // Same treatment as the upload path: a document the agent files must be
+      // as findable as one dropped on the Import page, or search results depend
+      // on which door the document came through.
+      const embedded = await embedDocument({
+        role:
+          (role as DocumentRole | undefined) ??
+          roleForRecognisedKind(reading.recognition.kind) ??
+          'other',
+        recognition: reading.recognition,
+        extracted,
+      });
+
       const stored = await storeExtractedDocument({
         userId,
         assetId,
@@ -320,6 +333,9 @@ export function createDocumentOps(params: {
         needsReview: reading.needsReview,
         modelId: reading.modelId,
         role: role as DocumentRole | undefined,
+        searchText: embedded?.searchText,
+        embedding: embedded?.embedding,
+        embeddingModelId: embedded?.embeddingModelId,
       });
 
       return { documentId: stored.documentId, role: stored.role };

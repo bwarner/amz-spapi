@@ -9,6 +9,7 @@ import {
   ingestReportBuffer,
   isIngestError,
   REPORTS,
+  roleForRecognisedKind,
   storeBoxLabel,
   storeExtractedDocument,
 } from '@amz-spapi/sp-cache';
@@ -30,6 +31,7 @@ import {
   extractDocument,
   type ExtractionResult,
 } from '../../../../lib/document-extraction';
+import { embedDocument } from '../../../../lib/document-embedding';
 import { loggerFor } from '../../../../lib/logger';
 const log = loggerFor('documents');
 
@@ -393,10 +395,31 @@ export async function POST(request: Request) {
     let documentStoreError: string | undefined;
     if (extraction) {
       try {
+        // Embedded BEFORE the write, so a document is never briefly stored
+        // without the vector that makes it findable. Returns undefined when the
+        // gateway is unreachable — the document is still stored and listed, it
+        // is simply absent from semantic search until re-embedded.
+        const storedRole = roleForRecognisedKind(recognition.kind) ?? 'other';
+        const embedded = await embedDocument({
+          role: storedRole,
+          fileName: file.name,
+          recognition: {
+            kind: recognition.kind,
+            confidence: recognition.confidence,
+            needsUserChoice: recognition.needsUserChoice,
+            alternatives: recognition.alternatives.map((entry) => entry.kind),
+            signals: recognition.signals.map((signal) => signal.reason),
+          },
+          extracted: extraction.document,
+        });
+
         const record = await storeExtractedDocument({
           userId: session.user.sub,
           assetId: asset.assetId,
           fileName: file.name,
+          searchText: embedded?.searchText,
+          embedding: embedded?.embedding,
+          embeddingModelId: embedded?.embeddingModelId,
           recognition: {
             kind: recognition.kind,
             confidence: recognition.confidence,

@@ -1,5 +1,9 @@
-import { searchQuery } from '@amz-spapi/couchbase-utils';
-import type { StoredDocument } from './document-store.js';
+import { collectionName, searchQuery } from '@amz-spapi/couchbase-utils';
+import {
+  DOCUMENTS_COLLECTION,
+  DOCUMENTS_DOMAIN,
+  type StoredDocument,
+} from './document-store.js';
 
 /**
  * Finding a document by what it says, and finding the documents that belong
@@ -57,7 +61,18 @@ export class DocumentSearchError extends Error {}
  * semantic neighbourhood — it is a term to MATCH exactly, which is the keyword
  * half's job, and including it only adds noise to the vector.
  */
-export function documentSearchText(document: StoredDocument): string {
+export function documentSearchText(
+  /**
+   * A structural subset, not the whole stored record, so this can be computed
+   * BEFORE the document is written. Embedding after the write would mean
+   * storing every document twice, and leaving a window in which a document
+   * exists but is unsearchable.
+   */
+  document: Pick<
+    StoredDocument,
+    'role' | 'recognition' | 'extracted' | 'fileName'
+  >
+): string {
   const extracted = document.extracted;
   const parts = [
     document.role,
@@ -357,145 +372,180 @@ export async function suggestLinks(params: {
  * Provision with:
  *   PUT /_p/fts/api/bucket/{bucket}/scope/{scope}/index/documents_search
  */
-export const DOCUMENT_SEARCH_INDEX_DEFINITION = {
-  name: DOCUMENT_SEARCH_INDEX,
-  type: 'fulltext-index',
-  sourceType: 'gocbcore',
-  params: {
-    doc_config: {
-      mode: 'scope.collection.type_field',
-      type_field: 'type',
-    },
-    mapping: {
-      default_analyzer: 'standard',
-      default_mapping: { enabled: false, dynamic: false },
-      types: {
-        'purchases.documents': {
-          enabled: true,
-          dynamic: false,
-          properties: {
-            // Scoping. `keyword` so the id is one token and compares exactly.
-            userId: {
-              enabled: true,
-              fields: [
-                {
-                  name: 'userId',
-                  type: 'text',
-                  analyzer: 'keyword',
-                  index: true,
-                  docvalues: true,
-                },
-              ],
-            },
-            role: {
-              enabled: true,
-              fields: [
-                {
-                  name: 'role',
-                  type: 'text',
-                  analyzer: 'keyword',
-                  index: true,
-                  store: true,
-                  docvalues: true,
-                },
-              ],
-            },
-            fileName: {
-              enabled: true,
-              fields: [
-                { name: 'fileName', type: 'text', index: true, store: true },
-              ],
-            },
-            // The embedded meaning of the document, and the vector beside it.
-            searchText: {
-              enabled: true,
-              fields: [{ name: 'searchText', type: 'text', index: true }],
-            },
-            embedding: {
-              enabled: true,
-              fields: [
-                {
-                  name: 'embedding',
-                  type: 'vector',
-                  index: true,
-                  dims: EMBEDDING_DIMENSIONS,
-                  similarity: 'dot_product',
-                  vector_index_optimized_for: 'recall',
-                },
-              ],
-            },
-            extracted: {
-              enabled: true,
-              dynamic: false,
-              properties: {
-                vendorName: {
-                  enabled: true,
-                  fields: [
-                    {
-                      name: 'vendorName',
-                      type: 'text',
-                      index: true,
-                      store: true,
-                    },
-                  ],
-                },
-                documentDate: {
-                  enabled: true,
-                  fields: [
-                    {
-                      name: 'documentDate',
-                      type: 'datetime',
-                      index: true,
-                      store: true,
-                      docvalues: true,
-                    },
-                  ],
-                },
-                invoiceNumber: {
-                  enabled: true,
-                  fields: [
-                    {
-                      name: 'invoiceNumber',
-                      type: 'text',
-                      analyzer: 'keyword',
-                      index: true,
-                    },
-                  ],
-                },
-                trackingNumber: {
-                  enabled: true,
-                  fields: [
-                    {
-                      name: 'trackingNumber',
-                      type: 'text',
-                      analyzer: 'keyword',
-                      index: true,
-                    },
-                  ],
-                },
-                total: {
-                  enabled: true,
-                  fields: [
-                    {
-                      name: 'total',
-                      type: 'number',
-                      index: true,
-                      store: true,
-                      docvalues: true,
-                    },
-                  ],
-                },
-                currency: {
-                  enabled: true,
-                  fields: [
-                    {
-                      name: 'currency',
-                      type: 'text',
-                      analyzer: 'keyword',
-                      index: true,
-                      store: true,
-                    },
-                  ],
+/**
+ * The keyspace this index reads, as the Search service names it.
+ *
+ * `mode: 'scope.collection.type_field'` keys every type mapping by
+ * `<scope>.<collection>`, and BOTH halves moved under ADR-0005: the scope is
+ * now the environment (`dev`, `staging`, `prod`) and the collection is flat
+ * (`purchases_documents`). Written as `purchases.documents` — the pre-ADR
+ * shape — the mapping matches no document at all, the index builds happily
+ * with zero documents, and every search returns nothing. That reads on screen
+ * as "you have no documents", which is the same silent-empty failure the
+ * tenant clause is guarded against, arriving by a different door.
+ *
+ * Derived rather than written down, so it cannot drift from `collectionName`.
+ */
+export function documentSearchTypeKey(environmentScope: string): string {
+  return `${environmentScope}.${collectionName(
+    DOCUMENTS_DOMAIN,
+    DOCUMENTS_COLLECTION
+  )}`;
+}
+
+/**
+ * The index definition for one environment.
+ *
+ * A function of the bucket and scope rather than a constant, because both
+ * appear inside it: `sourceName` is the bucket, and the type mapping is keyed
+ * by the scope. A constant could only have been right for one environment, and
+ * would have been wrong everywhere else in a way nothing reports.
+ */
+export function documentSearchIndexDefinition(params: {
+  bucket: string;
+  environmentScope: string;
+}) {
+  return {
+    name: DOCUMENT_SEARCH_INDEX,
+    type: 'fulltext-index',
+    sourceType: 'gocbcore',
+    sourceName: params.bucket,
+    params: {
+      doc_config: {
+        mode: 'scope.collection.type_field',
+        type_field: 'type',
+      },
+      mapping: {
+        default_analyzer: 'standard',
+        default_mapping: { enabled: false, dynamic: false },
+        types: {
+          [documentSearchTypeKey(params.environmentScope)]: {
+            enabled: true,
+            dynamic: false,
+            properties: {
+              // Scoping. `keyword` so the id is one token and compares exactly.
+              userId: {
+                enabled: true,
+                fields: [
+                  {
+                    name: 'userId',
+                    type: 'text',
+                    analyzer: 'keyword',
+                    index: true,
+                    docvalues: true,
+                  },
+                ],
+              },
+              role: {
+                enabled: true,
+                fields: [
+                  {
+                    name: 'role',
+                    type: 'text',
+                    analyzer: 'keyword',
+                    index: true,
+                    store: true,
+                    docvalues: true,
+                  },
+                ],
+              },
+              fileName: {
+                enabled: true,
+                fields: [
+                  { name: 'fileName', type: 'text', index: true, store: true },
+                ],
+              },
+              // The embedded meaning of the document, and the vector beside it.
+              searchText: {
+                enabled: true,
+                fields: [{ name: 'searchText', type: 'text', index: true }],
+              },
+              embedding: {
+                enabled: true,
+                fields: [
+                  {
+                    name: 'embedding',
+                    type: 'vector',
+                    index: true,
+                    dims: EMBEDDING_DIMENSIONS,
+                    similarity: 'dot_product',
+                    vector_index_optimized_for: 'recall',
+                  },
+                ],
+              },
+              extracted: {
+                enabled: true,
+                dynamic: false,
+                properties: {
+                  vendorName: {
+                    enabled: true,
+                    fields: [
+                      {
+                        name: 'vendorName',
+                        type: 'text',
+                        index: true,
+                        store: true,
+                      },
+                    ],
+                  },
+                  documentDate: {
+                    enabled: true,
+                    fields: [
+                      {
+                        name: 'documentDate',
+                        type: 'datetime',
+                        index: true,
+                        store: true,
+                        docvalues: true,
+                      },
+                    ],
+                  },
+                  invoiceNumber: {
+                    enabled: true,
+                    fields: [
+                      {
+                        name: 'invoiceNumber',
+                        type: 'text',
+                        analyzer: 'keyword',
+                        index: true,
+                      },
+                    ],
+                  },
+                  trackingNumber: {
+                    enabled: true,
+                    fields: [
+                      {
+                        name: 'trackingNumber',
+                        type: 'text',
+                        analyzer: 'keyword',
+                        index: true,
+                      },
+                    ],
+                  },
+                  total: {
+                    enabled: true,
+                    fields: [
+                      {
+                        name: 'total',
+                        type: 'number',
+                        index: true,
+                        store: true,
+                        docvalues: true,
+                      },
+                    ],
+                  },
+                  currency: {
+                    enabled: true,
+                    fields: [
+                      {
+                        name: 'currency',
+                        type: 'text',
+                        analyzer: 'keyword',
+                        index: true,
+                        store: true,
+                      },
+                    ],
+                  },
                 },
               },
             },
@@ -503,5 +553,5 @@ export const DOCUMENT_SEARCH_INDEX_DEFINITION = {
         },
       },
     },
-  },
-} as const;
+  } as const;
+}

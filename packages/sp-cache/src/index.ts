@@ -72,6 +72,8 @@ export {
 export type { StoredBoxLabel, BoxLabelInput } from './lib/box-label-store.js';
 export {
   confirmPurchase,
+  DOCUMENTS_COLLECTION,
+  DOCUMENTS_DOMAIN,
   deleteStoredDocument,
   documentStorage,
   DocumentStoreError,
@@ -149,7 +151,8 @@ export {
   documentSearchTransport,
   DocumentSearchError,
   DOCUMENT_SEARCH_INDEX,
-  DOCUMENT_SEARCH_INDEX_DEFINITION,
+  documentSearchIndexDefinition,
+  documentSearchTypeKey,
   EMBEDDING_DIMENSIONS,
 } from './lib/document-search.js';
 export type {
