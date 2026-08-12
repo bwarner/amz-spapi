@@ -74,6 +74,16 @@ export type LedgerEntry = {
   priceKnown: boolean;
   chatId?: string;
   error?: string;
+  /**
+   * Token breakdown for LLM entries, so a $1 turn can be read: was it a long
+   * answer, a huge context, or a cache miss? `units` alone cannot say —
+   * 900k tokens at $0.30/M cached and 180k at $3/M uncached cost the same.
+   */
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  /** Agent-loop steps, so an expensive turn can be told from a long one. */
+  steps?: number;
   createdAt: number;
 };
 
@@ -318,6 +328,10 @@ export async function recordCost(params: {
   priceKnown: boolean;
   chatId?: string;
   error?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  steps?: number;
 }): Promise<void> {
   const entry: LedgerEntry = {
     schemaVersion: SCHEMA_VERSION,

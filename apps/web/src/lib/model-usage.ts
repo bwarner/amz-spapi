@@ -62,14 +62,28 @@ function envRate(modelId: string, kind: string): number | undefined {
  * a dated build of a known model still prices correctly instead of silently
  * falling back to the default.
  */
+/**
+ * Dots and hyphens are the same separator. The table keys use the gateway's
+ * dotted ids (`claude-sonnet-4.6`); the RESPONSE reports Anthropic's own
+ * hyphenated id (`claude-sonnet-4-6`), and that response id is what gets
+ * recorded — so an exact-substring match misses every Anthropic turn and
+ * silently prices it at the default. Seen live: seven turns, all
+ * `priceKnown: false`, for a model whose price was in the table the whole
+ * time.
+ */
+function normalizeModelId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 export function pricesFor(modelId: string): {
   input: number;
   output: number;
   cachedInput: number;
   known: boolean;
 } {
+  const normalized = normalizeModelId(modelId);
   const match = Object.keys(MODEL_PRICES_PER_MTOK)
-    .filter((key) => modelId.includes(key))
+    .filter((key) => normalized.includes(normalizeModelId(key)))
     .sort((a, b) => b.length - a.length)[0];
 
   const base = match ? MODEL_PRICES_PER_MTOK[match] : DEFAULT_PRICE_PER_MTOK;
@@ -151,6 +165,14 @@ export async function recordModelUsage(params: {
       costSource: 'estimated',
       priceKnown,
       chatId,
+      // The breakdown, not just the total: 900k cached tokens and 180k
+      // uncached ones cost the same, and only these fields say which a turn
+      // was — the difference between "long conversation, cache working" and
+      // "cache miss, money burning".
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+      steps: params.steps,
     }),
     captureServerEvent({
       // The SAME id the browser identifies with — `posthog.identify(
