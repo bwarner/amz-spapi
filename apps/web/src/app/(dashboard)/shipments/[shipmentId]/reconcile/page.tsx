@@ -63,6 +63,8 @@ const FINDING_STYLE: Record<string, string> = {
   'invoice-vs-order': 'text-amber-700',
   'no-invoice-line': 'text-amber-700',
   'no-order-line': 'text-amber-700',
+  // Good news, distinctly coloured: money already paid, not another problem.
+  reimbursed: 'text-emerald-700',
 };
 
 function money(amount?: number, currency?: string): string {
@@ -240,7 +242,7 @@ export default function ReconcileDeepPage({
                     {line.findings.length ? (
                       line.findings.map((finding) => (
                         <span
-                          key={finding.kind}
+                          key={`${finding.kind}:${finding.text}`}
                           className={`block ${
                             FINDING_STYLE[finding.kind] ?? 'text-amber-700'
                           }`}

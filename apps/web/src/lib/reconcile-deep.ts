@@ -1,6 +1,7 @@
 import type { StoredDocument } from '@amz-spapi/sp-cache';
 import { summariseBoxLabels } from '@farvisionllc/models';
 import { planPacket, type PacketInput } from './evidence-packet';
+import { inboundCoverFor, netReimbursements } from './reimbursements';
 
 /**
  * The reconcile deep view: ordered, invoiced, shipped, received — side by side.
@@ -36,7 +37,11 @@ export type DeepFindingKind =
   | 'shipped-vs-order'
   | 'invoice-vs-order'
   | 'no-invoice-line'
-  | 'no-order-line';
+  | 'no-order-line'
+  /** Amazon has a standing inbound-loss payment on this SKU — the claim may
+      already be (partly) settled. Advisory, never counted as a discrepancy
+      on its own. */
+  | 'reimbursed';
 
 export type DeepFinding = {
   kind: DeepFindingKind;
@@ -100,6 +105,13 @@ function tieLine(
 export function buildDeepView(input: PacketInput): DeepView {
   const plan = planPacket(input);
   const claimBySku = new Map(plan.claim.lines.map((line) => [line.sku, line]));
+  const netted = netReimbursements(input.reimbursements ?? []);
+  const coverFor = (sku: string) =>
+    inboundCoverFor({
+      netted,
+      sku,
+      notBefore: input.reconciliation?.firstReceiptDate,
+    });
 
   const nativePo = input.orders.find((po) => po.order.status !== 'cancelled');
   const poDocument = input.documents.find(
@@ -155,6 +167,20 @@ export function buildDeepView(input: PacketInput): DeepView {
           text: `Short ${recon.discrepancy} — claimable`,
           amount: claim?.amount,
         });
+        // A standing payment on the same SKU: the claim may already be
+        // (partly) settled. "May", because the report names no shipment.
+        for (const payment of coverFor(sku)) {
+          const remaining = Math.max(recon.discrepancy - payment.units, 0);
+          findings.push({
+            kind: 'reimbursed',
+            text:
+              `A reimbursement on ${payment.date ?? 'an unknown date'}` +
+              `${payment.caseId ? ` (case ${payment.caseId})` : ''} may ` +
+              `already cover ${payment.units} of these — at most ` +
+              `${remaining} remain claimable`,
+            amount: payment.amount,
+          });
+        }
       } else if (recon.status === 'over-received' && recon.discrepancy) {
         findings.push({
           kind: 'over-received',
@@ -247,6 +273,76 @@ export function buildDeepView(input: PacketInput): DeepView {
     notes.push(
       'No ledger receipts reference this shipment — import the Inventory ' +
         'Ledger detail export to see what Amazon received.'
+    );
+  }
+
+  // A short on one SKU beside an over-receipt on another is usually not two
+  // problems: Amazon's receipt corrections move units between SKUs when they
+  // decide labels were wrong, and the two rows are the same units under
+  // different names. Claiming the gross short while holding the over-receipt
+  // is the version of this claim that gets denied.
+  const shortLines = lines.filter((line) =>
+    line.findings.some((finding) => finding.kind === 'short')
+  );
+  const overLines = lines.filter((line) =>
+    line.findings.some((finding) => finding.kind === 'over-received')
+  );
+  if (shortLines.length && overLines.length) {
+    const totalShort = shortLines.reduce(
+      (sum, line) => sum + ((line.shipped ?? 0) - (line.received ?? 0)),
+      0
+    );
+    const totalOver = overLines.reduce(
+      (sum, line) => sum + ((line.received ?? 0) - (line.shipped ?? 0)),
+      0
+    );
+    notes.push(
+      `Short ${totalShort} on ${shortLines
+        .map((line) => line.sku)
+        .join(', ')} sits beside over-receipt ${totalOver} on ${overLines
+        .map((line) => line.sku)
+        .join(', ')} — likely the same units mislabelled and reclassified by ` +
+        `Amazon. The net shortfall across them is ${Math.max(
+          totalShort - totalOver,
+          0
+        )}; a claim for the gross ${totalShort} will be denied against the ` +
+        'over-receipt.'
+    );
+  }
+
+  // Standing inbound-loss payments on SKUs that are NOT short here — most
+  // often the over-received twin of a short SKU. Money already paid for what
+  // this shipment lost can arrive under either name.
+  const shortSkus = new Set(shortLines.map((line) => line.sku));
+  for (const sku of skus) {
+    if (shortSkus.has(sku)) continue;
+    for (const payment of coverFor(sku)) {
+      notes.push(
+        `Amazon paid ${payment.amount.toFixed(2)} for ${payment.units} lost ` +
+          `inbound unit${payment.units === 1 ? '' : 's'} of ${sku} on ` +
+          `${payment.date ?? 'an unknown date'}` +
+          `${payment.caseId ? ` (case ${payment.caseId})` : ''} — if the ` +
+          'mislabel reading applies, that payment may already settle the net ' +
+          'shortfall.'
+      );
+    }
+  }
+
+  const strayReversals = netted.unmatchedReversals.filter(
+    (reversal) => reversal.sku && seen.has(reversal.sku)
+  );
+  if (strayReversals.length) {
+    const clawedBack = strayReversals.reduce(
+      (sum, reversal) => sum + reversal.amount,
+      0
+    );
+    notes.push(
+      `${strayReversals.length} reimbursement reversal` +
+        `${strayReversals.length === 1 ? '' : 's'} on this shipment's SKUs ` +
+        `(${clawedBack.toFixed(2)}) could not be matched to a payment in the ` +
+        'imported window — money was clawed back for reimbursements this ' +
+        'report does not show. Import a wider reimbursements window to see ' +
+        'the full picture.'
     );
   }
 

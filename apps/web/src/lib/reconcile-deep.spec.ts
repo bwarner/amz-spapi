@@ -364,6 +364,104 @@ describe('buildDeepView', () => {
     expect(note).not.toContain('Sea freight');
   });
 
+  it('reads a mislabel from a short beside an over-receipt, and finds the payment on the twin', () => {
+    // FBA19CBC1Q88 as seen live: GEI short 18, HGE over 16 — the same units
+    // reclassified between the two SKUs — and Amazon's $44.46 payment for the
+    // net loss landed on HGE, the SKU that is NOT short.
+    const view = buildDeepView(
+      input({
+        boxLabels: [
+          label('FB-COF-GEI-250', 80, 1),
+          label('FB-COF-HGE-250', 80, 2),
+        ],
+        receipts: [
+          receipt('FB-COF-GEI-250', 62),
+          receipt('FB-COF-HGE-250', 96),
+        ],
+        reconciliation: recon([
+          reconLine('FB-COF-GEI-250', 80, 62, 'short'),
+          reconLine('FB-COF-HGE-250', 80, 96, 'over-received', {
+            discrepancy: -16,
+          }),
+        ]),
+        reimbursements: [
+          {
+            sku: 'FB-COF-HGE-250',
+            reason: 'Lost_Inbound',
+            date: '2026-08-01',
+            quantity: 2,
+            amount: 44.46,
+            caseId: '21303926901',
+            reimbursementId: '22944647101',
+          },
+        ],
+      })
+    );
+
+    const mislabel = view.notes.find((note) => note.includes('mislabelled'));
+    expect(mislabel).toContain('Short 18');
+    expect(mislabel).toContain('over-receipt 16');
+    expect(mislabel).toContain('net shortfall across them is 2');
+
+    // The payment sits on the over-received twin, so it arrives as a note,
+    // not a finding on the short row.
+    const payment = view.notes.find((note) => note.includes('44.46'));
+    expect(payment).toContain('case 21303926901');
+    expect(payment).toContain('may already settle');
+  });
+
+  it('marks a short as possibly settled when the same SKU holds a standing payment', () => {
+    const view = buildDeepView(
+      input({
+        boxLabels: [label('TX-TOWEL-NV-4', 600, 1)],
+        receipts: [receipt('TX-TOWEL-NV-4', 555)],
+        reconciliation: recon([reconLine('TX-TOWEL-NV-4', 600, 555, 'short')]),
+        reimbursements: [
+          {
+            sku: 'TX-TOWEL-NV-4',
+            reason: 'Lost_Inbound',
+            date: '2026-06-25',
+            quantity: 30,
+            amount: 143.1,
+            caseId: '900001',
+            reimbursementId: 'r-1',
+          },
+          // The same payment, clawed back, on a DIFFERENT shipment's SKU set:
+          // a reversed payment must not appear as cover.
+          {
+            sku: 'TX-TOWEL-NV-4',
+            reason: 'Reimbursement_Reversal',
+            date: '2026-07-01',
+            quantity: -30,
+            amount: -143.1,
+            originalReimbursementId: 'r-x',
+          },
+          {
+            sku: 'TX-TOWEL-NV-4',
+            reason: 'Lost_Inbound',
+            date: '2026-06-20',
+            quantity: 30,
+            amount: 143.1,
+            reimbursementId: 'r-x',
+          },
+        ],
+      })
+    );
+
+    const [line] = view.lines;
+    const reimbursed = line.findings.filter((f) => f.kind === 'reimbursed');
+    // Only the standing payment shows; the reversed one is gone.
+    expect(reimbursed).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining('case 900001'),
+      }),
+    ]);
+    expect(reimbursed[0].text).toContain('may already cover 30');
+    expect(reimbursed[0].text).toContain('at most 15 remain');
+    // The advisory does not add a discrepancy of its own.
+    expect(view.discrepancies).toBe(1);
+  });
+
   it('describes the three sources with the issued order preferred', () => {
     const view = buildDeepView(
       input({

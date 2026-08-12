@@ -26,6 +26,7 @@ export {
   getCoverage,
   queryLedgerRows,
   queryReceiptAggregates,
+  queryReimbursements,
   queryReportAggregate,
   migrateReportRows,
   deleteReportRows,
@@ -42,6 +43,7 @@ export type {
   Coverage,
   LedgerQuery,
   ReceiptAggregate,
+  ReimbursementRow,
   ReportAggregate,
   ReportAggregateGroup,
 } from './lib/report-store.js';

@@ -718,6 +718,64 @@ export async function queryReceiptAggregates(params: {
   return rows;
 }
 
+/** One reimbursement (or reversal) row, as Amazon reported it. */
+export type ReimbursementRow = {
+  date?: string;
+  sku?: string;
+  fnsku?: string;
+  /** "Lost_Inbound", "Reimbursement_Reversal", "CustomerReturn", … */
+  reason?: string;
+  quantity: number;
+  amount: number;
+  currency?: string;
+  reimbursementId?: string;
+  /** On a reversal: the reimbursement it claws back. */
+  originalReimbursementId?: string;
+  caseId?: string;
+};
+
+/**
+ * Every reimbursement row for a seller, reversals included.
+ *
+ * Deliberately NOT netted here: which reversal cancels which payment is a
+ * judgement with an exact path (`originalReimbursementId`) and a fallback
+ * (same SKU and amount), and it belongs in tested TypeScript, not in a query.
+ * Callers get the rows Amazon reported and net them accountably.
+ */
+export async function queryReimbursements(params: {
+  sellerId: string;
+  skus?: string[];
+}): Promise<ReimbursementRow[]> {
+  const conditions = [
+    'd.sellerId = $sellerId',
+    "d.reportKind = 'reimbursement'",
+  ];
+  const parameters: Record<string, unknown> = { sellerId: params.sellerId };
+  if (params.skus?.length) {
+    conditions.push('d.fields.msku IN $skus');
+    parameters['skus'] = params.skus;
+  }
+
+  const { rows } = await reportStorage.executeQuery<ReimbursementRow>(
+    SCOPE,
+    `SELECT d.fields.\`date\` AS \`date\`,
+            d.fields.msku AS sku,
+            d.fields.fnsku AS fnsku,
+            d.fields.reason AS reason,
+            IFMISSINGORNULL(TONUMBER(d.fields.quantity), 0) AS quantity,
+            IFMISSINGORNULL(TONUMBER(d.fields.amountTotal), 0) AS amount,
+            d.fields.currency AS currency,
+            d.fields.reimbursementId AS reimbursementId,
+            d.fields.originalReimbursementId AS originalReimbursementId,
+            d.fields.caseId AS caseId
+       FROM ${ROWS} AS d
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY d.fields.\`date\``,
+    { parameters, readonly: true }
+  );
+  return rows;
+}
+
 /**
  * A caller asked for a field this report does not have. Carries the valid names
  * so the answer is "here is what you can group by", not "no".
