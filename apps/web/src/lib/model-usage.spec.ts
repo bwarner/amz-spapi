@@ -46,11 +46,19 @@ describe('pricesFor', () => {
     expect(pricesFor(modelId).known).toBe(true);
   });
 
-  it('does not silently price a dotted id as unknown', () => {
-    // The exact failure mode: a dot/hyphen mismatch does not throw, it just
-    // quietly bills at the fallback rate.
-    expect(pricesFor('anthropic/claude-sonnet-4.6').known).toBe(true);
-    expect(pricesFor('anthropic/claude-sonnet-4-6').known).toBe(false);
+  it('prices dotted and hyphenated spellings of one model identically', () => {
+    // The id that gets RECORDED is the response's, and Anthropic reports its
+    // own hyphenated id (`claude-sonnet-4-6`) where the gateway uses dots.
+    // The first version of this test asserted the hyphenated form was
+    // unknown — enshrining exactly the failure seen live: seven real turns,
+    // all priced at the default with priceKnown: false, for a model whose
+    // price sat in the table the whole time.
+    const dotted = pricesFor('anthropic/claude-sonnet-4.6');
+    const hyphenated = pricesFor('claude-sonnet-4-6');
+
+    expect(dotted.known).toBe(true);
+    expect(hyphenated.known).toBe(true);
+    expect(hyphenated).toEqual(dotted);
   });
 
   it('prefers the longest match, so a mini is not priced as its parent', () => {
