@@ -1,6 +1,10 @@
 import { ToolLoopAgent, InferAgentUIMessage, stepCountIs } from 'ai';
 import { z } from 'zod';
 import type { SpCache } from '@amz-spapi/sp-cache';
+import {
+  TITLE_POLICY_PROMPT,
+  validateListingTitle,
+} from './listing-title-policy.js';
 import type {
   AIProvider,
   ImageGenerator,
@@ -4661,6 +4665,29 @@ export function createSellerAgent({
     ? getListingWriteTools(listingWrites)
     : {};
   const tools = {
+    // Always on: pure policy check, no host dependency. The title policy
+    // postdates training data, so knowing it and checking it are kept as
+    // separate things — the prompt teaches, this tool verifies.
+    'check-listing-title': {
+      description:
+        'Check a product listing title against Amazon’s title policy ' +
+        '(effective 2025-01-21): 200-character limit (125 for apparel — set ' +
+        'apparel:true), forbidden characters, and the twice-per-word ' +
+        'repetition rule. Run this on EVERY title you are about to ' +
+        'recommend, write, or judge, and fix what it reports before ' +
+        'presenting the title. Repeat its caveats to the seller — it counts ' +
+        'exact word repeats only, while Amazon also counts plurals and ' +
+        'variants.',
+      inputSchema: z.object({
+        title: z.string().describe('The exact title text to check.'),
+        apparel: z
+          .boolean()
+          .optional()
+          .describe('True for apparel categories (125-character limit).'),
+      }),
+      execute: async (input: { title: string; apparel?: boolean }) =>
+        validateListingTitle(input.title, { apparel: input.apparel }),
+    },
     ...spTools,
     ...listingsTools,
     ...imageTools,
@@ -5061,6 +5088,8 @@ AVAILABLE TOOLS:
 - get-financial-events: itemized fees/charges/refunds for a date window or one
   order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
 
+${TITLE_POLICY_PROMPT}
+
 DATA THE SELLER HAS ALREADY IMPORTED (check before fetching, every topic):
 - "I uploaded/imported X" does NOT mean an attachment. Reports are imported on the
   IMPORT PAGE and stored, so the file is not in this conversation and never will be.
@@ -5220,6 +5249,8 @@ NOTE: Your Amazon account is not yet connected. You can still:
 - Explain how to improve titles, bullet points, and descriptions
 - Provide guidance on inventory management and order fulfillment
 - Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
+
+${TITLE_POLICY_PROMPT}
 
 Connecting an Amazon Seller account in Settings adds exactly these, and nothing
 else: catalog and listing lookup, orders and order details, FBA inventory,
