@@ -16,6 +16,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { AmazonAdsApiClient } from './ad-client.js';
 
 type Captured = {
+  method: 'post' | 'put';
   path: string;
   body: Record<string, unknown>;
   headers: Record<string, string>;
@@ -30,17 +31,23 @@ function clientWithCapture(responseData: unknown = {}) {
     accessToken: 'token',
   });
 
-  // Replace the transport, keeping the class's own header and body assembly.
-  (client as unknown as { httpClient: unknown }).httpClient = {
-    post: vi.fn(async (path: string, body: unknown, config: unknown) => {
+  const record =
+    (method: 'post' | 'put') =>
+    async (path: string, body: unknown, config: unknown) => {
       captured.push({
+        method,
         path,
         body: (body ?? {}) as Record<string, unknown>,
         headers: ((config as { headers?: Record<string, string> })?.headers ??
           {}) as Record<string, string>,
       });
       return { data: responseData };
-    }),
+    };
+
+  // Replace the transport, keeping the class's own header and body assembly.
+  (client as unknown as { httpClient: unknown }).httpClient = {
+    post: vi.fn(record('post')),
+    put: vi.fn(record('put')),
     get: vi.fn(async () => ({ data: responseData })),
   };
 
@@ -492,5 +499,155 @@ describe('performance arithmetic', () => {
 
     expect(rows[0].cost).toBe(12.5);
     expect(rows[0].acos).toBeCloseTo(0.25, 6);
+  });
+});
+
+/**
+ * Writes (#86 stage 3).
+ *
+ * The failure worth pinning is the 207: Amazon applies each item of a batch
+ * independently and returns success and error arrays TOGETHER, so a client
+ * that only distinguishes "resolved" from "thrown" reads a half-applied batch
+ * as fully applied. Everything else here guards the request shape — vendored
+ * media types, the collection-key envelope — where a mistake produces a bare
+ * 415/400 at the far end of an HTTP call.
+ */
+describe('writes', () => {
+  it('updates campaigns with PUT and the campaign media type', async () => {
+    const { client, captured } = clientWithCapture({
+      campaigns: { success: [], error: [] },
+    });
+    await client.updateCampaigns([{ campaignId: 'c1', state: 'PAUSED' }]);
+
+    expect(captured[0].method).toBe('put');
+    expect(captured[0].path).toBe('/sp/campaigns');
+    expect(captured[0].headers.Accept).toBe(
+      'application/vnd.spCampaign.v3+json'
+    );
+    expect(captured[0].headers['Content-Type']).toBe(
+      'application/vnd.spCampaign.v3+json'
+    );
+  });
+
+  it('wraps the batch under the collection key', async () => {
+    const { client, captured } = clientWithCapture({
+      keywords: { success: [], error: [] },
+    });
+    await client.updateKeywords([{ keywordId: 'k1', bid: 0.75 }]);
+
+    expect(captured[0].body).toEqual({
+      keywords: [{ keywordId: 'k1', bid: 0.75 }],
+    });
+  });
+
+  it('translates dailyBudget into the DAILY budget envelope', async () => {
+    const { client, captured } = clientWithCapture({
+      campaigns: { success: [], error: [] },
+    });
+    await client.updateCampaigns([{ campaignId: 'c1', dailyBudget: 12.5 }]);
+
+    expect(captured[0].body['campaigns']).toEqual([
+      { campaignId: 'c1', budget: { budget: 12.5, budgetType: 'DAILY' } },
+    ]);
+  });
+
+  it('returns both halves of a 207 rather than only the successes', async () => {
+    const { client } = clientWithCapture({
+      keywords: {
+        success: [{ index: 0, keywordId: 'k1' }],
+        error: [{ index: 1, errors: [{ errorType: 'BID_TOO_LOW' }] }],
+      },
+    });
+    const result = await client.updateKeywords([
+      { keywordId: 'k1', bid: 0.5 },
+      { keywordId: 'k2', bid: 0.01 },
+    ]);
+
+    expect(result.success).toHaveLength(1);
+    expect(result.error).toHaveLength(1);
+  });
+
+  it('answers empty arrays when Amazon omits a half, not undefined', async () => {
+    const { client } = clientWithCapture({
+      keywords: { success: [{ index: 0, keywordId: 'k1' }] },
+    });
+    const result = await client.updateKeywords([{ keywordId: 'k1', bid: 1 }]);
+
+    expect(result.error).toEqual([]);
+  });
+
+  it('refuses an empty batch locally', async () => {
+    const { client, captured } = clientWithCapture({});
+
+    await expect(client.updateKeywords([])).rejects.toThrow(/empty/);
+    expect(captured).toHaveLength(0);
+  });
+
+  it('refuses an update that changes nothing', async () => {
+    // Amazon accepts a bare-id update and reports it as success — an
+    // "applied" that applied nothing. Catch it before the wire.
+    const { client, captured } = clientWithCapture({});
+
+    await expect(
+      client.updateCampaigns([{ campaignId: 'c1' }])
+    ).rejects.toThrow(/changes nothing/);
+    await expect(client.updateKeywords([{ keywordId: 'k1' }])).rejects.toThrow(
+      /changes nothing/
+    );
+    await expect(client.updateAdGroups([{ adGroupId: 'g1' }])).rejects.toThrow(
+      /changes nothing/
+    );
+    expect(captured).toHaveLength(0);
+  });
+
+  it('refuses non-positive money before the wire', async () => {
+    const { client, captured } = clientWithCapture({});
+
+    await expect(
+      client.updateKeywords([{ keywordId: 'k1', bid: 0 }])
+    ).rejects.toThrow(/positive/);
+    await expect(
+      client.updateCampaigns([{ campaignId: 'c1', dailyBudget: -5 }])
+    ).rejects.toThrow(/positive/);
+    expect(captured).toHaveLength(0);
+  });
+
+  it('creates negative keywords ENABLED, with POST', async () => {
+    // A paused negative blocks nothing; creating one paused would report
+    // success while changing no delivery at all.
+    const { client, captured } = clientWithCapture({
+      negativeKeywords: { success: [], error: [] },
+    });
+    await client.createNegativeKeywords([
+      {
+        campaignId: 'c1',
+        adGroupId: 'g1',
+        keywordText: 'free',
+        matchType: 'NEGATIVE_EXACT',
+      },
+    ]);
+
+    expect(captured[0].method).toBe('post');
+    expect(captured[0].path).toBe('/sp/negativeKeywords');
+    expect(captured[0].body['negativeKeywords']).toEqual([
+      {
+        campaignId: 'c1',
+        adGroupId: 'g1',
+        keywordText: 'free',
+        matchType: 'NEGATIVE_EXACT',
+        state: 'ENABLED',
+      },
+    ]);
+  });
+
+  it('caps a batch at 100 so an approval stays reviewable', async () => {
+    const { client, captured } = clientWithCapture({});
+    const batch = Array.from({ length: 101 }, (_, i) => ({
+      keywordId: `k${i}`,
+      state: 'PAUSED' as const,
+    }));
+
+    await expect(client.updateKeywords(batch)).rejects.toThrow(/100/);
+    expect(captured).toHaveLength(0);
   });
 });

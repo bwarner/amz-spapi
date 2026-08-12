@@ -74,4 +74,33 @@ describe('approvalSummary', () => {
   it('degrades to naming the tool for anything ungated by name', () => {
     expect(approvalSummary('unknown-tool', null)).toBe('Run unknown-tool');
   });
+
+  it('counts the items in a bulk ads write so its scope is visible', () => {
+    // The approval line is what the user actually reads before saying yes;
+    // "3 items" versus "100 items" is the difference that matters.
+    const summary = approvalSummary('update-ad-keywords', {
+      profileId: '1',
+      keywords: [
+        { keywordId: 'k1', bid: 0.5 },
+        { keywordId: 'k2', state: 'PAUSED' },
+        { keywordId: 'k3', bid: 1.2 },
+      ],
+    });
+    expect(summary).toContain('LIVE ad account');
+    expect(summary).toContain('(3 items)');
+  });
+
+  it('counts negative keyword creations the same way', () => {
+    const summary = approvalSummary('create-ad-negative-keywords', {
+      negativeKeywords: [
+        {
+          campaignId: 'c',
+          adGroupId: 'g',
+          keywordText: 'free',
+          matchType: 'NEGATIVE_EXACT',
+        },
+      ],
+    });
+    expect(summary).toContain('(1 item)');
+  });
 });

@@ -15,9 +15,12 @@ import {
  * to resolve to, which is why every call carries a `profileId` and why
  * `listProfiles` exists at all.
  *
- * Read-only by design. Nothing here changes a bid, a budget or a state: writes
- * mean the agent can spend money and belong behind the approval flow and the
- * cost ledger, which is a separate piece of work.
+ * Reads AND writes. The write methods (bids, budgets, states, negative
+ * keywords) can spend real money, so their tools carry `needsApproval` in the
+ * agent — the chat pauses for an explicit human yes before any of them runs.
+ * This layer stays thin on purpose: the approval gate lives in the tool
+ * definitions and the reversibility guarantee (ENABLED/PAUSED only, no
+ * archive) lives in the ad-client, so there is no policy here to bypass.
  */
 export function createAdsOps(params: { userId: string }): SellerAdsOps {
   /**
@@ -161,6 +164,31 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
     async fetchPerformanceReport({ profileId, reportId }) {
       const client = await resolve(profileId);
       return client.fetchPerformanceReport(reportId);
+    },
+
+    async updateCampaigns({ profileId, campaigns }) {
+      const client = await resolve(profileId);
+      return client.updateCampaigns(campaigns);
+    },
+
+    async updateAdGroups({ profileId, adGroups }) {
+      const client = await resolve(profileId);
+      return client.updateAdGroups(adGroups);
+    },
+
+    async updateKeywords({ profileId, keywords }) {
+      const client = await resolve(profileId);
+      return client.updateKeywords(keywords);
+    },
+
+    async createNegativeKeywords({ profileId, negativeKeywords }) {
+      const client = await resolve(profileId);
+      return client.createNegativeKeywords(negativeKeywords);
+    },
+
+    async updateNegativeKeywords({ profileId, negativeKeywords }) {
+      const client = await resolve(profileId);
+      return client.updateNegativeKeywords(negativeKeywords);
     },
   };
 }
