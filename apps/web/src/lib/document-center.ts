@@ -2,6 +2,7 @@ import {
   deleteBoxLabelsForAsset,
   deleteImport,
   deleteStoredDocument,
+  detachRenderedPoAsset,
   listBoxLabels,
   listImports,
   listPurchaseOrders,
@@ -14,6 +15,7 @@ import {
 } from '@amz-spapi/sp-cache';
 import {
   PURCHASE_AUTHORITY,
+  purchaseOrderTotals,
   type PurchaseGrouping,
   type PurchaseJoin,
 } from '@farvisionllc/models';
@@ -101,6 +103,20 @@ export type Produced =
       boxes: number;
       units: number;
       destinationFc?: string;
+    }
+  | {
+      /**
+       * The asset IS an order the app issued, rendered to a file. Nothing was
+       * read from it because nothing needed reading — the app wrote it.
+       */
+      kind: 'issued-po-render';
+      poNumber: string;
+      format: string;
+      vendorName?: string;
+      issueDate?: string;
+      currency?: string;
+      total?: number;
+      shipmentIds?: string[];
     };
 
 export type FileEntry = {
@@ -210,10 +226,17 @@ export function issuedOrderFor(
 function displayName(
   asset: MediaAsset,
   document?: StoredDocument,
-  labels?: StoredBoxLabel[]
+  labels?: StoredBoxLabel[],
+  render?: { poNumber: string; format: string }
 ): { fileName: string; nameUnknown?: boolean } {
   if (!asset.originalFileName.startsWith('generated-')) {
     return { fileName: asset.originalFileName };
+  }
+
+  // A render of an issued order carries the order's own name — the same one
+  // the download button offers.
+  if (render) {
+    return { fileName: `${render.poNumber}.${render.format}` };
   }
 
   const recovered =
@@ -225,6 +248,14 @@ function displayName(
   // plainly that the name is not known, and let the date and type identify it.
   const kind = describeType(asset.mimeType);
   return { fileName: `Unnamed ${kind}`, nameUnknown: true };
+}
+
+/** "fernandez-plantation" → "Fernandez Plantation". */
+function titleCaseSlug(slug: string): string {
+  return slug
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 /** A short, human word for a mime type. */
@@ -257,8 +288,18 @@ export function buildFileView(input: FileViewInput): {
   }
 
   const ordersByNumber = new Map<string, string>();
+  // Current render pointers only. A render an order no longer points at (it
+  // was revised and re-rendered) is an orphan and stays unnamed — naming it
+  // after the order would present a stale figure as the current one.
+  const renderByAsset = new Map<
+    string,
+    { po: StoredPurchaseOrder; format: string }
+  >();
   for (const po of input.purchaseOrders ?? []) {
     ordersByNumber.set(normalisePoNumber(po.order.poNumber), po.order.poNumber);
+    for (const render of po.renders) {
+      renderByAsset.set(render.assetId, { po, format: render.format });
+    }
   }
 
   const labelsByAsset = new Map<string, StoredBoxLabel[]>();
@@ -321,11 +362,33 @@ export function buildFileView(input: FileViewInput): {
       produced.push(shipment);
     }
 
+    const render = renderByAsset.get(asset.assetId);
+    if (render) {
+      const { po } = render;
+      produced.push({
+        kind: 'issued-po-render',
+        poNumber: po.order.poNumber,
+        format: render.format,
+        vendorName: titleCaseSlug(po.order.vendorId),
+        issueDate: po.order.issueDate,
+        currency: po.order.currency,
+        total: purchaseOrderTotals(po.order).total,
+        shipmentIds: po.shipmentIds,
+      });
+    }
+
     return {
       id: asset.assetId,
       assetId: asset.assetId,
       importId: record?.importId,
-      ...displayName(asset, document, labels),
+      ...displayName(
+        asset,
+        document,
+        labels,
+        render
+          ? { poNumber: render.po.order.poNumber, format: render.format }
+          : undefined
+      ),
       mimeType: asset.mimeType,
       sizeBytes: asset.sizeBytes,
       uploadedAt: asset.createdAt,
@@ -516,6 +579,9 @@ export type DeleteOutcome = {
   boxLabelsDeleted: number;
   reportRowsDeleted: number;
   reportImportDeleted: boolean;
+  /** Issued orders whose render pointed at the deleted asset. They render
+      afresh on the next download — the order itself is untouched. */
+  poRendersDetached: number;
 };
 
 /**
@@ -547,6 +613,7 @@ export async function deleteFileEntry(params: {
     boxLabelsDeleted: 0,
     reportRowsDeleted: 0,
     reportImportDeleted: false,
+    poRendersDetached: 0,
   };
 
   // Resolved before anything is deleted: once the asset is gone its sha256 is
@@ -573,6 +640,13 @@ export async function deleteFileEntry(params: {
         assetId,
       });
     }
+    // An issued order pointing at this asset must let go of it BEFORE the
+    // bytes go: a pointer to a deleted asset suppresses re-rendering and
+    // breaks the order's download forever, not once.
+    outcome.poRendersDetached = await detachRenderedPoAsset({
+      userId,
+      assetId,
+    });
   }
 
   if (importId && sellerId) {

@@ -123,6 +123,7 @@ export {
   cancelPurchaseOrder,
   getPurchaseOrder,
   recordRenderedPo,
+  detachRenderedPoAsset,
   listPurchaseOrders,
   poStorage,
   PoStoreError,

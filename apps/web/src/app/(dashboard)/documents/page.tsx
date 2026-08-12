@@ -72,6 +72,16 @@ type Produced =
       boxes: number;
       units: number;
       destinationFc?: string;
+    }
+  | {
+      kind: 'issued-po-render';
+      poNumber: string;
+      format: string;
+      vendorName?: string;
+      issueDate?: string;
+      currency?: string;
+      total?: number;
+      shipmentIds?: string[];
     };
 
 type FileEntry = {
@@ -130,7 +140,8 @@ function matchesFilter(file: FileEntry, filter: Filter): boolean {
   if (filter === 'all') return true;
   const kinds = new Set(file.produced.map((item) => item.kind));
   if (filter === 'reports') return kinds.has('report-rows');
-  if (filter === 'purchase') return kinds.has('purchase-document');
+  if (filter === 'purchase')
+    return kinds.has('purchase-document') || kinds.has('issued-po-render');
   if (filter === 'labels') return kinds.has('box-labels');
   // "Other" is the residue — stored, classified as nothing in particular, and
   // the group most likely to be worth deleting.
@@ -171,7 +182,8 @@ function FileIcon({ file }: { file: FileEntry }) {
   if (kinds.has('report-rows'))
     return <FileSpreadsheet className={className} />;
   if (kinds.has('box-labels')) return <Boxes className={className} />;
-  if (kinds.has('purchase-document')) return <Receipt className={className} />;
+  if (kinds.has('purchase-document') || kinds.has('issued-po-render'))
+    return <Receipt className={className} />;
   if (file.mimeType?.startsWith('image/'))
     return <ImageIcon className={className} />;
   return <FileText className={className} />;
@@ -230,7 +242,9 @@ export default function DocumentsPage() {
       // remembers about them.
       const vendor = file.produced
         .map((item) =>
-          item.kind === 'purchase-document' ? item.vendorName : ''
+          item.kind === 'purchase-document' || item.kind === 'issued-po-render'
+            ? item.vendorName
+            : ''
         )
         .join(' ');
       return `${file.fileName} ${vendor}`.toLowerCase().includes(needle);
@@ -748,6 +762,30 @@ function ProducedLine({ item }: { item: Produced }) {
     );
   }
 
+  if (item.kind === 'issued-po-render') {
+    const total = formatMoney(item.total, item.currency);
+    return (
+      <span>
+        <span className="font-medium">Purchase order {item.poNumber}</span>
+        <span className="text-muted-foreground">
+          {' — issued in Sellavant'}
+          {item.vendorName ? ` — ${item.vendorName}` : ''}
+          {item.issueDate ? `, ${item.issueDate}` : ''}
+          {total ? `, ${total}` : ''}
+          {item.shipmentIds?.length
+            ? ` — shipment ${item.shipmentIds.join(', ')}`
+            : ''}
+        </span>
+        {/* Deleting this file loses nothing: the order re-renders on the next
+            download. Worth a word here, because everywhere else on this page
+            deletion is destructive. */}
+        <span className="block text-xs text-muted-foreground">
+          The order's printable file — re-created on demand if deleted.
+        </span>
+      </span>
+    );
+  }
+
   const total = formatMoney(item.total, item.currency);
   return (
     <span>
@@ -842,6 +880,11 @@ function DeleteDialog({
       return `the shipped record for ${item.shipmentId} — ${item.boxes} ${
         item.boxes === 1 ? 'box' : 'boxes'
       }, ${item.units} units`;
+    }
+    if (item.kind === 'issued-po-render') {
+      // The one non-destructive entry in this list: the order keeps its
+      // figures and renders a fresh file on the next download.
+      return `the rendered file of ${item.poNumber} — the order itself stays and re-renders on demand`;
     }
     const total = formatMoney(item.total, item.currency);
     return `the extracted ${ROLE_LABELS[item.role].toLowerCase()}${
