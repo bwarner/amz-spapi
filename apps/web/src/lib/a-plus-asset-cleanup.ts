@@ -116,6 +116,16 @@ async function referencedAssetIds(
 }
 
 /**
+ * The full A+ reference set, for callers OUTSIDE the draft-save/delete flows —
+ * the assets view asks "what does A+ still use" with nothing excluded.
+ */
+export async function aplusAssetReferences(
+  userId: string
+): Promise<Set<string>> {
+  return referencedAssetIds(userId);
+}
+
+/**
  * Delete each candidate asset that (a) is a generated image, (b) belongs to the
  * user, and (c) is referenced by nothing else. Returns the count deleted.
  */
