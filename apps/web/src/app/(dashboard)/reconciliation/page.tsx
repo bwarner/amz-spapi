@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 type Line = {
   sku?: string;
@@ -106,8 +107,16 @@ export default function ReconciliationPage() {
                 <h2 className="font-mono text-sm font-semibold">
                   {shipment.shipmentId}
                 </h2>
-                <span className="text-xs text-muted-foreground">
+                <span className="flex items-baseline gap-3 text-xs text-muted-foreground">
                   {shipment.firstReceiptDate} → {shipment.lastReceiptDate}
+                  {/* The deep view adds the ordered and invoiced sides this
+                      two-way table cannot show. */}
+                  <Link
+                    href={`/shipments/${shipment.shipmentId}/reconcile`}
+                    className="font-medium text-foreground underline-offset-2 hover:underline"
+                  >
+                    Open
+                  </Link>
                 </span>
               </div>
 
