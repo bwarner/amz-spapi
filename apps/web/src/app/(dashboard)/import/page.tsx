@@ -279,16 +279,44 @@ export default function ReportsPage() {
           Drop report files, or click to choose
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Reports (.txt, .tsv, .csv) — ledger, stranded, removals,
+          Reports (.txt, .tsv, .csv, .xlsx) — ledger, stranded, removals,
           reimbursements, inbound performance, settlements, storage fees
           <br />
-          Documents (.pdf, .ai, images) — invoices, receipts, PODs, box designs
+          Documents (.pdf, .docx, .ai, images) — invoices, receipts, POs, PODs,
+          box designs
         </p>
         <input
           ref={inputRef}
           type="file"
           multiple
-          accept=".txt,.tsv,.csv,.pdf,.ai,.png,.jpg,.jpeg,.heic,text/plain,text/tab-separated-values,text/csv,application/pdf,image/*"
+          // Kept in step with what the ROUTE accepts, extension and MIME both:
+          // some macOS/browser pairs enable Office files by their registered
+          // MIME type rather than the extension, and a picker stricter than
+          // the endpoint reads as "this file type is unsupported" when it is
+          // merely unlisted. (Drag-and-drop ignores this list entirely, which
+          // is how the mismatch stayed invisible.)
+          accept={[
+            '.txt',
+            '.tsv',
+            '.csv',
+            '.pdf',
+            '.docx',
+            '.xlsx',
+            '.xls',
+            '.ai',
+            '.png',
+            '.jpg',
+            '.jpeg',
+            '.heic',
+            'text/plain',
+            'text/tab-separated-values',
+            'text/csv',
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+            'image/*',
+          ].join(',')}
           className="hidden"
           onChange={(event) => {
             if (event.target.files?.length) upload(event.target.files);

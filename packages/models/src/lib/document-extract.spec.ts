@@ -1,4 +1,5 @@
 import {
+  validateExtraction,
   allocateFreight,
   freightAllocationBasis,
   groupPurchaseDocuments,
@@ -489,5 +490,57 @@ describe('allocateFreight', () => {
     expect(
       result.shares.reduce((sum, share) => sum + share.amount, 0)
     ).toBeCloseTo(10, 10);
+  });
+});
+
+describe('validateExtraction', () => {
+  it('flags a document whose every amount is zero', () => {
+    // Zero everywhere is arithmetically CONSISTENT — 0 × anything = 0, and
+    // the lines sum to a 0 total — so no other check fires. Seen live on a
+    // PO template whose price cells were left empty: total $0, no flag.
+    // Free goods are not the likely explanation; missing prices are.
+    const issues = validateExtraction({
+      documentType: 'other',
+      vendorName: 'Fernandez Plantation',
+      currency: 'USD',
+      total: 0,
+      lines: [
+        {
+          description: 'Honey Geisha 250g',
+          kind: 'product',
+          quantity: 40,
+          amount: 0,
+        },
+        {
+          description: 'Washed Geisha 250g',
+          kind: 'product',
+          quantity: 40,
+          amount: 0,
+        },
+      ],
+    } as never);
+    // The bare fixture also lacks a date and a document number, so other
+    // review issues fire alongside — assert the one under test, not the list.
+    expect(issues).toContainEqual(
+      expect.objectContaining({ code: 'all-amounts-zero', severity: 'review' })
+    );
+  });
+
+  it('does not flag a genuine zero-amount line among priced ones', () => {
+    // A free sample line inside a real invoice is normal; the flag is for
+    // documents where NOTHING carries a price.
+    const issues = validateExtraction({
+      documentType: 'invoice',
+      vendorName: 'Vendor',
+      currency: 'USD',
+      total: 100,
+      lines: [
+        { description: 'Goods', kind: 'product', quantity: 10, amount: 100 },
+        { description: 'Sample', kind: 'product', quantity: 1, amount: 0 },
+      ],
+    } as never);
+    expect(
+      issues.find((issue) => issue.code === 'all-amounts-zero')
+    ).toBeUndefined();
   });
 });

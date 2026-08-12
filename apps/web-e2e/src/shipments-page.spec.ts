@@ -88,8 +88,10 @@ test.describe('shipments page', () => {
       });
       try {
         await page.goto('/shipments');
-        await expect(page.getByText(A)).toBeVisible({ timeout: 15_000 });
-        await expect(page.getByText(B)).toBeVisible();
+        await expect(page.getByText(A, { exact: true })).toBeVisible({
+          timeout: 15_000,
+        });
+        await expect(page.getByText(B, { exact: true })).toBeVisible();
 
         const order = async () => {
           const text = await page.locator('body').innerText();
@@ -97,20 +99,33 @@ test.describe('shipments page', () => {
         };
         const before = await order();
 
-        // Attach through the dialog on the FIRST of the two cards — the one
-        // whose completeness change used to re-sort it past the other. Both
-        // seeded cards are the only ones with an empty PO slot, and DOM order
-        // is card order, so .first() is the first card.
+        // Attach through the dialog on the FIRST of the two SEEDED cards —
+        // the one whose completeness change used to re-sort it past the
+        // other. Scoped to that card rather than "the first empty PO slot on
+        // the page": this suite runs against the shared dev scope, and the
+        // owner's own shipments can have empty PO slots too — an unscoped
+        // .first() would attach the test PO to their real data.
+        const firstCard = page
+          .locator('div')
+          .filter({ has: page.getByText(before[0], { exact: true }) })
+          .filter({ has: page.getByTitle(/Missing purchase order/) })
+          .last();
         await expect(async () => {
-          await page
-            .getByTitle(/Missing purchase order/)
-            .first()
-            .click();
+          await firstCard.getByTitle(/Missing purchase order/).click();
           await expect(page.getByRole('dialog')).toBeVisible({
             timeout: 2_000,
           });
         }).toPass({ timeout: 20_000 });
-        await page.getByRole('dialog').getByText(po.poNumber).first().click();
+        // Click-until-closed as one retried unit: the dialog re-renders as
+        // candidates load, a click into a replaced row dies silently, and an
+        // open dialog's title ("Attach a purchase order to FBA-…") collides
+        // with any non-exact match on the shipment id.
+        await expect(async () => {
+          await page.getByRole('dialog').getByText(po.poNumber).first().click();
+          await expect(page.getByRole('dialog')).toBeHidden({
+            timeout: 2_000,
+          });
+        }).toPass({ timeout: 20_000 });
 
         // The in-page reload has landed once the acted-on card reads 2 of 6.
         await expect(page.getByText('2 of 6').first()).toBeVisible({
@@ -118,8 +133,8 @@ test.describe('shipments page', () => {
         });
 
         // Both cards still on screen, in the same order.
-        await expect(page.getByText(A)).toBeVisible();
-        await expect(page.getByText(B)).toBeVisible();
+        await expect(page.getByText(A, { exact: true })).toBeVisible();
+        await expect(page.getByText(B, { exact: true })).toBeVisible();
         expect(await order()).toEqual(before);
       } finally {
         await link({
@@ -167,6 +182,22 @@ test.describe('shipments page', () => {
       } finally {
         await link(false);
       }
+    });
+
+    test('refuses to plan a packet while seller data is unreadable', async ({
+      context,
+    }) => {
+      // The packet's whole value is honesty about what evidence exists. Under
+      // a forged session the credential service is unreachable, and a packet
+      // built then would name the ledger and labels as MISSING when they are
+      // merely unreadable — so the route must refuse, and say why, rather
+      // than emit a PDF that misstates the gaps.
+      const response = await context.request.get(
+        '/api/shipments/FBA-E2E-ANY/packet?plan=1'
+      );
+      expect(response.status()).toBe(503);
+      const payload = await response.json();
+      expect(payload.error).toMatch(/could not be read/i);
     });
 
     test('a document attached to a shipment fills its slot, until detached', async ({

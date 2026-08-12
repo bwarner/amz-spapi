@@ -108,6 +108,7 @@ export type ExtractionIssue = {
     | 'paid-vs-total'
     | 'ambiguous-date'
     | 'missing-date'
+    | 'all-amounts-zero'
     | 'no-document-number'
     | 'unallocatable-freight';
   severity: 'blocker' | 'review';
@@ -145,6 +146,27 @@ export function validateExtraction(
   document: ExtractedDocument
 ): ExtractionIssue[] {
   const issues: ExtractionIssue[] = [];
+
+  // Zero everywhere is CONSISTENT — 0 × anything = 0, lines sum to a 0 total
+  // — so the arithmetic checks below all pass, and a document whose prices
+  // were simply left out sails through unflagged. Seen live: a PO template
+  // with empty price cells extracted as total $0, needsReview false. All
+  // amounts zero on a commercial document means the source is missing its
+  // prices, not that the goods were free.
+  if (
+    document.total === 0 &&
+    document.lines.length > 0 &&
+    document.lines.every((line) => !line.amount)
+  ) {
+    issues.push({
+      code: 'all-amounts-zero',
+      severity: 'review',
+      message:
+        'Every amount on this document is zero — the source is probably ' +
+        'missing its prices. Check the original before these figures are ' +
+        'used anywhere.',
+    });
+  }
 
   document.lines.forEach((line, index) => {
     if (line.quantity !== undefined && line.unitPrice !== undefined) {

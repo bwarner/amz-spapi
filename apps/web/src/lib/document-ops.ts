@@ -21,6 +21,7 @@ import {
 import { extractDocument } from './document-extraction';
 import { embedDocument } from './document-embedding';
 import { getAsset, loadAssetBytes } from './media-assets';
+import { extractDocxText, isDocx } from './docx-text';
 import { extractPdfText } from './pdf-text';
 
 /**
@@ -119,6 +120,17 @@ async function readAndExtract(
     noExtractableText = pdf.looksScannedOrArtwork;
   } else if (loaded.mimeType.startsWith('text/')) {
     text = bytes.toString('utf8');
+  } else if (
+    isDocx(
+      loaded.mimeType,
+      asset?.originalFileName?.split('.').pop()?.toLowerCase() ?? ''
+    )
+  ) {
+    // A Word document the seller attached in chat reads the same as its PDF
+    // twin would — same recognisers, same extraction, same filing.
+    const docx = await extractDocxText(bytes);
+    text = docx.text;
+    noExtractableText = docx.notADocx;
   }
 
   const verdict = recognizeDocument({

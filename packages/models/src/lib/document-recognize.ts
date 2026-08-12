@@ -116,6 +116,10 @@ const MATCHERS: Matcher[] = [
       'fba box',
       'ship from',
     ],
+    // A box label never calls itself a purchase order; a PO shipping to FBA
+    // routinely carries ship-from/ship-to blocks and an FBA reference, and
+    // scored 10 as a box label on exactly that.
+    disqualifiers: ['purchase order'],
     maxTextLength: 4000,
   },
   {
@@ -171,12 +175,28 @@ const MATCHERS: Matcher[] = [
       // real invoice merely CITING its PO ("your order: PO-1043") keeps the
       // invoice matcher ahead and, at worst, surfaces this as an alternative.
       { text: 'purchase order', weight: 8 },
+      { text: 'po number', weight: 3 },
       { text: 'payment terms', weight: 2 },
       { text: 'buyer', weight: 2 },
       { text: 'vendor', weight: 2 },
       { text: 'issue date', weight: 1 },
     ],
-    patterns: [{ regex: /\bPO[-\s]?\d{2,}/i, weight: 3, label: 'PO number' }],
+    patterns: [
+      { regex: /\bPO[-\s]?\d{2,}/i, weight: 3, label: 'PO number' },
+      // The HEADING is identity in a way body phrases are not. A real PO
+      // opened with the words "PURCHASE ORDER" and still came back unknown at
+      // 0.27: its body legitimately said "packing list" (an instruction to
+      // the supplier), listed cartons and weights, and carried ship-to blocks
+      // — so three other matchers scored nearly as high and diluted the share
+      // below the threshold. Body vocabulary is circumstantial; the title the
+      // document gives ITSELF is not, and only a position-anchored pattern
+      // can see the difference.
+      {
+        regex: /^[\s"']{0,10}purchase\s*order/i,
+        weight: 10,
+        label: 'headed "purchase order"',
+      },
+    ],
     // A PO never records money already moved; a document that does is the
     // paper trail of a transaction, not an instruction to start one.
     disqualifiers: ['amount paid', 'payment history', 'proof of delivery'],
