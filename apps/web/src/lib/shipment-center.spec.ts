@@ -172,6 +172,80 @@ describe('buildShipmentView', () => {
     expect(po?.present).toBe(false);
   });
 
+  it('marks a value whose source document spans several shipments', () => {
+    // One $1,600 order attached to two shipments used to show $1,600 on BOTH
+    // cards — each true alone, silently doubled read together.
+    const entries = view({
+      purchaseOrders: [
+        nativePo('PO-2026-0003', { shipmentIds: ['FBA-A', 'FBA-B'] }),
+      ],
+    });
+
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(entry.value).toBe(1600);
+      expect(entry.valueSpan).toBe(2);
+      expect(entry.valueApportioned).toBeUndefined();
+    }
+  });
+
+  it("apportions to this shipment's shipped units when labels exist", () => {
+    // The order covers 80 units at $20; this shipment's labels carried 10.
+    // Its honest value is 10 × $20, priced from the same document the
+    // headline value would otherwise quote in full.
+    const entries = view({
+      boxLabels: [label('FBA-A', 1)], // sku TX-TOWEL-NV-4, quantity 10
+      purchaseOrders: [
+        nativePo('PO-1', {
+          shipmentIds: ['FBA-A', 'FBA-B'],
+          order: {
+            ...nativePo('PO-1').order,
+            lines: [
+              {
+                sku: 'TX-TOWEL-NV-4',
+                description: 'towels',
+                quantity: 80,
+                unitPrice: 20,
+              },
+            ],
+          } as StoredPurchaseOrder['order'],
+        }),
+      ],
+    });
+
+    const entry = entries.find((e) => e.shipmentId === 'FBA-A')!;
+    expect(entry.value).toBe(200);
+    expect(entry.valueApportioned).toBe(true);
+    expect(entry.valueSpan).toBe(2);
+    // The sibling with no labels keeps the marked full total.
+    const sibling = entries.find((e) => e.shipmentId === 'FBA-B')!;
+    expect(sibling.value).toBe(1600);
+    expect(sibling.valueApportioned).toBeUndefined();
+  });
+
+  it('falls back to the marked full total when any shipped SKU cannot be priced', () => {
+    // All-or-nothing: pricing only the SKUs that tie would understate the
+    // shipment while looking precise.
+    const entry = view({
+      boxLabels: [
+        label('FBA-A', 1),
+        label('FBA-A', 2, { sku: 'SKU-NOT-ON-THE-ORDER' }),
+      ],
+      purchaseOrders: [nativePo('PO-1', { shipmentIds: ['FBA-A', 'FBA-B'] })],
+    }).find((e) => e.shipmentId === 'FBA-A')!;
+
+    expect(entry.value).toBe(1600);
+    expect(entry.valueApportioned).toBeUndefined();
+    expect(entry.valueSpan).toBe(2);
+  });
+
+  it('leaves a single-shipment value unmarked', () => {
+    const [entry] = view({
+      purchaseOrders: [nativePo('PO-1', { shipmentIds: ['FBA-A'] })],
+    });
+    expect(entry.valueSpan).toBeUndefined();
+  });
+
   it('derives the box and ledger slots, and only those', () => {
     const [entry] = view({
       boxLabels: [label('FBA17K', 1), label('FBA17K', 2)],

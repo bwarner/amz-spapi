@@ -77,6 +77,19 @@ export type ShipmentEntry = {
   value?: number;
   valueCurrency?: string;
   valueSource?: 'invoice' | 'po';
+  /**
+   * How many shipments the value's source document is linked to. Present only
+   * when >1: one $9,880 invoice split across two shipments used to display
+   * $9,880 on BOTH cards — each true alone, silently doubled read together.
+   */
+  valueSpan?: number;
+  /**
+   * True when `value` is THIS shipment's slice — its shipped units priced at
+   * the source document's own per-unit prices — rather than the document
+   * total. Computed only when the source spans several shipments AND the
+   * shipped side exists to apportion by.
+   */
+  valueApportioned?: boolean;
   /** Lines that did not balance, from the ledger reconciliation. */
   discrepancies: number;
 };
@@ -276,7 +289,7 @@ function buildEntry(
   const nativeTotals = nativePo
     ? purchaseOrderTotals(nativePo.order)
     : undefined;
-  const value =
+  let value =
     invoice?.extracted.total ??
     nativeTotals?.total ??
     poDocument?.extracted.total;
@@ -289,6 +302,29 @@ function buildEntry(
     : nativePo || poDocument
     ? 'po'
     : undefined;
+
+  // A source document linked to several shipments repeats its full total on
+  // every card. When the shipped side exists, this shipment's own units
+  // priced at the source's per-unit prices are the honest figure; when it
+  // does not, the full total stays but the span is stated, not left silent.
+  const spanIds =
+    (invoice
+      ? invoice.shipmentIds
+      : nativePo?.shipmentIds ?? poDocument?.shipmentIds) ?? [];
+  const valueSpan = spanIds.length > 1 ? spanIds.length : undefined;
+  let valueApportioned: boolean | undefined;
+  if (valueSpan && labels.length) {
+    const slice = apportionedValue(
+      summariseBoxLabels(labels)[0]?.units ?? [],
+      invoice,
+      nativePo,
+      poDocument
+    );
+    if (slice !== undefined) {
+      value = slice;
+      valueApportioned = true;
+    }
+  }
 
   const vendorName =
     documents.map((document) => document.extracted.vendorName).find(Boolean) ??
@@ -313,8 +349,72 @@ function buildEntry(
     value,
     valueCurrency,
     valueSource: value !== undefined ? valueSource : undefined,
+    valueSpan: value !== undefined ? valueSpan : undefined,
+    valueApportioned,
     discrepancies,
   };
+}
+
+/**
+ * This shipment's units priced from the source document's own lines.
+ *
+ * All-or-nothing: every shipped SKU must tie to a priced line (issued-order
+ * lines by SKU; invoice or PO-document lines by supplierRef or a description
+ * containing the SKU), or no apportionment happens. Pricing only the lines
+ * that tie would understate the shipment while looking precise — the same
+ * misrepresentation the packet refuses, in a smaller font.
+ */
+function apportionedValue(
+  shippedUnits: Array<{ sku: string; quantity: number }>,
+  invoice: StoredDocument | undefined,
+  nativePo: StoredPurchaseOrder | undefined,
+  poDocument: StoredDocument | undefined
+): number | undefined {
+  if (!shippedUnits.length) return undefined;
+
+  const linePrice = (
+    lines:
+      | Array<{
+          supplierRef?: string;
+          description?: string;
+          quantity?: number;
+          amount?: number;
+        }>
+      | undefined,
+    sku: string
+  ): number | undefined => {
+    const line = lines?.find(
+      (entry) =>
+        entry.supplierRef === sku || (entry.description ?? '').includes(sku)
+    );
+    if (
+      line &&
+      typeof line.amount === 'number' &&
+      typeof line.quantity === 'number' &&
+      line.quantity > 0
+    ) {
+      return line.amount / line.quantity;
+    }
+    return undefined;
+  };
+
+  const priceOf = (sku: string): number | undefined => {
+    // The same source the headline value came from prices the slice — mixing
+    // sources inside one figure would make it uncheckable against any single
+    // document.
+    if (invoice) return linePrice(invoice.extracted.lines, sku);
+    const orderLine = nativePo?.order.lines.find((entry) => entry.sku === sku);
+    if (orderLine) return orderLine.unitPrice;
+    return linePrice(poDocument?.extracted.lines, sku);
+  };
+
+  let total = 0;
+  for (const unit of shippedUnits) {
+    const price = priceOf(unit.sku);
+    if (price === undefined) return undefined;
+    total += unit.quantity * price;
+  }
+  return Math.round(total * 100) / 100;
 }
 
 /**

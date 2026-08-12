@@ -52,6 +52,8 @@ type ShipmentEntry = {
   value?: number;
   valueCurrency?: string;
   valueSource?: 'invoice' | 'po';
+  valueSpan?: number;
+  valueApportioned?: boolean;
   discrepancies: number;
 };
 
@@ -565,13 +567,24 @@ function ShipmentCard({
           </span>
         )}
         {value ? (
-          <span className="ml-auto text-sm font-semibold">
+          <span className="ml-auto text-right text-sm font-semibold">
             {value}
             {/* A PO total is what was ORDERED, which routinely differs from
                 what was billed — worth a word, not a footnote. */}
             {entry.valueSource === 'po' ? (
               <span className="ml-1 text-xs font-normal text-muted-foreground">
                 (PO)
+              </span>
+            ) : null}
+            {/* One document split across cards repeats its total on each —
+                true per card, silently doubled read together. Say which. */}
+            {entry.valueApportioned ? (
+              <span className="block text-xs font-normal text-muted-foreground">
+                this shipment's share
+              </span>
+            ) : entry.valueSpan ? (
+              <span className="block text-xs font-normal text-muted-foreground">
+                full total — spans {entry.valueSpan} shipments
               </span>
             ) : null}
           </span>
