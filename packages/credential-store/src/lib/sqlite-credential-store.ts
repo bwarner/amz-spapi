@@ -11,7 +11,7 @@ import {
 } from '@farvisionllc/models';
 
 const CREDENTIALS_DIR = path.join(os.homedir(), '.amazon-seller-assistant');
-const DB_FILE = path.join(CREDENTIALS_DIR, 'credentials.db');
+const KEY_FILE = 'store.key';
 const ALGORITHM = 'aes-256-gcm';
 
 /**
@@ -21,35 +21,136 @@ const ALGORITHM = 'aes-256-gcm';
 export class SqliteCredentialStore implements ICredentialRepository {
   private db: Database.Database;
   private encryptionKey: Buffer;
+  private readonly dir: string;
 
-  constructor(password?: string) {
+  constructor(password?: string, dir?: string) {
+    this.dir = dir ?? CREDENTIALS_DIR;
     this.ensureCredentialsDir();
-    this.encryptionKey = this.deriveKey(password);
-    this.db = new Database(DB_FILE);
+    this.db = new Database(path.join(this.dir, 'credentials.db'));
     this.db.pragma('journal_mode = WAL'); // Better concurrency
     this.initializeSchema();
+    if (password) {
+      this.encryptionKey = crypto.scryptSync(
+        password,
+        'amazon-seller-assistant-salt',
+        32
+      );
+    } else {
+      this.encryptionKey = this.loadOrCreateKeyFile();
+      // Rows written by older versions were encrypted under a key derived
+      // from the HOSTNAME, which macOS rewrites whenever the network changes
+      // — unplugging an Ethernet cable made credentials undecryptable. Any
+      // row still readable under that legacy key is re-encrypted under the
+      // key file now, while the machine identity that can read it is present.
+      this.migrateLegacyRows();
+    }
   }
 
   /**
-   * Derive encryption key from password or machine-specific data
+   * The encryption key lives in a file beside the database, created once from
+   * randomness. Deliberately NOT derived from machine identity: a key that
+   * moves with the hostname dies with it. File permissions (0600, in a 0700
+   * directory) are the protection — the same model as an SSH private key.
    */
-  private deriveKey(password?: string): Buffer {
-    const keySource = password || this.getMachineKey();
+  private loadOrCreateKeyFile(): Buffer {
+    const keyPath = path.join(this.dir, KEY_FILE);
+    try {
+      const key = Buffer.from(fs.readFileSync(keyPath, 'utf8').trim(), 'hex');
+      if (key.length === 32) return key;
+      throw new Error(
+        `${keyPath} is corrupt (expected 64 hex characters). Delete it and ` +
+          're-add credentials, or restore it from a backup.'
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const key = crypto.randomBytes(32);
+    fs.writeFileSync(keyPath, key.toString('hex') + '\n', { mode: 0o600 });
+    return key;
+  }
+
+  /**
+   * The key the pre-key-file versions derived. Kept ONLY so their rows can be
+   * converted one way; nothing is ever written under it again.
+   */
+  private legacyMachineKey(): Buffer {
+    const machineInfo = `${os.hostname()}-${os.userInfo().username}`;
+    const keySource = crypto
+      .createHash('sha256')
+      .update(machineInfo)
+      .digest('hex');
     return crypto.scryptSync(keySource, 'amazon-seller-assistant-salt', 32);
   }
 
-  /**
-   * Get machine-specific key (for CLI convenience)
-   * For production web app, use AWS KMS instead
-   */
-  private getMachineKey(): string {
-    const machineInfo = `${os.hostname()}-${os.userInfo().username}`;
-    return crypto.createHash('sha256').update(machineInfo).digest('hex');
+  /** Re-encrypt any row the legacy machine key can still read. */
+  private migrateLegacyRows(): void {
+    const rows = this.db
+      .prepare(
+        `SELECT profile_name, api_type, encrypted_secrets, secrets_iv,
+                secrets_auth_tag FROM profiles`
+      )
+      .all() as Array<{
+      profile_name: string;
+      api_type: string;
+      encrypted_secrets: string;
+      secrets_iv: string;
+      secrets_auth_tag: string;
+    }>;
+    if (!rows.length) return;
+
+    let legacy: Buffer | undefined;
+    const update = this.db.prepare(
+      `UPDATE profiles SET encrypted_secrets = ?, secrets_iv = ?,
+              secrets_auth_tag = ? WHERE profile_name = ? AND api_type = ?`
+    );
+    for (const row of rows) {
+      if (
+        this.tryDecrypt(
+          this.encryptionKey,
+          row.encrypted_secrets,
+          row.secrets_iv,
+          row.secrets_auth_tag
+        ) !== undefined
+      ) {
+        continue; // Already on the current key.
+      }
+      legacy ??= this.legacyMachineKey();
+      const plain = this.tryDecrypt(
+        legacy,
+        row.encrypted_secrets,
+        row.secrets_iv,
+        row.secrets_auth_tag
+      );
+      if (plain === undefined) continue; // Unreadable here; reported on use.
+      const { encrypted, iv, authTag } = this.encrypt(plain);
+      update.run(encrypted, iv, authTag, row.profile_name, row.api_type);
+    }
+  }
+
+  private tryDecrypt(
+    key: Buffer,
+    encrypted: string,
+    ivHex: string,
+    authTagHex: string
+  ): string | undefined {
+    try {
+      const decipher = crypto.createDecipheriv(
+        ALGORITHM,
+        key,
+        Buffer.from(ivHex, 'hex')
+      );
+      decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+      return decrypted;
+    } catch {
+      return undefined;
+    }
   }
 
   private ensureCredentialsDir(): void {
-    if (!fs.existsSync(CREDENTIALS_DIR)) {
-      fs.mkdirSync(CREDENTIALS_DIR, { mode: 0o700, recursive: true });
+    if (!fs.existsSync(this.dir)) {
+      fs.mkdirSync(this.dir, { mode: 0o700, recursive: true });
     }
   }
 
@@ -124,14 +225,24 @@ export class SqliteCredentialStore implements ICredentialRepository {
     ivHex: string,
     authTagHex: string
   ): string {
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const decipher = crypto.createDecipheriv(ALGORITHM, this.encryptionKey, iv);
-    decipher.setAuthTag(authTag);
-
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+    const plain = this.tryDecrypt(
+      this.encryptionKey,
+      encrypted,
+      ivHex,
+      authTagHex
+    );
+    if (plain === undefined) {
+      // The raw crypto error ("Unsupported state or unable to authenticate
+      // data") reads as corruption. Say what actually happened and what to do.
+      throw new Error(
+        'Stored credentials could not be decrypted with the current key. ' +
+          'They were saved by an older version under a hostname-derived key ' +
+          'on a machine identity that is no longer present. Re-add them with ' +
+          '`credentials add` — new credentials use a stable key file and do ' +
+          'not have this problem.'
+      );
+    }
+    return plain;
   }
 
   async setProfile(profile: AmazonCredentialProfile): Promise<void> {
