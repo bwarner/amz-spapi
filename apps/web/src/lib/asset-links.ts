@@ -83,6 +83,17 @@ export async function listAssetsForOwner(params: {
   return result.rows;
 }
 
+/** Every link a user has, for the assets view's reference map. */
+export async function listLinksForUser(userId: string): Promise<AssetLink[]> {
+  const result = await executeQuery<AssetLink>(
+    SCOPE,
+    `SELECT RAW l FROM \`${collectionName(SCOPE, COLLECTION)}\` l
+     WHERE l.userId = $userId`,
+    { parameters: { userId } }
+  );
+  return result.rows;
+}
+
 /** All owners of one asset — used by GC to know if an asset is still referenced. */
 export async function listOwnersOfAsset(params: {
   userId: string;

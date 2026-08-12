@@ -521,3 +521,29 @@ export async function deleteChat(params: {
     metaDocKey(params.userId, params.chatId)
   );
 }
+
+/**
+ * Every `asset_*` id any of the user's chat messages mention.
+ *
+ * Chat is a referencer the A+ cleanup's INVARIANT explicitly warned about:
+ * generated images live in message parts (proposals, tool results), and a
+ * collection sweep that cannot see them would delete an image a conversation
+ * still displays. Only messages that mention an asset id at all leave the
+ * database — the filter runs server-side.
+ */
+export async function chatAssetIds(userId: string): Promise<Set<string>> {
+  const result = await executeQuery<string>(
+    SCOPE,
+    `SELECT RAW ENCODE_JSON(m.message)
+     FROM \`${collectionName(SCOPE, MESSAGES_COLLECTION)}\` m
+     WHERE m.userId = $userId AND CONTAINS(ENCODE_JSON(m.message), 'asset_')`,
+    { parameters: { userId } }
+  );
+  const ids = new Set<string>();
+  const pattern =
+    /asset_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+  for (const json of result.rows) {
+    for (const match of json.matchAll(pattern)) ids.add(match[0]);
+  }
+  return ids;
+}
