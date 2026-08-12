@@ -57,6 +57,35 @@ export type AdsAttributionWindow = '1d' | '7d' | '14d' | '30d';
 
 export type AdsPerformanceLevel = 'campaign' | 'keyword' | 'searchTerm';
 
+/**
+ * The states a write may set.
+ *
+ * Deliberately narrower than the ARCHIVED the list endpoints can return:
+ * Amazon's v3 update schema accepts only ENABLED and PAUSED (archiving is a
+ * separate delete endpoint, and archiving is permanent). Keeping ARCHIVED out
+ * of the write type means every mutation this client can perform is
+ * reversible — pause it back, re-enable it, change the number again.
+ */
+export type AdsEntityState = 'ENABLED' | 'PAUSED';
+
+export type AdsNegativeMatchType =
+  | 'NEGATIVE_EXACT'
+  | 'NEGATIVE_PHRASE'
+  | 'NEGATIVE_BROAD';
+
+/**
+ * The two halves of a v3 bulk mutation, which arrive TOGETHER in a 207.
+ *
+ * Amazon applies each item independently: item 3 failing does not stop item 4
+ * from being written. A caller that checks only for a thrown error will read
+ * a half-applied batch as fully applied, so both arrays are always present
+ * even when empty.
+ */
+export type AdsMutationResult = {
+  success: Array<Record<string, unknown>>;
+  error: Array<Record<string, unknown>>;
+};
+
 export type AdsPerformanceRow = {
   impressions: number;
   clicks: number;
@@ -890,5 +919,253 @@ export class AmazonAdsApiClient {
       usage: response.data?.success ?? [],
       errors: response.data?.error ?? [],
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sponsored Products, writes (#86 stage 3)
+  //
+  // The mutation endpoints are the list endpoints minus `/list`: PUT to update,
+  // POST to create, same vendored media type in both headers. All of them are
+  // bulk — the body is an array under the collection key — and all of them
+  // answer 207 with per-item success/error arrays rather than succeeding or
+  // failing as a whole.
+  //
+  // What is NOT here is as deliberate as what is. No creates for campaigns,
+  // ad groups, keywords or product ads: creating spend structure from scratch
+  // is a different risk class from adjusting what exists. No archive: Amazon
+  // archives through separate delete endpoints and an archived entity can
+  // never be re-enabled, so exposing it would give one bad call a permanent
+  // consequence. Everything below can be undone by a second call.
+  // ---------------------------------------------------------------------------
+
+  private static readonly WRITE_ENDPOINTS = {
+    campaigns: { path: '/sp/campaigns', media: 'spCampaign.v3' },
+    adGroups: { path: '/sp/adGroups', media: 'spAdGroup.v3' },
+    keywords: { path: '/sp/keywords', media: 'spKeyword.v3' },
+    negativeKeywords: {
+      path: '/sp/negativeKeywords',
+      media: 'spNegativeKeyword.v3',
+    },
+  } as const;
+
+  /**
+   * Amazon takes up to 1000 items per request; this stops far short of that
+   * on purpose. Every batch here has been individually approved by a human in
+   * chat, and 100 line items is already past what anyone actually reviews —
+   * a bigger bound would just make the approval a formality.
+   */
+  private static readonly MAX_MUTATION_BATCH = 100;
+
+  private async mutateResource(
+    endpoint: { path: string; media: string },
+    collectionKey: string,
+    method: 'put' | 'post',
+    items: Array<Record<string, unknown>>
+  ): Promise<AdsMutationResult> {
+    if (items.length === 0) {
+      throw new Error('Nothing to write: the batch is empty.');
+    }
+    if (items.length > AmazonAdsApiClient.MAX_MUTATION_BATCH) {
+      throw new Error(
+        `Batch of ${items.length} exceeds the ${AmazonAdsApiClient.MAX_MUTATION_BATCH}-item ` +
+          'limit — split it so each approval stays reviewable.'
+      );
+    }
+
+    const response = await this.httpClient[method](
+      endpoint.path,
+      { [collectionKey]: items },
+      {
+        headers: {
+          Accept: `application/vnd.${endpoint.media}+json`,
+          'Content-Type': `application/vnd.${endpoint.media}+json`,
+        },
+      }
+    );
+
+    const outcome = response.data?.[collectionKey] ?? {};
+    return {
+      success: outcome.success ?? [],
+      error: outcome.error ?? [],
+    };
+  }
+
+  /** A positive amount or absent — 0 and negatives fail here, not at Amazon. */
+  private static assertPositive(
+    value: number | undefined,
+    what: string,
+    id: string
+  ): void {
+    if (value !== undefined && !(value > 0)) {
+      throw new Error(`${what} for ${id} must be a positive number.`);
+    }
+  }
+
+  /**
+   * Update campaign state and/or daily budget.
+   *
+   * `dailyBudget` is in the profile's own currency — a CA profile budgets in
+   * CAD — and is translated here to Amazon's `{ budget, budgetType: 'DAILY' }`
+   * envelope, DAILY being the only type v3 accepts. Fields not supplied are
+   * left untouched (sparse update), so an update that names neither state nor
+   * budget would be a no-op Amazon happily accepts; it is refused locally
+   * instead.
+   */
+  public async updateCampaigns(
+    updates: Array<{
+      campaignId: string;
+      state?: AdsEntityState;
+      dailyBudget?: number;
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = updates.map((u) => {
+      if (u.state === undefined && u.dailyBudget === undefined) {
+        throw new Error(
+          `Update for campaign ${u.campaignId} changes nothing — supply state or dailyBudget.`
+        );
+      }
+      AmazonAdsApiClient.assertPositive(
+        u.dailyBudget,
+        'dailyBudget',
+        u.campaignId
+      );
+      return {
+        campaignId: u.campaignId,
+        ...(u.state ? { state: u.state } : {}),
+        ...(u.dailyBudget !== undefined
+          ? { budget: { budget: u.dailyBudget, budgetType: 'DAILY' } }
+          : {}),
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.campaigns,
+      'campaigns',
+      'put',
+      items
+    );
+  }
+
+  /** Update ad group state and/or default bid (used when a keyword has none). */
+  public async updateAdGroups(
+    updates: Array<{
+      adGroupId: string;
+      state?: AdsEntityState;
+      defaultBid?: number;
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = updates.map((u) => {
+      if (u.state === undefined && u.defaultBid === undefined) {
+        throw new Error(
+          `Update for ad group ${u.adGroupId} changes nothing — supply state or defaultBid.`
+        );
+      }
+      AmazonAdsApiClient.assertPositive(
+        u.defaultBid,
+        'defaultBid',
+        u.adGroupId
+      );
+      return {
+        adGroupId: u.adGroupId,
+        ...(u.state ? { state: u.state } : {}),
+        ...(u.defaultBid !== undefined ? { defaultBid: u.defaultBid } : {}),
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.adGroups,
+      'adGroups',
+      'put',
+      items
+    );
+  }
+
+  /**
+   * Update keyword bids and/or state — the bid-adjustment write.
+   *
+   * Bids are validated as positive only; Amazon's real floor varies by
+   * marketplace (USD 0.02, JPY 2, …) and is enforced in its 207 per-item
+   * errors, where the message names the actual limit. Duplicating that table
+   * here would mean silently drifting out of date with it.
+   */
+  public async updateKeywords(
+    updates: Array<{
+      keywordId: string;
+      state?: AdsEntityState;
+      bid?: number;
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = updates.map((u) => {
+      if (u.state === undefined && u.bid === undefined) {
+        throw new Error(
+          `Update for keyword ${u.keywordId} changes nothing — supply state or bid.`
+        );
+      }
+      AmazonAdsApiClient.assertPositive(u.bid, 'bid', u.keywordId);
+      return {
+        keywordId: u.keywordId,
+        ...(u.state ? { state: u.state } : {}),
+        ...(u.bid !== undefined ? { bid: u.bid } : {}),
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.keywords,
+      'keywords',
+      'put',
+      items
+    );
+  }
+
+  /**
+   * Add negative keywords at AD GROUP level — the "stop paying for this search
+   * term" write, and the usual action after a search-term report.
+   *
+   * Created ENABLED always: a paused negative blocks nothing, and a caller
+   * who wants one off later pauses it with `updateNegativeKeywords`. Campaign
+   * -level negatives are a separate endpoint not exposed here, matching the
+   * read side, which also only sees the ad-group level.
+   */
+  public async createNegativeKeywords(
+    creates: Array<{
+      campaignId: string;
+      adGroupId: string;
+      keywordText: string;
+      matchType: AdsNegativeMatchType;
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = creates.map((c) => {
+      if (!c.keywordText.trim()) {
+        throw new Error(
+          `Negative keyword for ad group ${c.adGroupId} has empty keyword text.`
+        );
+      }
+      return {
+        campaignId: c.campaignId,
+        adGroupId: c.adGroupId,
+        keywordText: c.keywordText,
+        matchType: c.matchType,
+        state: 'ENABLED',
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.negativeKeywords,
+      'negativeKeywords',
+      'post',
+      items
+    );
+  }
+
+  /**
+   * Pause or re-enable existing negative keywords — the undo for
+   * `createNegativeKeywords`. State is the only field Amazon allows an update
+   * to touch, so it is required rather than optional here.
+   */
+  public async updateNegativeKeywords(
+    updates: Array<{ keywordId: string; state: AdsEntityState }>
+  ): Promise<AdsMutationResult> {
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.negativeKeywords,
+      'negativeKeywords',
+      'put',
+      updates.map((u) => ({ keywordId: u.keywordId, state: u.state }))
+    );
   }
 }

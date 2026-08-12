@@ -94,6 +94,23 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Loading purchase order...',
     'Purchase order retrieved',
   ],
+  'update-ad-campaigns': [
+    'Updating ad campaigns...',
+    'Ad campaign update submitted',
+  ],
+  'update-ad-groups': ['Updating ad groups...', 'Ad group update submitted'],
+  'update-ad-keywords': [
+    'Updating keyword bids...',
+    'Keyword update submitted',
+  ],
+  'create-ad-negative-keywords': [
+    'Adding negative keywords...',
+    'Negative keywords submitted',
+  ],
+  'update-ad-negative-keywords': [
+    'Updating negative keywords...',
+    'Negative keyword update submitted',
+  ],
   'total-report-rows': ['Totalling report rows...', 'Report totals ready'],
   'check-report-coverage': [
     'Checking report coverage...',
@@ -154,17 +171,44 @@ const APPROVAL_TOOL_SUMMARIES: Record<string, string> = {
     'Revise this purchase order in place (revision increments; old downloads are invalidated)',
   'cancel-purchase-order':
     'Cancel this purchase order (it stays on the record but can no longer be revised or rendered)',
+  'update-ad-campaigns':
+    'Change campaign states/daily budgets on the LIVE ad account',
+  'update-ad-groups':
+    'Change ad group states/default bids on the LIVE ad account',
+  'update-ad-keywords': 'Change keyword bids/states on the LIVE ad account',
+  'create-ad-negative-keywords':
+    'Add negative keywords to the LIVE ad account (blocks matching search terms)',
+  'update-ad-negative-keywords':
+    'Pause or re-enable negative keywords on the LIVE ad account',
 };
+
+/** The batch a bulk ads write is asking to apply, for the approval line. */
+function adsBatchCount(input: unknown): number | undefined {
+  const batch = input as {
+    campaigns?: unknown[];
+    adGroups?: unknown[];
+    keywords?: unknown[];
+    negativeKeywords?: unknown[];
+  } | null;
+  const items =
+    batch?.campaigns ??
+    batch?.adGroups ??
+    batch?.keywords ??
+    batch?.negativeKeywords;
+  return Array.isArray(items) ? items.length : undefined;
+}
 
 export function approvalSummary(toolName: string, input: unknown): string {
   const base = APPROVAL_TOOL_SUMMARIES[toolName] ?? `Run ${toolName}`;
   const sku = (input as { sku?: string } | null)?.sku;
-  const count = (input as { imageAssetIds?: string[] } | null)?.imageAssetIds
-    ?.length;
+  const imageCount = (input as { imageAssetIds?: string[] } | null)
+    ?.imageAssetIds?.length;
+  const itemCount = adsBatchCount(input);
   return [
     base,
     sku ? `— SKU ${sku}` : '',
-    count ? `(${count} image${count === 1 ? '' : 's'})` : '',
+    imageCount ? `(${imageCount} image${imageCount === 1 ? '' : 's'})` : '',
+    itemCount ? `(${itemCount} item${itemCount === 1 ? '' : 's'})` : '',
   ]
     .filter(Boolean)
     .join(' ');

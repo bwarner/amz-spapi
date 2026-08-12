@@ -24,13 +24,16 @@ vi.mock('./amazon-connections', () => ({
  * this file — a dynamic `import()` makes Nx classify the library as lazy-loaded
  * and then forbids the static imports everywhere else.
  */
-const { listCampaigns, FakeAdsClient } = vi.hoisted(() => {
+const { listCampaigns, updateKeywords, FakeAdsClient } = vi.hoisted(() => {
   const listCampaigns = vi.fn();
+  const updateKeywords = vi.fn();
   class FakeAdsClient {
     constructor(public config: Record<string, unknown>) {}
     listCampaigns = (...args: unknown[]) => listCampaigns(this.config, ...args);
+    updateKeywords = (...args: unknown[]) =>
+      updateKeywords(this.config, ...args);
   }
-  return { listCampaigns, FakeAdsClient };
+  return { listCampaigns, updateKeywords, FakeAdsClient };
 });
 
 vi.mock('@farvisionllc/ad-client', () => ({
@@ -88,6 +91,7 @@ const FOUR_PROFILES = [
 beforeEach(() => {
   listAmazonConnections.mockReset();
   listCampaigns.mockClear().mockResolvedValue({ items: [] });
+  updateKeywords.mockClear().mockResolvedValue({ success: [], error: [] });
 });
 
 describe('with several advertiser profiles', () => {
@@ -134,6 +138,50 @@ describe('with several advertiser profiles', () => {
 
     expect(profiles).toHaveLength(4);
     expect(profiles.map((p) => p.profileId)).toContain('104769602540763');
+  });
+});
+
+describe('writes', () => {
+  // Writes go through the SAME profile resolution as reads. The stakes are
+  // higher though: a guessed profile on a read misreports a marketplace, a
+  // guessed profile on a write changes bids in one.
+  beforeEach(() => listAmazonConnections.mockResolvedValue(FOUR_PROFILES));
+
+  it('refuses to guess which profile to write to', async () => {
+    const ops = createAdsOps({ userId: 'auth0|1' });
+
+    await expect(
+      ops.updateKeywords({
+        keywords: [{ keywordId: 'k1', bid: 0.5 }],
+      })
+    ).rejects.toThrow(/4 advertiser profiles/);
+    expect(updateKeywords).not.toHaveBeenCalled();
+  });
+
+  it('writes through the requested profile and hands back both 207 halves', async () => {
+    updateKeywords.mockResolvedValue({
+      success: [{ index: 0, keywordId: 'k1' }],
+      error: [{ index: 1 }],
+    });
+    const ops = createAdsOps({ userId: 'auth0|1' });
+
+    const result = await ops.updateKeywords({
+      profileId: '425541911196119',
+      keywords: [
+        { keywordId: 'k1', bid: 0.5 },
+        { keywordId: 'k2', bid: 0.01 },
+      ],
+    });
+
+    expect(updateKeywords.mock.calls[0][0]).toMatchObject({
+      profileId: '425541911196119',
+    });
+    expect(updateKeywords.mock.calls[0][1]).toEqual([
+      { keywordId: 'k1', bid: 0.5 },
+      { keywordId: 'k2', bid: 0.01 },
+    ]);
+    expect(result.success).toHaveLength(1);
+    expect(result.error).toHaveLength(1);
   });
 });
 

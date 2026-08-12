@@ -303,10 +303,12 @@ export type ReportAggregateResult = {
  * is no "their Ads account" to default to, and defaulting to the first would
  * report one marketplace as though it were all of them.
  *
- * Structure only. Spend, sales and ACOS come from the Ads Reporting API, which
- * is a separate service and not wired up — so nothing here can answer "which
- * campaigns are wasting money", and the tools say so rather than implying an
- * answer from a campaign list.
+ * Three capabilities, in the order they arrived: structure reads (campaigns,
+ * ad groups, keywords, negatives, product ads), performance via the async
+ * Reporting API (request, then fetch), and writes (bids, budgets, states,
+ * negative keywords). Writes are bulk and PARTIAL — Amazon applies each item
+ * independently and answers 207 — and every write tool sits behind chat-side
+ * human approval.
  */
 /**
  * One page-walked Ads list.
@@ -325,6 +327,19 @@ export type AdsListResult = {
   /** Set when the page bound was hit: the list is incomplete, and says so. */
   truncated?: boolean;
 };
+
+/**
+ * The outcome of a bulk Ads write. Amazon applies items INDEPENDENTLY and
+ * returns both arrays together (a 207): three keywords updated and one
+ * rejected is a normal result, not an exception, and the caller must say so.
+ */
+export type AdsMutationResult = {
+  success: Array<Record<string, unknown>>;
+  error: Array<Record<string, unknown>>;
+};
+
+/** Writes may only set these — archiving is deliberately not exposed. */
+export type AdsWriteState = 'ENABLED' | 'PAUSED';
 
 export interface SellerAdsOps {
   listProfiles(): Promise<
@@ -397,6 +412,48 @@ export interface SellerAdsOps {
         attribution: string;
       }
   >;
+  /**
+   * Writes. All bulk, all partial (207), all behind chat-side approval.
+   * States are ENABLED/PAUSED only — nothing here can archive, so every one
+   * of these calls can be undone by another.
+   */
+  updateCampaigns(params: {
+    profileId?: string;
+    campaigns: Array<{
+      campaignId: string;
+      state?: AdsWriteState;
+      dailyBudget?: number;
+    }>;
+  }): Promise<AdsMutationResult>;
+  updateAdGroups(params: {
+    profileId?: string;
+    adGroups: Array<{
+      adGroupId: string;
+      state?: AdsWriteState;
+      defaultBid?: number;
+    }>;
+  }): Promise<AdsMutationResult>;
+  updateKeywords(params: {
+    profileId?: string;
+    keywords: Array<{
+      keywordId: string;
+      state?: AdsWriteState;
+      bid?: number;
+    }>;
+  }): Promise<AdsMutationResult>;
+  createNegativeKeywords(params: {
+    profileId?: string;
+    negativeKeywords: Array<{
+      campaignId: string;
+      adGroupId: string;
+      keywordText: string;
+      matchType: 'NEGATIVE_EXACT' | 'NEGATIVE_PHRASE' | 'NEGATIVE_BROAD';
+    }>;
+  }): Promise<AdsMutationResult>;
+  updateNegativeKeywords(params: {
+    profileId?: string;
+    negativeKeywords: Array<{ keywordId: string; state: AdsWriteState }>;
+  }): Promise<AdsMutationResult>;
 }
 
 /** What reading a document tells the agent, before anything is filed. */
@@ -2884,6 +2941,268 @@ function getAdsTools(adsOps: SellerAdsOps) {
       execute: async (input: { profileId?: string; campaignIds: string[] }) =>
         run(() => adsOps.getCampaignBudgetUsage(input)),
     },
+
+    ...getAdsWriteTools(adsOps, profileId),
+  };
+}
+
+/**
+ * The write half of the ads tools: bids, budgets, states, negative keywords.
+ *
+ * Three properties shared by all of them, chosen deliberately:
+ *
+ * 1. `needsApproval` on every one — these spend (or stop spending) real money,
+ *    so the chat pauses for an explicit human yes before `execute` runs.
+ * 2. Every input schema refuses an update that changes nothing, because Amazon
+ *    accepts a no-op and reports it as success — an "applied" that applied
+ *    nothing.
+ * 3. Results are per-item. Amazon answers 207 with success and error arrays
+ *    side by side, so a batch can half-apply; the wrapper counts both and
+ *    forces the model to report failures instead of rounding up to "done".
+ */
+function getAdsWriteTools(
+  adsOps: SellerAdsOps,
+  profileId: z.ZodOptional<z.ZodString>
+) {
+  const writeState = z
+    .enum(['ENABLED', 'PAUSED'])
+    .describe(
+      'PAUSED stops spend, ENABLED resumes it. Archiving is deliberately not ' +
+        'available through these tools — it is permanent, and belongs in the ' +
+        'Ads console.'
+    );
+
+  /**
+   * Wrap a mutation: count both halves of the 207 and refuse to let a partial
+   * failure read as a success. `attempted` is computed by the CALLER because
+   * only it knows the batch size it sent.
+   */
+  async function runWrite(
+    attempted: number,
+    work: () => Promise<AdsMutationResult>
+  ) {
+    try {
+      const result = await work();
+      return {
+        success: true as const,
+        applied: result.success.length,
+        failed: result.error.length,
+        results: result,
+        ...(result.error.length > 0
+          ? {
+              note:
+                `PARTIAL: ${result.error.length} of ${attempted} items were ` +
+                'REJECTED — the rest are already applied (there is no ' +
+                'rollback). Report each rejected item and its reason to the ' +
+                'user; never describe this change as fully applied.',
+            }
+          : {}),
+      };
+    } catch (error) {
+      return {
+        success: false as const,
+        error: describeHttpError(error, 'Ads write failed.'),
+      };
+    }
+  }
+
+  return {
+    'update-ad-campaigns': {
+      description:
+        'WRITE: pause/enable campaigns or change their daily budgets on the ' +
+        'LIVE ad account. Requires explicit user approval — before proposing ' +
+        'it, read the current values and show a before → after per campaign ' +
+        'with the evidence (report figures, budget usage) behind each change. ' +
+        'Budgets are in the profile’s own currency. Reversible: a second ' +
+        'call restores the old state or budget.',
+      inputSchema: z.object({
+        profileId,
+        campaigns: z
+          .array(
+            z
+              .object({
+                campaignId: z.string().min(1),
+                state: writeState.optional(),
+                dailyBudget: z
+                  .number()
+                  .positive()
+                  .optional()
+                  .describe(
+                    'New daily budget in the profile’s currency (a CA ' +
+                      'profile budgets in CAD)'
+                  ),
+              })
+              .refine(
+                (u) => u.state !== undefined || u.dailyBudget !== undefined,
+                {
+                  message:
+                    'Each campaign update must set state or dailyBudget — an ' +
+                    'empty update is a no-op Amazon reports as success.',
+                }
+              )
+          )
+          .min(1)
+          .max(100),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        profileId?: string;
+        campaigns: Array<{
+          campaignId: string;
+          state?: 'ENABLED' | 'PAUSED';
+          dailyBudget?: number;
+        }>;
+      }) =>
+        runWrite(input.campaigns.length, () => adsOps.updateCampaigns(input)),
+    },
+
+    'update-ad-groups': {
+      description:
+        'WRITE: pause/enable ad groups or change their default bids (the bid ' +
+        'used when a keyword has none of its own) on the LIVE ad account. ' +
+        'Requires explicit user approval; show current values and the ' +
+        'reasoning first. Reversible.',
+      inputSchema: z.object({
+        profileId,
+        adGroups: z
+          .array(
+            z
+              .object({
+                adGroupId: z.string().min(1),
+                state: writeState.optional(),
+                defaultBid: z.number().positive().optional(),
+              })
+              .refine(
+                (u) => u.state !== undefined || u.defaultBid !== undefined,
+                {
+                  message: 'Each ad group update must set state or defaultBid.',
+                }
+              )
+          )
+          .min(1)
+          .max(100),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        profileId?: string;
+        adGroups: Array<{
+          adGroupId: string;
+          state?: 'ENABLED' | 'PAUSED';
+          defaultBid?: number;
+        }>;
+      }) => runWrite(input.adGroups.length, () => adsOps.updateAdGroups(input)),
+    },
+
+    'update-ad-keywords': {
+      description:
+        'WRITE: change keyword bids or pause/enable keywords on the LIVE ad ' +
+        'account — the bid-adjustment tool. Requires explicit user approval. ' +
+        'Before proposing: base bid changes on a keyword-level report ' +
+        '(request-ad-report), not on structure or intuition, and show each ' +
+        'keyword’s current bid → proposed bid with its ACOS and spend. ' +
+        'Bids are in the profile’s currency; Amazon enforces its own ' +
+        'per-marketplace minimums and rejects violations per item. Reversible.',
+      inputSchema: z.object({
+        profileId,
+        keywords: z
+          .array(
+            z
+              .object({
+                keywordId: z.string().min(1),
+                state: writeState.optional(),
+                bid: z.number().positive().optional(),
+              })
+              .refine((u) => u.state !== undefined || u.bid !== undefined, {
+                message: 'Each keyword update must set state or bid.',
+              })
+          )
+          .min(1)
+          .max(100),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        profileId?: string;
+        keywords: Array<{
+          keywordId: string;
+          state?: 'ENABLED' | 'PAUSED';
+          bid?: number;
+        }>;
+      }) => runWrite(input.keywords.length, () => adsOps.updateKeywords(input)),
+    },
+
+    'create-ad-negative-keywords': {
+      description:
+        'WRITE: add negative keywords at AD GROUP level on the LIVE ad ' +
+        'account, so matching search terms stop receiving spend. Requires ' +
+        'explicit user approval. The usual source is a searchTerm report: ' +
+        'terms with spend and no sales. Show the term, its spend, and the ' +
+        'match type per row before proposing. NEGATIVE_EXACT blocks only the ' +
+        'exact term; NEGATIVE_PHRASE blocks anything containing it — prefer ' +
+        'EXACT unless the user asks otherwise, since PHRASE can silently ' +
+        'block good traffic. Undo: update-ad-negative-keywords with PAUSED.',
+      inputSchema: z.object({
+        profileId,
+        negativeKeywords: z
+          .array(
+            z.object({
+              campaignId: z.string().min(1),
+              adGroupId: z.string().min(1),
+              keywordText: z.string().min(1),
+              matchType: z.enum([
+                'NEGATIVE_EXACT',
+                'NEGATIVE_PHRASE',
+                'NEGATIVE_BROAD',
+              ]),
+            })
+          )
+          .min(1)
+          .max(100),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        profileId?: string;
+        negativeKeywords: Array<{
+          campaignId: string;
+          adGroupId: string;
+          keywordText: string;
+          matchType: 'NEGATIVE_EXACT' | 'NEGATIVE_PHRASE' | 'NEGATIVE_BROAD';
+        }>;
+      }) =>
+        runWrite(input.negativeKeywords.length, () =>
+          adsOps.createNegativeKeywords(input)
+        ),
+    },
+
+    'update-ad-negative-keywords': {
+      description:
+        'WRITE: pause or re-enable existing negative keywords (ad group ' +
+        'level) — the undo for create-ad-negative-keywords. A PAUSED negative ' +
+        'blocks nothing. Requires explicit user approval. Get keywordIds from ' +
+        'get-ad-negative-keywords.',
+      inputSchema: z.object({
+        profileId,
+        negativeKeywords: z
+          .array(
+            z.object({
+              keywordId: z.string().min(1),
+              state: writeState,
+            })
+          )
+          .min(1)
+          .max(100),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        profileId?: string;
+        negativeKeywords: Array<{
+          keywordId: string;
+          state: 'ENABLED' | 'PAUSED';
+        }>;
+      }) =>
+        runWrite(input.negativeKeywords.length, () =>
+          adsOps.updateNegativeKeywords(input)
+        ),
+    },
   };
 }
 
@@ -4585,7 +4904,27 @@ PPC PERFORMANCE ANSWERS:
   user turn, fetch the report BEFORE answering performance questions — never
   answer from structure, memory, or budget usage.
 - get-ad-budget-usage is today's budget burn, not spend history — never
-  present it as performance or extrapolate ACOS from it.`
+  present it as performance or extrapolate ACOS from it.
+
+PPC WRITES (update-ad-campaigns / update-ad-groups / update-ad-keywords /
+create-ad-negative-keywords / update-ad-negative-keywords):
+- These change the LIVE ad account and each one pauses for the user's explicit
+  approval. Never present a change as done before the tool result returns, and
+  never re-submit a batch the user declined.
+- Evidence before proposal: base bid and budget changes on a performance
+  report (and negatives on a searchTerm report), read the CURRENT values
+  first, and show a per-item before → after with the figures that justify each
+  row. A recommendation without its evidence is not ready to apply.
+- Results are PER ITEM: a batch can half-apply, and applied items stay applied
+  (there is no rollback). When the result reports failures, list each rejected
+  item and its reason — never summarize a partial result as success.
+- States are ENABLED/PAUSED only. Nothing here archives or deletes: archiving
+  is permanent, so it stays in the Ads console — say so if asked.
+- Bids and budgets are in the profile's own currency. Amazon enforces
+  per-marketplace bid minimums itself and rejects violations per item.
+- Undo: every write is reversible by a second call — pausing back, re-enabling,
+  restoring the previous bid or budget (quote the old values in your proposal
+  so they are on record), and PAUSED negatives block nothing.`
     : '';
 
   const hasListingsTools = Boolean(spCache?.hasSellerId());
