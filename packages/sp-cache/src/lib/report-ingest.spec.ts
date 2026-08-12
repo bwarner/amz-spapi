@@ -217,6 +217,41 @@ describe('detectReportKind', () => {
   it('refuses to guess when nothing matches', () => {
     expect(detectReportKind('"Foo","Bar"\n"1","2"').kind).toBeFalsy();
   });
+
+  it('identifies a Sponsored Products search-term export decisively', () => {
+    // Headers verbatim from the ads console's xlsx export (as CSV, the form
+    // the importer sees after workbookAsCsv). "Customer Search Term" appears
+    // in no FBA report, so the identification is decisive, not a best guess.
+    const header =
+      '"Start Date","End Date","Portfolio name","Currency","Campaign Name",' +
+      '"Ad Group Name","Targeting","Match Type","Customer Search Term",' +
+      '"Impressions","Clicks","Click-Thru Rate (CTR)","Cost Per Click (CPC)",' +
+      '"Spend","7 Day Total Sales","Total Advertising Cost of Sales (ACOS)",' +
+      '"Total Return on Advertising Spend (ROAS)","7 Day Total Orders (#)",' +
+      '"7 Day Total Units (#)","7 Day Conversion Rate"';
+    const row =
+      '"Jun 03, 2026","Jun 03, 2026","Gran Del Val","USD",' +
+      '"SP - Broad - Gran Del Val","Ad group","panama geisha","BROAD",' +
+      '"panama geisha coffee","1200","12","1.00%","$0.55","$6.60","$55.00",' +
+      '"12.00%","8.33","1","1","8.33%"';
+
+    const detected = detectReportKind(`${header}\n${row}`);
+    expect(detected.kind).toBe('search-term');
+    expect(detected.decisive).toBe('search-term');
+
+    // And the columns that make the report usable actually map: term, spend,
+    // sales and the campaign it belongs to.
+    const parsed = parseReport({
+      text: `${header}\n${row}`,
+      kind: 'search-term',
+    });
+    const [first] = parsed.rows;
+    expect(first.fields.searchTerm).toBe('panama geisha coffee');
+    expect(first.fields.campaignName).toBe('SP - Broad - Gran Del Val');
+    expect(first.numbers?.spend).toBeCloseTo(6.6);
+    expect(first.numbers?.sales).toBeCloseTo(55);
+    expect(first.numbers?.clicks).toBe(12);
+  });
 });
 
 /**

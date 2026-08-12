@@ -564,6 +564,25 @@ export interface SellerDocumentOps {
     documentId: string;
     role: string;
   }): Promise<{ documentId: string; role: string }>;
+  /**
+   * Filter, group and total an attached SPREADSHEET over every row,
+   * server-side. The answer enters the context; the rows never do.
+   */
+  querySpreadsheet(params: {
+    assetId: string;
+    where?: Array<{ column: string; op: string; value: string }>;
+    groupBy?: string[];
+    aggregate?: Array<{ column?: string; fn: string }>;
+    columns?: string[];
+    limit?: number;
+  }): Promise<{
+    sheetName: string;
+    columns: string[];
+    rows: Array<Array<string | number>>;
+    matchedRows: number;
+    totalRows: number;
+    truncated: boolean;
+  }>;
 }
 
 /** A vendor as the agent supplies or receives it; id is host-derived. */
@@ -3217,6 +3236,7 @@ function getReportTools(reportOps: SellerReportOps) {
     'inbound-performance',
     'settlement',
     'storage-fee',
+    'search-term',
   ]);
 
   return {
@@ -3299,7 +3319,11 @@ function getReportTools(reportOps: SellerReportOps) {
         'surcharge (storageFeeBase + storageFeeSurcharge are its breakdown — ' +
         'total those to explain a fee, never to build one, and never add them ' +
         'to amountTotal); settlement -> amount; reimbursement -> amountTotal ' +
-        'or quantity; ledger-detail -> quantity. Useful groupings: asin, msku, fnsku, date, ' +
+        'or quantity; ledger-detail -> quantity; search-term (Sponsored ' +
+        'Products) -> spend, sales, clicks, impressions, orders or units, ' +
+        'grouped by campaignName, adGroupName, searchTerm or matchType — how ' +
+        'you answer "which search terms convert in this campaign". Useful ' +
+        'groupings elsewhere: asin, msku, fnsku, date, ' +
         'fulfillmentCenter, amountType, amountDescription, eventType. An ' +
         'unknown field name comes back with the list of valid ones for that ' +
         'report, so guess and read the answer rather than giving up.\n' +
@@ -3885,6 +3909,81 @@ function getDocumentTools(documentOps: SellerDocumentOps) {
               error instanceof Error
                 ? error.message
                 : 'Could not read document.',
+          };
+        }
+      },
+    },
+
+    'query-spreadsheet': {
+      description:
+        'Filter, group and total an attached SPREADSHEET over EVERY row, ' +
+        'server-side — the way to answer from a file whose chat preview says ' +
+        'it is truncated. Works on any attached .xlsx/.csv/.tsv by assetId. ' +
+        'Examples: spend and sales by campaign -> groupBy ["Campaign Name"], ' +
+        'aggregate [{column:"Spend",fn:"sum"},{column:"7 Day Total Sales",' +
+        'fn:"sum"}]; converting terms in one campaign -> where ' +
+        '[{column:"Campaign Name",op:"eq",value:"…"},{column:"7 Day Total ' +
+        'Orders (#)",op:"gt",value:"0"}]. Column names are matched ' +
+        'case-insensitively against the sheet’s own headers — the ones in ' +
+        'the preview’s header row. An unknown name returns the full column ' +
+        'list, so correct and retry rather than giving up. Money and percent ' +
+        'formatting ("$6.60", "12.00%") is stripped for numeric ops. ' +
+        'NEVER total the preview by hand: it is 50 rows of possibly ' +
+        'thousands, and this tool exists so you never have to. For reports ' +
+        'the import recognised (the preview says "STORED as …"), prefer ' +
+        'total-report-rows — it survives across chats.',
+      inputSchema: z.object({
+        assetId: z
+          .string()
+          .describe('The attached spreadsheet, as returned when attached.'),
+        where: z
+          .array(
+            z.object({
+              column: z.string(),
+              op: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte']),
+              value: z.string(),
+            })
+          )
+          .optional()
+          .describe('All clauses must hold (AND).'),
+        groupBy: z.array(z.string()).optional(),
+        aggregate: z
+          .array(
+            z.object({
+              column: z
+                .string()
+                .optional()
+                .describe('Omit only for fn "count" to count rows.'),
+              fn: z.enum(['sum', 'avg', 'min', 'max', 'count']),
+            })
+          )
+          .optional(),
+        columns: z
+          .array(z.string())
+          .optional()
+          .describe('Row listings only: which columns to return.'),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+      execute: async (input: {
+        assetId: string;
+        where?: Array<{ column: string; op: string; value: string }>;
+        groupBy?: string[];
+        aggregate?: Array<{ column?: string; fn: string }>;
+        columns?: string[];
+        limit?: number;
+      }) => {
+        try {
+          return {
+            success: true as const,
+            ...(await documentOps.querySpreadsheet(input)),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not query the spreadsheet.',
           };
         }
       },

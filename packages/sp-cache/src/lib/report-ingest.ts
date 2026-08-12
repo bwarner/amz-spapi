@@ -558,6 +558,8 @@ export function detectReportKind(text: string): {
     // Expected-vs-received is unique to the inbound performance report and is
     // the leg that makes shipment reconciliation possible without the API role.
     'inbound-performance': ['quantityreceived', 'problemtype'],
+    // No FBA report carries a customer search term.
+    'search-term': ['customersearchterm'],
   };
   const decisiveHit = (Object.keys(decisive) as ReportKind[]).find((kind) =>
     decisive[kind]?.some((header) => headers.has(header))

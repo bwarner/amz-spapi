@@ -206,6 +206,58 @@ export function readSpreadsheet(bytes: Buffer): SpreadsheetPreview {
 }
 
 /**
+ * The whole sheet as strings — the query tool's input, never the model's.
+ *
+ * Unlike the preview, nothing is row-capped and cells are not clipped: this
+ * feeds `querySheet`, which filters and aggregates server-side and returns
+ * only its small answer to the model. Columns keep the preview's cap — a
+ * report with more than 40 columns has never been seen, and an unbounded one
+ * is how a malformed sheet becomes a memory problem.
+ */
+export function sheetAsTable(bytes: Buffer): {
+  sheetName: string;
+  headers: string[];
+  rows: string[][];
+} {
+  if (!looksLikeSpreadsheet(bytes)) {
+    throw new SpreadsheetError(
+      'That file is not a spreadsheet — it is neither a workbook nor text.'
+    );
+  }
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(bytes, {
+      type: 'buffer',
+      cellDates: true,
+      cellFormula: false,
+      cellStyles: false,
+    });
+  } catch (error) {
+    throw new SpreadsheetError(
+      error instanceof Error
+        ? `Could not read the spreadsheet: ${error.message}`
+        : 'Could not read the spreadsheet.'
+    );
+  }
+  const sheetName = firstPopulatedSheet(workbook);
+  if (!sheetName) throw new SpreadsheetError('That workbook has no sheets.');
+  const table = XLSX.utils.sheet_to_json<unknown[]>(
+    workbook.Sheets[sheetName],
+    { header: 1, blankrows: false, defval: '', raw: false }
+  );
+  if (!table.length) {
+    throw new SpreadsheetError(`Sheet "${sheetName}" is empty.`);
+  }
+  const [headerRow, ...bodyRows] = table;
+  const toText = (value: unknown) => (value == null ? '' : String(value));
+  return {
+    sheetName,
+    headers: (headerRow ?? []).slice(0, MAX_COLUMNS).map(toText),
+    rows: bodyRows.map((row) => (row ?? []).slice(0, MAX_COLUMNS).map(toText)),
+  };
+}
+
+/**
  * The preview as markdown, for the message the agent reads.
  *
  * A table rather than JSON: it is what the markdown renderer already displays
@@ -256,8 +308,9 @@ export function previewAsMarkdown(
   } else if (preview.truncated) {
     notes.push(
       `Showing the first ${preview.rows.length} of ${preview.totalRows} rows — ` +
-        'do not total a truncated preview; say it is truncated and offer to ' +
-        'import the file as a report instead.'
+        'do not total a truncated preview. To answer from the WHOLE file, ' +
+        'call query-spreadsheet with this assetId: it filters, groups and ' +
+        'totals over every row server-side.'
     );
   }
 
