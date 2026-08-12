@@ -273,6 +273,35 @@ export async function recordRenderedPo(params: {
   return record;
 }
 
+/**
+ * Drop every render pointer at an asset that is going away.
+ *
+ * Without this, deleting a rendered PDF from the file list leaves the order
+ * holding a pointer to nothing — and because an existing pointer is what
+ * suppresses re-rendering, the order's download would be broken forever, not
+ * just once. Detaching lets the next download render afresh.
+ *
+ * Returns how many orders were touched.
+ */
+export async function detachRenderedPoAsset(params: {
+  userId: string;
+  assetId: string;
+}): Promise<number> {
+  const orders = await listPurchaseOrders({ userId: params.userId });
+  let detached = 0;
+  for (const existing of orders) {
+    if (!existing.renders.some((r) => r.assetId === params.assetId)) continue;
+    const record: StoredPurchaseOrder = {
+      ...existing,
+      renders: existing.renders.filter((r) => r.assetId !== params.assetId),
+      updatedAt: Date.now(),
+    };
+    await poStorage.upsertDocument(SCOPE, COLLECTION, record.key, record);
+    detached += 1;
+  }
+  return detached;
+}
+
 export type ListPurchaseOrdersFilters = {
   userId: string;
   vendorId?: string;

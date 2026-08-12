@@ -592,11 +592,13 @@ function ShipmentCard({
       </div>
 
       <div className="mt-3 flex gap-2">
-        {entry.discrepancies > 0 ? (
-          <Button asChild size="sm" variant="outline">
-            <Link href="/reconciliation">Reconcile</Link>
-          </Button>
-        ) : null}
+        {/* The deep view compares all four sides for THIS shipment — richer
+            than the flat all-shipments page this used to point at. */}
+        <Button asChild size="sm" variant="outline">
+          <Link href={`/shipments/${entry.shipmentId}/reconcile`}>
+            Reconcile
+          </Link>
+        </Button>
         {/* The payoff of the checklist: the slots ARE the packet's table of
             contents, so any shipment with at least one document can build. */}
         {entry.presentCount > 0 ? (

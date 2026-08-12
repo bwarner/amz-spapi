@@ -280,6 +280,58 @@ describe('planPacket', () => {
     expect(gap?.reason).toMatch(/never rendered/);
   });
 
+  it('lists standing inbound payments across ALL the shipment SKUs, netted of reversals', () => {
+    // The payment that settles a mislabel lands on the over-received twin,
+    // not the short SKU — the cover must list it anyway. And a clawed-back
+    // payment covers nothing.
+    const plan = planPacket(
+      input({
+        boxLabels: [label(1)],
+        receipts: [
+          receipt(),
+          receipt({ sku: 'TX-TOWEL-GY-4', receivedGross: 620 }),
+        ],
+        reconciliation: recon([SHORT_LINE]),
+        reimbursements: [
+          {
+            sku: 'TX-TOWEL-GY-4',
+            reason: 'Lost_Inbound',
+            date: '2026-06-25',
+            quantity: 20,
+            amount: 95.4,
+            caseId: '777',
+            reimbursementId: 'keep',
+          },
+          {
+            sku: 'TX-TOWEL-NV-4',
+            reason: 'Lost_Inbound',
+            date: '2026-06-26',
+            quantity: 45,
+            amount: 214.65,
+            reimbursementId: 'clawed',
+          },
+          {
+            sku: 'TX-TOWEL-NV-4',
+            reason: 'Reimbursement_Reversal',
+            date: '2026-07-02',
+            quantity: -45,
+            amount: -214.65,
+            originalReimbursementId: 'clawed',
+          },
+        ],
+      })
+    );
+
+    expect(plan.alreadyReimbursed).toEqual([
+      expect.objectContaining({
+        sku: 'TX-TOWEL-GY-4',
+        units: 20,
+        amount: 95.4,
+        caseId: '777',
+      }),
+    ]);
+  });
+
   it('says when seller data was unreadable, which is not the same as missing', () => {
     const plan = planPacket(input({ sellerUnavailable: true }));
 

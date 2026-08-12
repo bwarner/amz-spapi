@@ -5,6 +5,7 @@ import type {
   ReportImport,
   StoredBoxLabel,
   StoredDocument,
+  StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
 
 /**
@@ -87,6 +88,33 @@ function emptyGrouping(
   return { purchases: [], suggestions: [], documents };
 }
 
+function po(overrides: Partial<StoredPurchaseOrder> = {}): StoredPurchaseOrder {
+  return {
+    key: `${USER}::PO-2026-0003`,
+    userId: USER,
+    order: {
+      poNumber: 'PO-2026-0003',
+      issueDate: '2026-05-29',
+      revision: 1,
+      status: 'open',
+      vendorId: 'fernandez-plantation',
+      currency: 'USD',
+      lines: [
+        {
+          sku: 'FB-COF-HGE-250',
+          description: 'Honey Geisha 250g',
+          quantity: 80,
+          unitPrice: 18.5,
+        },
+      ],
+    } as StoredPurchaseOrder['order'],
+    renders: [],
+    storedAt: 1_000,
+    updatedAt: 1_000,
+    ...overrides,
+  };
+}
+
 describe('buildFileView', () => {
   it('lists a stored file and the report it was ingested as, once', () => {
     // The case a seller hits by dropping a settlement .csv on the Import page:
@@ -154,6 +182,65 @@ describe('buildFileView', () => {
     });
 
     expect(view.files[0].fileName).toBe('ruiyi-invoice-8821.pdf');
+  });
+
+  it('names a render after the order it prints, and says what it is', () => {
+    // The app's own PO renders are stored as `generated-…` with no name.
+    // Before this they listed as "Unnamed PDF — stored, but nothing was read
+    // from it", which is a strange thing to say about a file the app wrote.
+    const view = buildFileView({
+      userId: USER,
+      assets: [
+        asset({ assetId: 'r1', originalFileName: 'generated-asset_r1.pdf' }),
+      ],
+      imports: [],
+      boxLabels: [],
+      grouping: emptyGrouping(),
+      purchaseOrders: [
+        po({
+          renders: [{ format: 'pdf', assetId: 'r1', renderedAt: 3_000 }],
+          shipmentIds: ['FBA19F8Q9N8C'],
+        }),
+      ],
+    });
+
+    const [file] = view.files;
+    expect(file.fileName).toBe('PO-2026-0003.pdf');
+    expect(file.nameUnknown).toBeUndefined();
+    expect(file.produced).toEqual([
+      {
+        kind: 'issued-po-render',
+        poNumber: 'PO-2026-0003',
+        format: 'pdf',
+        vendorName: 'Fernandez Plantation',
+        issueDate: '2026-05-29',
+        currency: 'USD',
+        // 80 × 18.50 from the order's own lines — totals are never stored.
+        total: 1480,
+        shipmentIds: ['FBA19F8Q9N8C'],
+      },
+    ]);
+  });
+
+  it('leaves a superseded render unnamed rather than presenting stale figures as current', () => {
+    // A revision drops the order's pointer to its old render; the bytes stay
+    // behind. Naming the orphan after the order would caption last week's
+    // figures with this week's name.
+    const view = buildFileView({
+      userId: USER,
+      assets: [
+        asset({ assetId: 'old', originalFileName: 'generated-asset_old.pdf' }),
+      ],
+      imports: [],
+      boxLabels: [],
+      grouping: emptyGrouping(),
+      purchaseOrders: [
+        po({ renders: [{ format: 'pdf', assetId: 'new', renderedAt: 3_000 }] }),
+      ],
+    });
+
+    expect(view.files[0].fileName).toBe('Unnamed PDF');
+    expect(view.files[0].produced).toEqual([]);
   });
 
   it('summarises box labels per shipment, not per box', () => {

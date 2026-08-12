@@ -40,6 +40,15 @@ type ClaimLine = {
   amount?: number;
 };
 
+type Reimbursed = {
+  sku?: string;
+  units: number;
+  amount: number;
+  date?: string;
+  caseId?: string;
+  reimbursementId?: string;
+};
+
 type Plan = {
   shipmentId: string;
   vendorName?: string;
@@ -53,6 +62,7 @@ type Plan = {
     compared: boolean;
   };
   window?: { from?: string; to?: string };
+  alreadyReimbursed?: Reimbursed[];
 };
 
 function money(amount?: number, currency?: string): string {
@@ -200,6 +210,36 @@ export default function PacketPage({
           </p>
         )}
       </section>
+
+      {plan.alreadyReimbursed?.length ? (
+        <section className="mt-4 rounded-lg border border-emerald-300 bg-emerald-50 p-4">
+          <h2 className="text-sm font-semibold text-emerald-900">
+            Already reimbursed
+          </h2>
+          <ul className="mt-1 space-y-1">
+            {plan.alreadyReimbursed.map((payment) => (
+              <li
+                key={
+                  payment.reimbursementId ?? `${payment.sku}-${payment.date}`
+                }
+                className="text-sm text-emerald-900"
+              >
+                {payment.units} unit{payment.units === 1 ? '' : 's'} of{' '}
+                <span className="font-mono text-xs">{payment.sku}</span> —{' '}
+                {money(payment.amount, plan.currency)}
+                {payment.date ? ` on ${payment.date}` : ''}
+                {payment.caseId ? ` · case ${payment.caseId}` : ''}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-emerald-800">
+            Standing inbound-loss payments for this shipment's SKUs since first
+            receipt, reversals already netted out. The report names no shipment,
+            so these MAY cover the shortfall above — net your claim against them
+            before filing; claiming units Amazon already paid is denied.
+          </p>
+        </section>
+      ) : null}
 
       <section className="mt-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">

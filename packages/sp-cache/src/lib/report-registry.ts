@@ -45,6 +45,8 @@ export type ReportFieldName =
   | 'requestDate'
   | 'status'
   | 'reimbursementId'
+  /** On a Reimbursement_Reversal row: the reimbursement it claws back. */
+  | 'originalReimbursementId'
   | 'caseId'
   | 'amountTotal'
   | 'currency'
@@ -377,6 +379,9 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
     fields: {
       date: ['approvaldate', 'reimbursementdate'],
       reimbursementId: ['reimbursementid'],
+      // The reversal's exact join back to the payment it undoes. Without it,
+      // netting reversals against reimbursements is an amount-and-SKU guess.
+      originalReimbursementId: ['originalreimbursementid'],
       caseId: ['caseid', 'amazonorderid'],
       ...COMMON,
       quantity: [

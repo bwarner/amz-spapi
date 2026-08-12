@@ -13,14 +13,17 @@ import {
   listDocuments,
   listPurchaseOrders,
   queryReceiptAggregates,
+  queryReimbursements,
   reconcileShipments,
   type ReceiptAggregate,
+  type ReimbursementRow,
   type ShipmentReconciliation,
   type StoredBoxLabel,
   type StoredDocument,
   type StoredPurchaseOrder,
 } from '@amz-spapi/sp-cache';
 import { summariseBoxLabels } from '@farvisionllc/models';
+import { inboundCoverFor, netReimbursements } from './reimbursements';
 import { extractDocxText } from './docx-text';
 import { resolveSellerContext } from './document-center';
 import { loadAssetBytes } from './media-assets';
@@ -115,6 +118,22 @@ export type PacketPlan = {
   /** Receipt aggregates for the generated ledger section. */
   receipts: ReceiptAggregate[];
   window?: { from?: string; to?: string };
+  /**
+   * Standing (unreversed) inbound-loss payments Amazon has made for this
+   * shipment's SKUs since first receipt. Listed across ALL the shipment's
+   * SKUs, not just the short ones: a payment on the over-received twin of a
+   * short SKU is exactly the one that settles a mislabel (seen live). The
+   * report carries no shipment reference, so these are "may cover", and the
+   * cover says so.
+   */
+  alreadyReimbursed: Array<{
+    sku?: string;
+    units: number;
+    amount: number;
+    date?: string;
+    caseId?: string;
+    reimbursementId?: string;
+  }>;
 };
 
 /** Everything the plan is computed from — gathered by the loader. */
@@ -125,6 +144,8 @@ export type PacketInput = {
   boxLabels: StoredBoxLabel[];
   receipts: ReceiptAggregate[];
   reconciliation?: ShipmentReconciliation;
+  /** Every reimbursement row for the seller, reversals included. */
+  reimbursements?: ReimbursementRow[];
   /** Seller-scoped stores were unreadable — different claim from "empty". */
   sellerUnavailable?: boolean;
 };
@@ -264,6 +285,37 @@ export function planPacket(input: PacketInput): PacketPlan {
     });
   }
 
+  // Standing inbound-loss payments for ANY of the shipment's SKUs. The short
+  // SKU's over-received twin matters most: when Amazon reclassifies mislabelled
+  // units between two SKUs, the payment that settles the loss can land on
+  // either name.
+  const shipmentSkus = [
+    ...new Set([
+      ...(input.reconciliation?.lines ?? [])
+        .map((line) => line.sku)
+        .filter((sku): sku is string => Boolean(sku)),
+      ...input.boxLabels.map((label) => label.sku),
+      ...input.receipts
+        .map((receipt) => receipt.sku)
+        .filter((sku): sku is string => Boolean(sku)),
+    ]),
+  ].filter((sku): sku is string => Boolean(sku));
+  const netted = netReimbursements(input.reimbursements ?? []);
+  const alreadyReimbursed = shipmentSkus.flatMap((sku) =>
+    inboundCoverFor({
+      netted,
+      sku,
+      notBefore: input.reconciliation?.firstReceiptDate,
+    }).map((payment) => ({
+      sku: payment.sku,
+      units: payment.units,
+      amount: payment.amount,
+      date: payment.date,
+      caseId: payment.caseId,
+      reimbursementId: payment.reimbursementId,
+    }))
+  );
+
   return {
     shipmentId: input.shipmentId,
     vendorName:
@@ -282,6 +334,7 @@ export function planPacket(input: PacketInput): PacketPlan {
           to: input.reconciliation.lastReceiptDate,
         }
       : undefined,
+    alreadyReimbursed,
   };
 }
 
@@ -406,14 +459,18 @@ export async function loadPacketInput(params: {
   const { userId, shipmentId } = params;
   const { sellerId, status } = await resolveSellerContext(userId);
 
-  const [documents, orders, boxLabels, receipts] = await Promise.all([
-    listDocuments({ userId, limit: 500 }),
-    listPurchaseOrders({ userId }),
-    sellerId ? listBoxLabels({ sellerId, shipmentId }) : Promise.resolve([]),
-    sellerId
-      ? queryReceiptAggregates({ sellerId, shipmentId })
-      : Promise.resolve([]),
-  ]);
+  const [documents, orders, boxLabels, receipts, reimbursements] =
+    await Promise.all([
+      listDocuments({ userId, limit: 500 }),
+      listPurchaseOrders({ userId }),
+      sellerId ? listBoxLabels({ sellerId, shipmentId }) : Promise.resolve([]),
+      sellerId
+        ? queryReceiptAggregates({ sellerId, shipmentId })
+        : Promise.resolve([]),
+      // All rows, not per-SKU: netting reversals against payments needs the
+      // whole ledger, and it is small.
+      sellerId ? queryReimbursements({ sellerId }) : Promise.resolve([]),
+    ]);
 
   const linkedDocuments = documents.filter((document) =>
     (document.shipmentIds ?? []).includes(shipmentId)
@@ -443,6 +500,7 @@ export async function loadPacketInput(params: {
     boxLabels,
     receipts,
     reconciliation,
+    reimbursements,
     sellerUnavailable: status === 'unavailable',
     sellerStatus: status,
   };
@@ -552,6 +610,35 @@ function CoverPage({
             </Text>
           </>
         )}
+
+        {plan.alreadyReimbursed.length ? (
+          <>
+            <Text style={styles.heading}>Already reimbursed</Text>
+            {plan.alreadyReimbursed.map((payment) => (
+              <View
+                key={
+                  payment.reimbursementId ?? `${payment.sku}-${payment.date}`
+                }
+                style={styles.row}
+              >
+                <Text style={styles.cellSku}>{payment.sku ?? '—'}</Text>
+                <Text style={styles.cellNum}>{payment.units}</Text>
+                <Text style={styles.cellNum}>{money(payment.amount)}</Text>
+                <Text style={[{ width: '17.5%' }]}>{payment.date ?? ''}</Text>
+                <Text style={[{ width: '17.5%' }, styles.small]}>
+                  {payment.caseId ? `case ${payment.caseId}` : ''}
+                </Text>
+              </View>
+            ))}
+            <Text style={[styles.small, { marginTop: 4 }]}>
+              Standing inbound-loss payments Amazon has made for this shipment's
+              SKUs since first receipt (reversed payments excluded). The
+              reimbursements report carries no shipment reference, so these MAY
+              cover the shortfall above — net the claim against them before
+              filing; a claim for units Amazon has already paid is denied.
+            </Text>
+          </>
+        ) : null}
 
         <View style={styles.hr} />
 
