@@ -23,11 +23,28 @@ export type ReportKind =
   | 'reimbursement'
   | 'inbound-performance'
   | 'settlement'
-  | 'storage-fee';
+  | 'storage-fee'
+  /** Sponsored Products search terms — the first ADS-side report here. The
+      rows store is seller-scoped, not API-scoped, so it holds ad exports as
+      readily as FBA ones. */
+  | 'search-term';
 
 /** Logical fields we can join and reconcile on. */
 export type ReportFieldName =
   | 'date'
+  /* Sponsored Products search-term columns. */
+  | 'campaignName'
+  | 'adGroupName'
+  | 'portfolioName'
+  | 'targeting'
+  | 'matchType'
+  | 'searchTerm'
+  | 'impressions'
+  | 'clicks'
+  | 'spend'
+  | 'sales'
+  | 'orders'
+  | 'units'
   | 'fnsku'
   | 'msku'
   | 'asin'
@@ -447,6 +464,29 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       status: ['alertstatus', 'status'],
     },
   },
+  'search-term': {
+    kind: 'search-term',
+    reportType: 'SP_SEARCH_TERM_REPORT',
+    label: 'Sponsored Products search terms',
+    fields: {
+      date: ['startdate', 'date'],
+      campaignName: ['campaignname'],
+      adGroupName: ['adgroupname'],
+      portfolioName: ['portfolioname'],
+      targeting: ['targeting'],
+      matchType: ['matchtype'],
+      searchTerm: ['customersearchterm', 'searchterm'],
+      currency: ['currency'],
+      impressions: ['impressions'],
+      clicks: ['clicks'],
+      // The ads console's own column is "Spend"; API exports say "cost".
+      spend: ['spend', 'cost'],
+      // "7 Day Total Sales" — the attribution window is part of the name.
+      sales: ['7daytotalsales', 'sales', 'totalsales'],
+      orders: ['7daytotalorders', 'orders'],
+      units: ['7daytotalunits', 'units'],
+    },
+  },
 };
 
 /**
@@ -486,6 +526,12 @@ export const NUMERIC_FIELDS = new Set<ReportFieldName>([
   'disposed',
   'otherEvents',
   'unknownEvents',
+  'impressions',
+  'clicks',
+  'spend',
+  'sales',
+  'orders',
+  'units',
 ]);
 
 export const REPORT_KINDS = Object.keys(REPORTS) as ReportKind[];

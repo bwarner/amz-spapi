@@ -136,10 +136,10 @@ type PendingDocument = {
  * that is the agent's own decision and its own metered call, so inlining the
  * extracted figures here would pay for the extraction twice and file nothing.
  *
- * Spreadsheets are the opposite case, and deliberately so. No tool reads a
- * sheet, so an id alone would attach a file the agent cannot open — the same
- * silence #72 is about, in a different container. Their rows travel inline,
- * bounded server-side, and a truncated preview says so.
+ * Spreadsheets travel as a bounded preview PLUS their asset id: the preview
+ * shows the shape, and `query-spreadsheet` filters, groups and totals over
+ * every row server-side — so a truncated preview now names the tool that
+ * reads past it instead of leaving the agent with 50 rows and temptation.
  *
  * A spreadsheet the server recognised as an Amazon report gets NO preview at
  * all, only a statement that it is imported and how to query it.

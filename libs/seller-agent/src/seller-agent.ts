@@ -1,6 +1,10 @@
 import { ToolLoopAgent, InferAgentUIMessage, stepCountIs } from 'ai';
 import { z } from 'zod';
 import type { SpCache } from '@amz-spapi/sp-cache';
+import {
+  TITLE_POLICY_PROMPT,
+  validateListingTitle,
+} from './listing-title-policy.js';
 import type {
   AIProvider,
   ImageGenerator,
@@ -564,6 +568,25 @@ export interface SellerDocumentOps {
     documentId: string;
     role: string;
   }): Promise<{ documentId: string; role: string }>;
+  /**
+   * Filter, group and total an attached SPREADSHEET over every row,
+   * server-side. The answer enters the context; the rows never do.
+   */
+  querySpreadsheet(params: {
+    assetId: string;
+    where?: Array<{ column: string; op: string; value: string }>;
+    groupBy?: string[];
+    aggregate?: Array<{ column?: string; fn: string }>;
+    columns?: string[];
+    limit?: number;
+  }): Promise<{
+    sheetName: string;
+    columns: string[];
+    rows: Array<Array<string | number>>;
+    matchedRows: number;
+    totalRows: number;
+    truncated: boolean;
+  }>;
 }
 
 /** A vendor as the agent supplies or receives it; id is host-derived. */
@@ -3217,6 +3240,7 @@ function getReportTools(reportOps: SellerReportOps) {
     'inbound-performance',
     'settlement',
     'storage-fee',
+    'search-term',
   ]);
 
   return {
@@ -3299,7 +3323,11 @@ function getReportTools(reportOps: SellerReportOps) {
         'surcharge (storageFeeBase + storageFeeSurcharge are its breakdown — ' +
         'total those to explain a fee, never to build one, and never add them ' +
         'to amountTotal); settlement -> amount; reimbursement -> amountTotal ' +
-        'or quantity; ledger-detail -> quantity. Useful groupings: asin, msku, fnsku, date, ' +
+        'or quantity; ledger-detail -> quantity; search-term (Sponsored ' +
+        'Products) -> spend, sales, clicks, impressions, orders or units, ' +
+        'grouped by campaignName, adGroupName, searchTerm or matchType — how ' +
+        'you answer "which search terms convert in this campaign". Useful ' +
+        'groupings elsewhere: asin, msku, fnsku, date, ' +
         'fulfillmentCenter, amountType, amountDescription, eventType. An ' +
         'unknown field name comes back with the list of valid ones for that ' +
         'report, so guess and read the answer rather than giving up.\n' +
@@ -3885,6 +3913,81 @@ function getDocumentTools(documentOps: SellerDocumentOps) {
               error instanceof Error
                 ? error.message
                 : 'Could not read document.',
+          };
+        }
+      },
+    },
+
+    'query-spreadsheet': {
+      description:
+        'Filter, group and total an attached SPREADSHEET over EVERY row, ' +
+        'server-side — the way to answer from a file whose chat preview says ' +
+        'it is truncated. Works on any attached .xlsx/.csv/.tsv by assetId. ' +
+        'Examples: spend and sales by campaign -> groupBy ["Campaign Name"], ' +
+        'aggregate [{column:"Spend",fn:"sum"},{column:"7 Day Total Sales",' +
+        'fn:"sum"}]; converting terms in one campaign -> where ' +
+        '[{column:"Campaign Name",op:"eq",value:"…"},{column:"7 Day Total ' +
+        'Orders (#)",op:"gt",value:"0"}]. Column names are matched ' +
+        'case-insensitively against the sheet’s own headers — the ones in ' +
+        'the preview’s header row. An unknown name returns the full column ' +
+        'list, so correct and retry rather than giving up. Money and percent ' +
+        'formatting ("$6.60", "12.00%") is stripped for numeric ops. ' +
+        'NEVER total the preview by hand: it is 50 rows of possibly ' +
+        'thousands, and this tool exists so you never have to. For reports ' +
+        'the import recognised (the preview says "STORED as …"), prefer ' +
+        'total-report-rows — it survives across chats.',
+      inputSchema: z.object({
+        assetId: z
+          .string()
+          .describe('The attached spreadsheet, as returned when attached.'),
+        where: z
+          .array(
+            z.object({
+              column: z.string(),
+              op: z.enum(['eq', 'neq', 'contains', 'gt', 'gte', 'lt', 'lte']),
+              value: z.string(),
+            })
+          )
+          .optional()
+          .describe('All clauses must hold (AND).'),
+        groupBy: z.array(z.string()).optional(),
+        aggregate: z
+          .array(
+            z.object({
+              column: z
+                .string()
+                .optional()
+                .describe('Omit only for fn "count" to count rows.'),
+              fn: z.enum(['sum', 'avg', 'min', 'max', 'count']),
+            })
+          )
+          .optional(),
+        columns: z
+          .array(z.string())
+          .optional()
+          .describe('Row listings only: which columns to return.'),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+      execute: async (input: {
+        assetId: string;
+        where?: Array<{ column: string; op: string; value: string }>;
+        groupBy?: string[];
+        aggregate?: Array<{ column?: string; fn: string }>;
+        columns?: string[];
+        limit?: number;
+      }) => {
+        try {
+          return {
+            success: true as const,
+            ...(await documentOps.querySpreadsheet(input)),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not query the spreadsheet.',
           };
         }
       },
@@ -4562,6 +4665,29 @@ export function createSellerAgent({
     ? getListingWriteTools(listingWrites)
     : {};
   const tools = {
+    // Always on: pure policy check, no host dependency. The title policy
+    // postdates training data, so knowing it and checking it are kept as
+    // separate things — the prompt teaches, this tool verifies.
+    'check-listing-title': {
+      description:
+        'Check a product listing title against Amazon’s title policy ' +
+        '(effective 2025-01-21): 200-character limit (125 for apparel — set ' +
+        'apparel:true), forbidden characters, and the twice-per-word ' +
+        'repetition rule. Run this on EVERY title you are about to ' +
+        'recommend, write, or judge, and fix what it reports before ' +
+        'presenting the title. Repeat its caveats to the seller — it counts ' +
+        'exact word repeats only, while Amazon also counts plurals and ' +
+        'variants.',
+      inputSchema: z.object({
+        title: z.string().describe('The exact title text to check.'),
+        apparel: z
+          .boolean()
+          .optional()
+          .describe('True for apparel categories (125-character limit).'),
+      }),
+      execute: async (input: { title: string; apparel?: boolean }) =>
+        validateListingTitle(input.title, { apparel: input.apparel }),
+    },
     ...spTools,
     ...listingsTools,
     ...imageTools,
@@ -4962,6 +5088,8 @@ AVAILABLE TOOLS:
 - get-financial-events: itemized fees/charges/refunds for a date window or one
   order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
 
+${TITLE_POLICY_PROMPT}
+
 DATA THE SELLER HAS ALREADY IMPORTED (check before fetching, every topic):
 - "I uploaded/imported X" does NOT mean an attachment. Reports are imported on the
   IMPORT PAGE and stored, so the file is not in this conversation and never will be.
@@ -5121,6 +5249,8 @@ NOTE: Your Amazon account is not yet connected. You can still:
 - Explain how to improve titles, bullet points, and descriptions
 - Provide guidance on inventory management and order fulfillment
 - Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
+
+${TITLE_POLICY_PROMPT}
 
 Connecting an Amazon Seller account in Settings adds exactly these, and nothing
 else: catalog and listing lookup, orders and order details, FBA inventory,

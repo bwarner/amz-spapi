@@ -87,6 +87,22 @@ const MARKDOWN_COMPONENTS: Components = {
   td: ({ children }) => <MarkdownTableCell>{children}</MarkdownTableCell>,
   th: ({ children }) => <MarkdownTableHead>{children}</MarkdownTableHead>,
   tr: ({ children }) => <MarkdownTableRow>{children}</MarkdownTableRow>,
+  /**
+   * Code wraps instead of scrolling or overflowing. What the model marks as
+   * code here is mostly listing copy meant for copy-paste — titles, bullets,
+   * backend keywords — and a 400-character bullet on one unwrapped line set
+   * the bubble's intrinsic width and pushed the whole page sideways (seen
+   * live). Wrapping keeps every character visible and copyable; a scrollbar
+   * would hide exactly the text the seller is about to paste.
+   */
+  pre: ({ children }) => (
+    <pre className="max-w-full whitespace-pre-wrap break-words">{children}</pre>
+  ),
+  code: ({ children, className }) => (
+    <code className={cn(className, 'whitespace-pre-wrap break-words')}>
+      {children}
+    </code>
+  ),
   img: ({ src, alt, title }) => {
     if (!src) return null;
     return (
@@ -462,7 +478,10 @@ function MessageBubbleImpl({
 
       <div
         className={cn(
-          'rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3',
+          // min-w-0: without it a flex child sizes to its widest content, so
+          // one long unwrapped line inside makes the bubble - and the page -
+          // scroll sideways instead of the line wrapping.
+          'min-w-0 rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3',
           hasAPlusDoc
             ? 'w-full max-w-full sm:max-w-[95%]'
             : 'max-w-[92%] sm:max-w-[80%]',

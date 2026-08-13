@@ -276,3 +276,43 @@ describe('stale approvals are dropped', () => {
     expect(statesAt(kept, 3)).toEqual(['approval-responded']);
   });
 });
+
+describe('tool inputs are repaired on replay', () => {
+  // Seen live: a total-report-rows call failed schema validation and the SDK
+  // persisted its output-error part with NO input at all. On replay that
+  // converts to a tool_use block without a dictionary, and Anthropic rejects
+  // the ENTIRE conversation ("Input should be a valid dictionary") on every
+  // turn after the one that wrote it — one bad part poisons the whole chat.
+  it('gives a settled part with a missing input an empty dictionary', () => {
+    const broken = {
+      type: 'tool-total-report-rows',
+      toolCallId: 'toolu_015JR1j8',
+      state: 'output-error',
+      errorText: 'schema validation failed',
+      // no `input` key — exactly as persisted
+    };
+    const kept = trimHistory(conversation(broken), {
+      maxMessages: 20,
+      minRecentMessages: 10,
+    });
+
+    const part = (kept[1].parts as Array<Record<string, unknown>>).find(
+      (p) => p['type'] === 'tool-total-report-rows'
+    );
+    expect(part?.['input']).toEqual({});
+    // The error result itself survives — the call happened, and the model
+    // should see that it failed rather than propose it fresh.
+    expect(part?.['state']).toBe('output-error');
+  });
+
+  it('leaves a real input alone', () => {
+    const kept = trimHistory(
+      conversation(toolPart('output-available', 'ok-1')),
+      { maxMessages: 20, minRecentMessages: 10 }
+    );
+    const part = (kept[1].parts as Array<Record<string, unknown>>).find((p) =>
+      String(p['type']).startsWith('tool-')
+    );
+    expect(part?.['input']).toEqual({ vendor: { name: 'Panama Select' } });
+  });
+});

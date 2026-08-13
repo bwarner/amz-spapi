@@ -23,6 +23,12 @@ import { embedDocument } from './document-embedding';
 import { getAsset, loadAssetBytes } from './media-assets';
 import { extractDocxText, isDocx } from './docx-text';
 import { extractPdfText } from './pdf-text';
+import { sheetAsTable } from './spreadsheet';
+import {
+  querySheet,
+  type SpreadsheetQuery,
+  type WhereOp,
+} from './spreadsheet-query';
 
 /**
  * Host implementation of document reading and filing for the agent (#73).
@@ -380,6 +386,31 @@ export function createDocumentOps(params: {
         role: role as DocumentRole,
       });
       return { documentId: updated.documentId, role: updated.role };
+    },
+
+    async querySpreadsheet(input) {
+      const loaded = await loadAssetBytes({ userId, assetId: input.assetId });
+      if (!loaded) {
+        throw new Error(
+          'No attached file with that assetId — use the id exactly as it ' +
+            'appeared when the file was attached.'
+        );
+      }
+      const table = sheetAsTable(Buffer.from(loaded.bytes));
+      // The tool schema constrains op/fn to the engine's unions; the interface
+      // widens them to plain strings so the agent package does not depend on
+      // this app's types. Narrow here, where both sides are known.
+      const result = querySheet(table, {
+        where: input.where?.map((clause) => ({
+          ...clause,
+          op: clause.op as WhereOp,
+        })),
+        groupBy: input.groupBy,
+        aggregate: input.aggregate as SpreadsheetQuery['aggregate'],
+        columns: input.columns,
+        limit: input.limit,
+      });
+      return { sheetName: table.sheetName, ...result };
     },
   };
 }
