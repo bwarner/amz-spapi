@@ -201,6 +201,20 @@ export type DocumentSearchHit = {
   currency?: string;
 };
 
+/**
+ * Facets over the WHOLE match set, not the page of hits returned.
+ *
+ * This is what the Search service's facets are for: "8 shown of 41" can still
+ * say "29 are invoices, 12 are receipts" without fetching them. In a hybrid
+ * request the service computes facets over the KEYWORD half only — the vector
+ * half's matches are not counted — which is the honest reading for a filter
+ * UI, since the chips then filter exactly what they counted.
+ */
+export type DocumentSearchFacets = {
+  roles: Array<{ role: string; count: number }>;
+  periods: Array<{ label: string; from?: string; to?: string; count: number }>;
+};
+
 export type DocumentSearchResult = {
   hits: DocumentSearchHit[];
   total: number;
@@ -212,7 +226,67 @@ export type DocumentSearchResult = {
    * the claim.
    */
   partial: boolean;
+  /** Absent when the service answered without facets (older index, error). */
+  facets?: DocumentSearchFacets;
 };
+
+/**
+ * The period facet's month buckets: the current month, five before it, and
+ * one open-started "older". FTS date-range facets take explicit named ranges
+ * — there is no auto-bucketing — so the ranges are generated here from the
+ * clock. `start` is inclusive, `end` exclusive, matching the service.
+ */
+export function periodFacetRanges(
+  now = new Date()
+): Array<{ name: string; start?: string; end?: string }> {
+  const monthStart = (offset: number) =>
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - offset, 1));
+  const ranges: Array<{ name: string; start?: string; end?: string }> = [];
+  for (let offset = 0; offset < 6; offset++) {
+    const start = monthStart(offset);
+    ranges.push({
+      name: start.toISOString().slice(0, 7),
+      start: start.toISOString(),
+      end: monthStart(offset - 1).toISOString(),
+    });
+  }
+  ranges.push({ name: 'older', end: monthStart(5).toISOString() });
+  return ranges;
+}
+
+function normaliseFacets(
+  facets:
+    | Record<
+        string,
+        {
+          terms?: Array<{ term: string; count: number }>;
+          date_ranges?: Array<{
+            name: string;
+            start?: string;
+            end?: string;
+            count: number;
+          }>;
+        }
+      >
+    | undefined
+): DocumentSearchFacets | undefined {
+  if (!facets) return undefined;
+  return {
+    roles: (facets['role']?.terms ?? [])
+      .filter((entry) => entry.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .map((entry) => ({ role: entry.term, count: entry.count })),
+    periods: (facets['period']?.date_ranges ?? [])
+      .filter((entry) => entry.count > 0)
+      .sort((a, b) => b.name.localeCompare(a.name))
+      .map((entry) => ({
+        label: entry.name,
+        from: entry.start?.slice(0, 10),
+        to: entry.end?.slice(0, 10),
+        count: entry.count,
+      })),
+  };
+}
 
 function toHit(hit: {
   id: string;
@@ -300,6 +374,18 @@ export async function searchDocuments(
   const body: Record<string, unknown> = {
     size: limit,
     fields: STORED_FIELDS,
+    // Facets count the WHOLE match set (already tenant-scoped by the
+    // conjuncts below), so the palette can offer "29 invoices · 12 receipts"
+    // while showing eight hits. Named with the same identifiers the queries
+    // use — the FIELD map is the single vocabulary for this index.
+    facets: {
+      role: { field: FIELD.role, size: 12 },
+      period: {
+        field: FIELD.documentDate,
+        size: 8,
+        date_ranges: periodFacetRanges(),
+      },
+    },
   };
 
   if (trimmed) {
@@ -336,10 +422,12 @@ export async function searchDocuments(
     body,
   });
 
+  const facets = normaliseFacets(response.facets);
   return {
     hits: response.hits.map(toHit),
     total: response.total,
     partial: Boolean(response.errors && Object.keys(response.errors).length),
+    ...(facets ? { facets } : {}),
   };
 }
 

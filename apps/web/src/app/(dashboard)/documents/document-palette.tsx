@@ -46,11 +46,24 @@ type SemanticHit = {
   role?: string;
 };
 
+type SearchFacets = {
+  roles: Array<{ role: string; count: number }>;
+  periods: Array<{ label: string; from?: string; to?: string; count: number }>;
+};
+
 type SearchResponse = {
   hits: SemanticHit[];
   mode: 'hybrid' | 'keyword' | 'fallback';
   reason?: string;
+  /**
+   * FTS facets over the WHOLE match set — what lets eight visible hits say
+   * "of 41: 29 invoices, 12 receipts". Absent on the fallback path, and the
+   * chips simply do not render.
+   */
+  facets?: SearchFacets;
 };
+
+type PeriodFilter = { label: string; from?: string; to?: string };
 
 /** Long enough that typing a word does not fire four searches. */
 const DEBOUNCE_MS = 250;
@@ -67,6 +80,10 @@ export function DocumentPalette({
   const [query, setQuery] = useState('');
   const [semantic, setSemantic] = useState<SearchResponse | null>(null);
   const [searching, setSearching] = useState(false);
+  // Facet filters, round-tripped to the search request. One of each: the
+  // palette is a finder, not a query builder.
+  const [roleFilter, setRoleFilter] = useState<string | null>(null);
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter | null>(null);
 
   // Every request in flight, so a slow early response cannot overwrite a
   // faster later one and show results for a query the user has moved past.
@@ -98,7 +115,13 @@ export function DocumentPalette({
         const response = await fetch('/api/documents/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ q: text, limit: 8 }),
+          body: JSON.stringify({
+            q: text,
+            limit: 8,
+            ...(roleFilter ? { roles: [roleFilter] } : {}),
+            ...(periodFilter?.from ? { from: periodFilter.from } : {}),
+            ...(periodFilter?.to ? { to: periodFilter.to } : {}),
+          }),
         });
         const payload = (await response.json()) as SearchResponse;
         if (ticket !== latest.current) return;
@@ -111,16 +134,26 @@ export function DocumentPalette({
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, roleFilter, periodFilter]);
 
   const choose = useCallback(
     (fileId: string) => {
       setOpen(false);
       setQuery('');
+      setRoleFilter(null);
+      setPeriodFilter(null);
       onSelectFile(fileId);
     },
     [onSelectFile]
   );
+
+  const close = useCallback((next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      setRoleFilter(null);
+      setPeriodFilter(null);
+    }
+  }, []);
 
   const needle = query.trim().toLowerCase();
   const matchingFiles = needle
@@ -145,12 +178,53 @@ export function DocumentPalette({
         </kbd>
       </button>
 
-      <CommandDialog open={open} onOpenChange={setOpen}>
+      <CommandDialog open={open} onOpenChange={close}>
         <CommandInput
           value={query}
           onValueChange={setQuery}
           placeholder="Search by file name, supplier, or what a document says…"
         />
+        {/* Facet chips: counts over the WHOLE match set (FTS facets), so the
+            eight hits below can say what the rest are. Clicking narrows the
+            search server-side; the active chip clicks off again. While a
+            filter is active the returned facets describe the FILTERED set, so
+            the active chip is rendered from state, not from the response. */}
+        {semantic?.facets || roleFilter || periodFilter ? (
+          <div className="flex flex-wrap gap-1 border-b px-3 py-2">
+            {(roleFilter
+              ? [{ role: roleFilter, count: undefined }]
+              : (semantic?.facets?.roles ?? []).slice(0, 6)
+            ).map((entry) => (
+              <FacetChip
+                key={entry.role}
+                label={entry.role.replace(/-/g, ' ')}
+                count={entry.count}
+                active={roleFilter === entry.role}
+                onClick={() =>
+                  setRoleFilter(roleFilter === entry.role ? null : entry.role)
+                }
+              />
+            ))}
+            {(periodFilter
+              ? [{ ...periodFilter, count: undefined }]
+              : (semantic?.facets?.periods ?? []).slice(0, 4)
+            ).map((entry) => (
+              <FacetChip
+                key={entry.label}
+                label={entry.label}
+                count={'count' in entry ? entry.count : undefined}
+                active={periodFilter?.label === entry.label}
+                onClick={() =>
+                  setPeriodFilter(
+                    periodFilter?.label === entry.label
+                      ? null
+                      : { label: entry.label, from: entry.from, to: entry.to }
+                  )
+                }
+              />
+            ))}
+          </div>
+        ) : null}
         <CommandList>
           <CommandEmpty>
             {searching ? 'Searching…' : 'Nothing matches that.'}
@@ -226,6 +300,37 @@ export function DocumentPalette({
         </CommandList>
       </CommandDialog>
     </>
+  );
+}
+
+function FacetChip({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count?: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        active
+          ? 'rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground'
+          : 'rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground'
+      }
+    >
+      {label}
+      {count !== undefined ? (
+        <span className="ml-1 tabular-nums opacity-70">{count}</span>
+      ) : (
+        <span className="ml-1">×</span>
+      )}
+    </button>
   );
 }
 

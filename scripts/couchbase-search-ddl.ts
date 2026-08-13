@@ -158,6 +158,30 @@ function drift(
     );
   }
 
+  // Facet prerequisites. The palette's filter chips facet on `role` and
+  // `extracted.documentDate`, and a field indexed WITHOUT docvalues answers a
+  // facet request with empty buckets and no error — the fourth silent one.
+  type FieldMapping = {
+    properties?: Record<string, FieldMapping>;
+    fields?: Array<{ docvalues?: boolean }>;
+  };
+  const mappingRoot = observedMapping as FieldMapping | undefined;
+  const facetChecks: Array<[string, FieldMapping | undefined]> = [
+    ['role', mappingRoot?.properties?.['role']],
+    [
+      'extracted.documentDate',
+      mappingRoot?.properties?.['extracted']?.properties?.['documentDate'],
+    ],
+  ];
+  for (const [label, mapping] of facetChecks) {
+    const field = mapping?.fields?.[0];
+    if (field && !field.docvalues) {
+      problems.push(
+        `${label} lacks docvalues — facets over it return empty buckets`
+      );
+    }
+  }
+
   return problems;
 }
 

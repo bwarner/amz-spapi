@@ -356,12 +356,33 @@ export type SearchHit = {
   fields?: Record<string, unknown>;
 };
 
+/** One facet of a search response — term buckets or named date ranges. */
+export type SearchFacet = {
+  field: string;
+  total: number;
+  missing: number;
+  other: number;
+  terms?: Array<{ term: string; count: number }>;
+  date_ranges?: Array<{
+    name: string;
+    start?: string;
+    end?: string;
+    count: number;
+  }>;
+};
+
 export type SearchResponse = {
   hits: SearchHit[];
   /** Total matches before `size` was applied — for "showing 10 of 412". */
   total: number;
   /** Per-partition errors. A search can be PARTIALLY successful; see below. */
   errors?: Record<string, string>;
+  /**
+   * Present only when the request asked for facets AND the service answered
+   * them — absent stays absent, so a caller can tell "no facets requested"
+   * from "requested and empty".
+   */
+  facets?: Record<string, SearchFacet>;
 };
 
 /**
@@ -417,6 +438,7 @@ export async function searchQuery(params: {
     }>;
     total_hits?: number;
     status?: { failed?: number; errors?: Record<string, string> } | string;
+    facets?: Record<string, SearchFacet>;
     error?: string;
   };
 
@@ -438,6 +460,7 @@ export async function searchQuery(params: {
     hits: payload.hits ?? [],
     total: payload.total_hits ?? payload.hits?.length ?? 0,
     ...(status?.failed ? { errors: status.errors ?? {} } : {}),
+    ...(payload.facets ? { facets: payload.facets } : {}),
   };
 }
 
