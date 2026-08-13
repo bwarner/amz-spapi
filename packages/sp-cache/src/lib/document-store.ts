@@ -171,6 +171,7 @@ export function roleForRecognisedKind(
     case 'purchase-order':
       return 'purchase-order';
     case 'amazon-report':
+    case 'spreadsheet':
     case 'fba-box-label':
     case 'fnsku-label':
     case 'design-artwork':

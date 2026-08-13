@@ -560,6 +560,10 @@ export function detectReportKind(text: string): {
     'inbound-performance': ['quantityreceived', 'problemtype'],
     // No FBA report carries a customer search term.
     'search-term': ['customersearchterm'],
+    // Columns only the ads console's campaign export carries. NOT
+    // 'campaignname' — the search-term report has that too, and a weak marker
+    // here would misfile one as the other.
+    'campaign-performance': ['viewablecpmvcpm', 'mainimdbadclicks'],
   };
   const decisiveHit = (Object.keys(decisive) as ReportKind[]).find((kind) =>
     decisive[kind]?.some((header) => headers.has(header))
