@@ -316,3 +316,147 @@ describe('tool inputs are repaired on replay', () => {
     expect(part?.['input']).toEqual({ vendor: { name: 'Panama Select' } });
   });
 });
+
+describe('oversized tool outputs are capped on replay (#133)', () => {
+  const bigOutput = {
+    rows: Array.from({ length: 2000 }, (_, i) => `row-${i}`),
+  };
+
+  const settled = (id: string, output: unknown) => ({
+    type: 'tool-total-report-rows',
+    toolCallId: id,
+    state: 'output-available',
+    input: { kind: 'settlement' },
+    output,
+  });
+
+  it('replaces a huge output with a marked, clipped preview', () => {
+    const kept = trimHistory(conversation(settled('big', bigOutput)), {
+      maxMessages: 20,
+      minRecentMessages: 10,
+      maxToolOutputChars: 500,
+    });
+
+    const part = (kept[1].parts as Array<Record<string, unknown>>).find((p) =>
+      String(p['type']).startsWith('tool-')
+    );
+    const output = part?.['output'] as Record<string, unknown>;
+    expect(output['truncated']).toBe(true);
+    // The marker must FORBID totalling the preview — a silent clip reads as a
+    // complete result, which is the spreadsheet-preview failure all over.
+    expect(String(output['note'])).toMatch(/INCOMPLETE/);
+    expect(String(output['preview']).length).toBe(500);
+    // The call record itself is intact: same input, same id.
+    expect(part?.['input']).toEqual({ kind: 'settlement' });
+  });
+
+  it('leaves a small output byte-identical — the cache-stability contract', () => {
+    const small = settled('small', { total: 42 });
+    const kept = trimHistory(conversation(small), {
+      maxMessages: 20,
+      minRecentMessages: 10,
+      maxToolOutputChars: 500,
+    });
+    const part = (kept[1].parts as Array<Record<string, unknown>>).find((p) =>
+      String(p['type']).startsWith('tool-')
+    );
+    expect(part?.['output']).toEqual({ total: 42 });
+  });
+
+  it('caps uniformly, newest included: a result must never change shape just because it aged', () => {
+    // If the newest turn's results were spared, each would be rewritten the
+    // moment it stopped being newest — invalidating the prompt cache
+    // mid-prefix on every single turn.
+    const kept = trimHistory(
+      [
+        ...conversation(settled('old', bigOutput)),
+        { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'more' }] },
+        {
+          id: 'a2',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'here it is' },
+            settled('new', bigOutput),
+          ],
+        },
+      ] as never,
+      { maxMessages: 20, minRecentMessages: 10, maxToolOutputChars: 500 }
+    );
+
+    for (const index of [1, 3]) {
+      const part = (kept[index].parts as Array<Record<string, unknown>>).find(
+        (p) => String(p['type']).startsWith('tool-')
+      );
+      expect((part?.['output'] as Record<string, unknown>)['truncated']).toBe(
+        true
+      );
+    }
+  });
+});
+
+describe('history is trimmed to a character budget (#133)', () => {
+  const filler = (id: string, chars: number) => [
+    {
+      id: `u-${id}`,
+      role: 'user',
+      parts: [{ type: 'text', text: 'q'.repeat(20) }],
+    },
+    {
+      id: `a-${id}`,
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'x'.repeat(chars) }],
+    },
+  ];
+
+  it('does nothing under the ceiling, so the prefix stays byte-identical', () => {
+    const messages = [
+      ...filler('1', 1000),
+      ...filler('2', 1000),
+    ] as unknown as UIMessage[];
+    const kept = trimHistory(messages, {
+      maxMessages: 50,
+      minRecentMessages: 2,
+      maxContextChars: 10_000,
+      targetContextChars: 5_000,
+    });
+    expect(kept.map((m) => m.id)).toEqual(messages.map((m) => m.id));
+  });
+
+  it('cuts past the ceiling down to the target, oldest first, in one chunk', () => {
+    const messages = [
+      ...filler('1', 4000),
+      ...filler('2', 4000),
+      ...filler('3', 4000),
+      ...filler('4', 4000),
+    ] as unknown as UIMessage[];
+    const kept = trimHistory(messages, {
+      maxMessages: 50,
+      minRecentMessages: 2,
+      maxContextChars: 12_000,
+      targetContextChars: 8_000,
+    });
+
+    // Oldest exchanges dropped; the survivors start at a user message.
+    expect(kept[0]?.role).toBe('user');
+    expect(kept.length).toBeLessThan(messages.length);
+    const totalChars = kept.reduce(
+      (sum, m) => sum + JSON.stringify(m.parts ?? []).length,
+      0
+    );
+    expect(totalChars).toBeLessThanOrEqual(12_000);
+    // And the newest exchange is untouched.
+    expect(kept[kept.length - 1]?.id).toBe('a-4');
+  });
+
+  it('never cuts into the protected recent messages, even over budget', () => {
+    const messages = filler('1', 50_000) as unknown as UIMessage[];
+    const kept = trimHistory(messages, {
+      maxMessages: 50,
+      minRecentMessages: 2,
+      maxContextChars: 10_000,
+      targetContextChars: 5_000,
+    });
+    // Two messages, both protected: over budget but nothing to safely drop.
+    expect(kept.map((m) => m.id)).toEqual(['u-1', 'a-1']);
+  });
+});
