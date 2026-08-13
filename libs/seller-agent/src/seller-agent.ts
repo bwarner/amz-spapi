@@ -5041,6 +5041,12 @@ create-ad-negative-keywords / update-ad-negative-keywords):
 - These change the LIVE ad account and each one pauses for the user's explicit
   approval. Never present a change as done before the tool result returns, and
   never re-submit a batch the user declined.
+- The approval happens ON THE TOOL CALL: an Approve/Reject card appears and
+  nothing applies until the user presses Approve. So present the before → after
+  and CALL the tool in the same turn. NEVER ask "do you confirm? (yes/no)" in
+  text first — a typed "yes" grants nothing, the card still appears, and the
+  user has now been asked twice for one change (seen live). One gate, the
+  card's; your text presents the evidence, it does not collect consent.
 - Evidence before proposal: base bid and budget changes on a performance
   report (and negatives on a searchTerm report), read the CURRENT values
   first, and show a per-item before → after with the figures that justify each
