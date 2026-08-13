@@ -218,6 +218,38 @@ describe('detectReportKind', () => {
     expect(detectReportKind('"Foo","Bar"\n"1","2"').kind).toBeFalsy();
   });
 
+  it('identifies the ads console campaign export decisively, and apart from search terms', () => {
+    // Header verbatim from a live file (BOM included) — the export the Import
+    // page once handed to the INVOICE matchers, which scored it 0.13
+    // "unknown, needs confirmation" because it contained the word "total".
+    const header =
+      '﻿Date range,Portfolio name,Portfolio ID,Campaign ID,Campaign name,' +
+      'Ad group name,Ad group ID,Budget currency,Clicks,CTR,CPC,' +
+      'Main IMDb ad clicks,Viewable CPM (vCPM),Total cost,Sales,Units sold,' +
+      'ROAS,ROAS (reconciled),Detail page views';
+    const row =
+      '"Jul 13, 2026 - Aug 01, 2026",Ceramic Mug - B0DBH8H7DT,209213625716665,' +
+      '"=""555251554086397""","Auto (All Targets)",Catch All,' +
+      '"=""551059057840989""",USD,1050,1.2546%,0.26500,0,,278.25,341.69,17,' +
+      '1.22800,,';
+
+    const detected = detectReportKind(`${header}\n${row}`);
+    expect(detected.kind).toBe('campaign-performance');
+    expect(detected.decisive).toBe('campaign-performance');
+
+    const parsed = parseReport({
+      text: `${header}\n${row}`,
+      kind: 'campaign-performance',
+      sellerId: 'A1SELLER',
+    });
+    const [first] = parsed.rows;
+    expect(first.fields.campaignName).toBe('Auto (All Targets)');
+    expect(first.fields.portfolioName).toBe('Ceramic Mug - B0DBH8H7DT');
+    expect(first.numbers?.spend).toBeCloseTo(278.25);
+    expect(first.numbers?.sales).toBeCloseTo(341.69);
+    expect(first.numbers?.units).toBe(17);
+  });
+
   it('identifies a Sponsored Products search-term export decisively', () => {
     // Headers verbatim from the ads console's xlsx export (as CSV, the form
     // the importer sees after workbookAsCsv). "Customer Search Term" appears

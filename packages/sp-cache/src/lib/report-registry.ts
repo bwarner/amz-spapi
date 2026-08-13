@@ -27,7 +27,9 @@ export type ReportKind =
   /** Sponsored Products search terms — the first ADS-side report here. The
       rows store is seller-scoped, not API-scoped, so it holds ad exports as
       readily as FBA ones. */
-  | 'search-term';
+  | 'search-term'
+  /** The ads console's campaign/ad-group performance export. */
+  | 'campaign-performance';
 
 /** Logical fields we can join and reconcile on. */
 export type ReportFieldName =
@@ -462,6 +464,26 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       quantityReceived: ['quantityreceived', 'receivedquantity'],
       problemType: ['problemtype', 'issuetype', 'noncompliancetype', 'reason'],
       status: ['alertstatus', 'status'],
+    },
+  },
+  'campaign-performance': {
+    kind: 'campaign-performance',
+    reportType: 'SP_CAMPAIGN_PERFORMANCE_REPORT',
+    label: 'Sponsored Products campaign performance',
+    fields: {
+      // "Date range" holds a SPAN ("Jul 13, 2026 - Aug 01, 2026"), which the
+      // date normaliser cannot reduce to one day — the raw value is kept and
+      // the coverage window stays honest about not knowing.
+      date: ['daterange', 'startdate', 'date'],
+      portfolioName: ['portfolioname'],
+      campaignName: ['campaignname'],
+      adGroupName: ['adgroupname'],
+      currency: ['budgetcurrency', 'currency'],
+      clicks: ['clicks'],
+      // The console labels ad spend "Total cost" on this export.
+      spend: ['totalcost', 'spend', 'cost'],
+      sales: ['sales', '14daytotalsales', '7daytotalsales'],
+      units: ['unitssold', 'units'],
     },
   },
   'search-term': {

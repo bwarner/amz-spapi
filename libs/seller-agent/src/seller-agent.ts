@@ -3241,6 +3241,7 @@ function getReportTools(reportOps: SellerReportOps) {
     'settlement',
     'storage-fee',
     'search-term',
+    'campaign-performance',
   ]);
 
   return {
@@ -3326,7 +3327,10 @@ function getReportTools(reportOps: SellerReportOps) {
         'or quantity; ledger-detail -> quantity; search-term (Sponsored ' +
         'Products) -> spend, sales, clicks, impressions, orders or units, ' +
         'grouped by campaignName, adGroupName, searchTerm or matchType — how ' +
-        'you answer "which search terms convert in this campaign". Useful ' +
+        'you answer "which search terms convert in this campaign"; ' +
+        'campaign-performance (ads console campaign export) -> spend, sales, ' +
+        'clicks or units grouped by campaignName, adGroupName or ' +
+        'portfolioName. Useful ' +
         'groupings elsewhere: asin, msku, fnsku, date, ' +
         'fulfillmentCenter, amountType, amountDescription, eventType. An ' +
         'unknown field name comes back with the list of valid ones for that ' +

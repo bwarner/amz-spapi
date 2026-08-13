@@ -72,6 +72,7 @@ const DOCUMENT_LABELS: Record<string, string> = {
   'fba-box-label': 'FBA box label',
   'fnsku-label': 'FNSKU label',
   'design-artwork': 'Design artwork',
+  spreadsheet: 'Spreadsheet',
   unknown: 'Unrecognised',
 };
 
@@ -156,6 +157,8 @@ const REPORT_LABELS: Record<string, string> = {
   'inbound-performance': 'FBA Inbound Performance',
   settlement: 'Settlement (payments archive)',
   'storage-fee': 'FBA Monthly Storage Fees',
+  'search-term': 'Sponsored Products search terms',
+  'campaign-performance': 'Sponsored Products campaign performance',
 };
 
 export default function ReportsPage() {
@@ -280,7 +283,8 @@ export default function ReportsPage() {
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
           Reports (.txt, .tsv, .csv, .xlsx) — ledger, stranded, removals,
-          reimbursements, inbound performance, settlements, storage fees
+          reimbursements, inbound performance, settlements, storage fees, ads
+          search terms &amp; campaigns
           <br />
           Documents (.pdf, .docx, .ai, images) — invoices, receipts, POs, PODs,
           box designs
@@ -399,7 +403,10 @@ export default function ReportsPage() {
                 mapping that has drifted becomes visible instead of silent. */}
             {row.notReport ? (
               <p className="mt-3 text-xs text-muted-foreground">
-                Not a recognised Amazon report — stored as a document instead.
+                Not a recognised Amazon report kind — stored whole. Chat can
+                answer questions over every row of it (attach it there, or ask
+                about it by name). If this is a report the app should recognise,
+                say which and it can be added.
               </p>
             ) : null}
 

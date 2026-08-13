@@ -42,6 +42,14 @@ export type RecognisedKind =
   | 'fnsku-label'
   /** Packaging or label artwork — a versioned asset, not a cost document. */
   | 'design-artwork'
+  /**
+   * A tabular file that is not a recognised Amazon report. Never produced by
+   * the matchers — they read paper vocabulary, and running them over CSV text
+   * once scored a campaign export 0.13 "unknown, needs confirmation" because
+   * it contained the word "total". The import route assigns this kind
+   * directly for spreadsheet containers instead of asking the matchers.
+   */
+  | 'spreadsheet'
   /** Stored, but nobody knows what it is yet. */
   | 'unknown';
 

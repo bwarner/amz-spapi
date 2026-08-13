@@ -292,12 +292,37 @@ export async function POST(request: Request) {
     }
   }
 
-  const recognition = recognizeDocument({
-    fileName: file.name,
-    mimeType,
-    text,
-    noExtractableText,
-  });
+  // A spreadsheet is never shown to the paper-document matchers: they read
+  // invoice vocabulary, and run over CSV text they once scored a campaign
+  // export 0.13 "unknown — needs confirmation" because it contained the word
+  // "total". The same file attached in chat got the spreadsheet treatment
+  // (preview + query-spreadsheet) — the two routes must agree on what a
+  // tabular file IS.
+  const recognition = isSpreadsheet
+    ? {
+        kind: 'spreadsheet' as const,
+        confidence: 1,
+        needsUserChoice: false,
+        alternatives: [],
+        signals: [
+          {
+            reason: report
+              ? `Recognised and ingested as ${report.label}`
+              : spreadsheet
+              ? `Tabular file, ${spreadsheet.totalRows} rows — not a ` +
+                'recognised Amazon report kind; stored whole and queryable ' +
+                'in chat'
+              : 'Tabular file',
+            weight: 1,
+          },
+        ],
+      }
+    : recognizeDocument({
+        fileName: file.name,
+        mimeType,
+        text,
+        noExtractableText,
+      });
 
   // An FBA box label is the only document that carries what the SELLER shipped,
   // so read it now rather than leaving it as an undifferentiated file.
