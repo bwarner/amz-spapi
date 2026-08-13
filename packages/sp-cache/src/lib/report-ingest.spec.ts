@@ -244,6 +244,7 @@ describe('detectReportKind', () => {
     const parsed = parseReport({
       text: `${header}\n${row}`,
       kind: 'search-term',
+      sellerId: 'A1SELLER',
     });
     const [first] = parsed.rows;
     expect(first.fields.searchTerm).toBe('panama geisha coffee');
