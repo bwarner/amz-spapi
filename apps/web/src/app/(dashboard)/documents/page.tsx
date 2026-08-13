@@ -133,19 +133,126 @@ const ROLE_LABELS: Record<DocumentRole, string> = {
   other: 'Other',
 };
 
-/** Which filter a file answers to. A file can satisfy more than one. */
-type Filter = 'all' | 'reports' | 'purchase' | 'labels' | 'other';
+/**
+ * The library's row facts, derived once per file (design page 01: the list is
+ * a TABLE — kind, vendor, date, total, linked-to, status — with facets over
+ * the same fields, so both must come from one derivation or the sidebar
+ * counts drift from the rows).
+ */
+type RowStatus = 'review' | 'matched' | 'parsed' | 'unlinked';
 
-function matchesFilter(file: FileEntry, filter: Filter): boolean {
-  if (filter === 'all') return true;
-  const kinds = new Set(file.produced.map((item) => item.kind));
-  if (filter === 'reports') return kinds.has('report-rows');
-  if (filter === 'purchase')
-    return kinds.has('purchase-document') || kinds.has('issued-po-render');
-  if (filter === 'labels') return kinds.has('box-labels');
-  // "Other" is the residue — stored, classified as nothing in particular, and
-  // the group most likely to be worth deleting.
-  return kinds.size === 0;
+const STATUS_LABELS: Record<RowStatus, string> = {
+  review: 'Needs review',
+  matched: 'Matched',
+  parsed: 'Parsed',
+  unlinked: 'Unlinked',
+};
+
+const STATUS_STYLES: Record<RowStatus, string> = {
+  review: 'text-amber-700',
+  matched: 'text-emerald-700',
+  parsed: 'text-foreground',
+  unlinked: 'text-muted-foreground',
+};
+
+type DerivedRow = {
+  kind: string;
+  vendor?: string;
+  /** The date ON the document where one was read; else the upload day. */
+  date?: string;
+  total?: number;
+  currency?: string;
+  linkedTo: string[];
+  status: RowStatus;
+};
+
+function deriveRow(file: FileEntry): DerivedRow {
+  const doc = file.produced.find(
+    (item): item is Extract<Produced, { kind: 'purchase-document' }> =>
+      item.kind === 'purchase-document'
+  );
+  const labels = file.produced.find(
+    (item): item is Extract<Produced, { kind: 'box-labels' }> =>
+      item.kind === 'box-labels'
+  );
+  const report = file.produced.find(
+    (item): item is Extract<Produced, { kind: 'report-rows' }> =>
+      item.kind === 'report-rows'
+  );
+  const render = file.produced.find(
+    (item): item is Extract<Produced, { kind: 'issued-po-render' }> =>
+      item.kind === 'issued-po-render'
+  );
+
+  const uploadDay = new Date(file.uploadedAt).toISOString().slice(0, 10);
+
+  if (doc) {
+    const linkedTo = [
+      ...(doc.issuedPoNumber ? [doc.issuedPoNumber] : []),
+      ...(doc.shipmentIds ?? []),
+      ...(doc.purchaseId ? ['purchase'] : []),
+    ];
+    return {
+      kind: ROLE_LABELS[doc.role as DocumentRole] ?? doc.role,
+      vendor: doc.vendorName,
+      date: doc.documentDate ?? uploadDay,
+      total: doc.total,
+      currency: doc.currency,
+      linkedTo,
+      status: doc.needsReview
+        ? 'review'
+        : linkedTo.length
+        ? 'matched'
+        : 'unlinked',
+    };
+  }
+  if (labels) {
+    return {
+      kind: 'FBA box label',
+      date: uploadDay,
+      linkedTo: [labels.shipmentId],
+      status: 'matched',
+    };
+  }
+  if (report) {
+    return {
+      kind: report.label,
+      date: report.observedTo ?? uploadDay,
+      linkedTo:
+        report.observedFrom && report.observedTo
+          ? [`${report.observedFrom} → ${report.observedTo}`]
+          : [],
+      status: 'parsed',
+    };
+  }
+  if (render) {
+    return {
+      kind: 'Purchase order (issued)',
+      vendor: render.vendorName,
+      date: render.issueDate ?? uploadDay,
+      total: render.total,
+      currency: render.currency,
+      linkedTo: render.shipmentIds ?? [],
+      status: render.shipmentIds?.length ? 'matched' : 'unlinked',
+    };
+  }
+  return {
+    kind: file.mimeType?.startsWith('image/')
+      ? 'Image'
+      : file.mimeType === 'application/pdf'
+      ? 'PDF'
+      : 'Stored file',
+    date: uploadDay,
+    linkedTo: [],
+    status: 'unlinked',
+  };
+}
+
+function formatBytesTotal(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 function formatBytes(bytes?: number): string {
@@ -192,7 +299,9 @@ function FileIcon({ file }: { file: FileEntry }) {
 export default function DocumentsPage() {
   const [view, setView] = useState<DocumentCenter | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>('all');
+  const [kindFacet, setKindFacet] = useState<string | null>(null);
+  const [statusFacet, setStatusFacet] = useState<RowStatus | null>(null);
+  const [periodFacet, setPeriodFacet] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [pending, setPending] = useState<FileEntry | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -232,24 +341,62 @@ export default function DocumentsPage() {
     return map;
   }, [view]);
 
+  /** Row facts, computed once — the table and every facet count read these. */
+  const rows = useMemo(
+    () =>
+      new Map(
+        (view?.files ?? []).map((file) => [file.id, deriveRow(file)] as const)
+      ),
+    [view]
+  );
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (view?.files ?? []).filter((file) => {
-      if (!matchesFilter(file, filter)) return false;
+      const row = rows.get(file.id);
+      if (!row) return false;
+      if (kindFacet && row.kind !== kindFacet) return false;
+      if (statusFacet && row.status !== statusFacet) return false;
+      if (periodFacet && (row.date ?? '').slice(0, 7) !== periodFacet)
+        return false;
       if (!needle) return true;
       // Searching the vendor as well as the file name: half these files are
       // named `invoice-2.pdf` and the supplier is the only thing anyone
       // remembers about them.
-      const vendor = file.produced
-        .map((item) =>
-          item.kind === 'purchase-document' || item.kind === 'issued-po-render'
-            ? item.vendorName
-            : ''
-        )
-        .join(' ');
-      return `${file.fileName} ${vendor}`.toLowerCase().includes(needle);
+      return `${file.fileName} ${row.vendor ?? ''}`
+        .toLowerCase()
+        .includes(needle);
     });
-  }, [view, filter, query]);
+  }, [view, rows, kindFacet, statusFacet, periodFacet, query]);
+
+  /** Facet counts over the WHOLE library, so numbers hold still while
+   * filtering — a count that shrinks as you filter reads as data loss. */
+  const facets = useMemo(() => {
+    const kinds = new Map<string, number>();
+    const statuses = new Map<RowStatus, number>();
+    const periods = new Map<string, number>();
+    let bytes = 0;
+    let lastImport = 0;
+    for (const file of view?.files ?? []) {
+      const row = rows.get(file.id);
+      if (!row) continue;
+      kinds.set(row.kind, (kinds.get(row.kind) ?? 0) + 1);
+      statuses.set(row.status, (statuses.get(row.status) ?? 0) + 1);
+      const month = (row.date ?? '').slice(0, 7);
+      if (month) periods.set(month, (periods.get(month) ?? 0) + 1);
+      bytes += file.sizeBytes ?? 0;
+      lastImport = Math.max(lastImport, file.uploadedAt);
+    }
+    return {
+      kinds: [...kinds.entries()].sort((a, b) => b[1] - a[1]),
+      statuses,
+      periods: [...periods.entries()]
+        .sort((a, b) => b[0].localeCompare(a[0]))
+        .slice(0, 8),
+      bytes,
+      lastImport,
+    };
+  }, [view, rows]);
 
   const remove = useCallback(
     async (file: FileEntry) => {
@@ -323,7 +470,9 @@ export default function DocumentsPage() {
   const jumpToFile = useCallback((fileId: string) => {
     // Clear the filters first: the chosen file may not be in the current facet,
     // and scrolling to a row that is filtered out looks like nothing happened.
-    setFilter('all');
+    setKindFacet(null);
+    setStatusFacet(null);
+    setPeriodFacet(null);
     setQuery('');
     setHighlighted(fileId);
     // After the state above has rendered the row, not before.
@@ -444,10 +593,38 @@ export default function DocumentsPage() {
 
       {view?.files.length ? (
         <section className="mt-8">
+          {/* The review queue, surfaced before the list (design page 01): the
+              count, why things land here, and one click to see only them. */}
+          {(facets.statuses.get('review') ?? 0) > 0 ? (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4">
+              <div>
+                <p className="text-sm font-medium text-amber-900">
+                  {facets.statuses.get('review')} need review
+                </p>
+                <p className="mt-0.5 text-xs text-amber-800">
+                  Arithmetic that didn't check out, ambiguous dates, and kinds
+                  the recogniser couldn't call.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setStatusFacet('review');
+                  setKindFacet(null);
+                  setPeriodFacet(null);
+                }}
+              >
+                Start reviewing
+              </Button>
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="mr-auto text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Files ({view.files.length})
             </h2>
+            <span className="text-xs text-muted-foreground">newest first</span>
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -456,60 +633,99 @@ export default function DocumentsPage() {
             />
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-1">
-            {(
-              [
-                ['all', 'All'],
-                ['reports', 'Reports'],
-                ['purchase', 'Invoices & receipts'],
-                ['labels', 'Box labels'],
-                ['other', 'Everything else'],
-              ] as Array<[Filter, string]>
-            ).map(([value, label]) => {
-              // Counted from the whole library, not the visible rows, so the
-              // number does not change as the seller types in the box above.
-              const count = (view?.files ?? []).filter((file) =>
-                matchesFilter(file, value)
-              ).length;
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setFilter(value)}
-                  disabled={count === 0 && value !== 'all'}
-                  className={cn(
-                    'rounded-full px-3 py-1 text-xs font-medium transition-colors',
-                    filter === value
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted text-muted-foreground hover:text-foreground',
-                    count === 0 && value !== 'all' && 'opacity-40'
-                  )}
-                >
-                  {label}
-                  <span className="ml-1.5 tabular-nums opacity-70">
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 space-y-2">
-            {visible.map((file) => (
-              <FileRow
-                key={file.id}
-                file={file}
-                highlighted={highlighted === file.id}
-                busy={busy}
-                onDelete={() => setPending(file)}
-                onRoleChange={changeRole}
+          <div className="mt-4 gap-6 lg:grid lg:grid-cols-[190px_minmax(0,1fr)]">
+            {/* Facets: the same derivation the rows use, counted over the
+                whole library so the numbers hold still while filtering. */}
+            <aside className="mb-4 lg:mb-0">
+              <Facet
+                title="Kind"
+                entries={facets.kinds}
+                active={kindFacet}
+                onPick={setKindFacet}
               />
-            ))}
-            {!visible.length ? (
-              <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                Nothing matches that.
+              <Facet
+                title="Status"
+                entries={(
+                  ['review', 'matched', 'parsed', 'unlinked'] as RowStatus[]
+                )
+                  .filter((status) => facets.statuses.has(status))
+                  .map((status) => [
+                    STATUS_LABELS[status],
+                    facets.statuses.get(status) ?? 0,
+                  ])}
+                active={statusFacet ? STATUS_LABELS[statusFacet] : null}
+                onPick={(label) =>
+                  setStatusFacet(
+                    label === null
+                      ? null
+                      : ((Object.entries(STATUS_LABELS).find(
+                          ([, text]) => text === label
+                        )?.[0] ?? null) as RowStatus | null)
+                  )
+                }
+              />
+              <Facet
+                title="Period"
+                entries={facets.periods}
+                active={periodFacet}
+                onPick={setPeriodFacet}
+              />
+              <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
+                <p>
+                  {view.files.length} document
+                  {view.files.length === 1 ? '' : 's'} ·{' '}
+                  {formatBytesTotal(facets.bytes)}
+                </p>
+                {facets.lastImport ? (
+                  <p className="mt-0.5">
+                    Last import {formatDay(facets.lastImport)}
+                  </p>
+                ) : null}
+              </div>
+            </aside>
+
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-muted-foreground">
+                  <tr className="border-b text-left">
+                    <th className="px-3 py-2 font-medium">Document</th>
+                    <th className="px-3 py-2 font-medium">Kind</th>
+                    <th className="px-3 py-2 font-medium">Vendor</th>
+                    <th className="px-3 py-2 font-medium">Date</th>
+                    <th className="px-3 py-2 text-right font-medium">Total</th>
+                    <th className="px-3 py-2 font-medium">Linked to</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((file) => (
+                    <LibraryRow
+                      key={file.id}
+                      file={file}
+                      row={rows.get(file.id)}
+                      highlighted={highlighted === file.id}
+                      busy={busy}
+                      onDelete={() => setPending(file)}
+                      onRoleChange={changeRole}
+                    />
+                  ))}
+                  {!visible.length ? (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="p-6 text-center text-sm text-muted-foreground"
+                      >
+                        Nothing matches that.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+              <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+                End of the list — {visible.length} shown
               </p>
-            ) : null}
+            </div>
           </div>
         </section>
       ) : null}
@@ -584,14 +800,56 @@ function PurchaseCard({
   );
 }
 
-function FileRow({
+function Facet({
+  title,
+  entries,
+  active,
+  onPick,
+}: {
+  title: string;
+  entries: Array<readonly [string, number]>;
+  active: string | null;
+  onPick: (value: string | null) => void;
+}) {
+  if (!entries.length) return null;
+  return (
+    <div className="mt-4 first:mt-0">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </h3>
+      <ul className="mt-1.5 space-y-0.5">
+        {entries.map(([label, count]) => (
+          <li key={label}>
+            <button
+              type="button"
+              onClick={() => onPick(active === label ? null : label)}
+              className={cn(
+                'flex w-full items-center justify-between rounded px-1.5 py-0.5 text-left text-xs',
+                active === label
+                  ? 'bg-muted font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <span className="truncate">{label}</span>
+              <span className="ml-2 shrink-0 tabular-nums">{count}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function LibraryRow({
   file,
+  row,
   busy,
   highlighted,
   onDelete,
   onRoleChange,
 }: {
   file: FileEntry;
+  row?: DerivedRow;
   highlighted?: boolean;
   busy: string | null;
   onDelete: () => void;
@@ -603,212 +861,136 @@ function FileRow({
   );
 
   return (
-    <div
+    <tr
       id={`file-${file.id}`}
       className={cn(
-        'rounded-lg border p-4 transition-colors',
+        'border-b align-top transition-colors last:border-0',
         highlighted && 'border-primary bg-primary/5'
       )}
     >
-      <div className="flex items-center gap-2">
-        <FileIcon file={file} />
-        {/* A file stored before names were kept has no name to show. Italic and
-            muted, so it does not read as a file actually called that.
-
-            Linked only when there is a document behind it: the detail view is
-            about extracted figures, and a box-label PDF or an unread upload has
-            none — a link to an empty page is worse than no link. */}
+      <td className="max-w-64 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <FileIcon file={file} />
+          {/* Linked only when there is a document behind it: the detail view is
+              about extracted figures, and an unread upload has none. */}
+          {document && file.assetId ? (
+            <Link
+              href={`/documents/${file.assetId}`}
+              className={cn(
+                'truncate font-medium underline-offset-4 hover:underline',
+                file.nameUnknown && 'italic text-muted-foreground'
+              )}
+              title={file.fileName}
+            >
+              {file.fileName}
+            </Link>
+          ) : (
+            <span
+              className={cn(
+                'truncate font-medium',
+                file.nameUnknown && 'italic text-muted-foreground'
+              )}
+              title={file.fileName}
+            >
+              {file.fileName}
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          {[file.mimeType, file.sizeBytes ? formatBytes(file.sizeBytes) : null]
+            .filter(Boolean)
+            .join(' · ')}
+          {/* An ingested report with no stored bytes: say so, because the
+              missing Download button otherwise looks like a fault. */}
+          {!file.assetId ? ' · rows only — file not kept' : ''}
+        </p>
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-xs">
+        {document ? (
+          // Filing is an ANSWER the seller can change right here — the same
+          // select the old card carried, in a column instead.
+          <select
+            value={document.role}
+            disabled={busy === document.documentId}
+            onChange={(event) =>
+              onRoleChange(
+                document.documentId,
+                event.target.value as DocumentRole
+              )
+            }
+            className="h-7 max-w-36 rounded-md border bg-background px-1 text-xs text-foreground"
+          >
+            {DocumentRoleSchema.options.map((role) => (
+              <option key={role} value={role}>
+                {ROLE_LABELS[role]}
+              </option>
+            ))}
+          </select>
+        ) : (
+          row?.kind ?? '—'
+        )}
+      </td>
+      <td className="max-w-36 truncate px-3 py-2 text-xs" title={row?.vendor}>
+        {row?.vendor ?? '—'}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-xs tabular-nums">
+        {row?.date ?? '—'}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-right text-xs tabular-nums">
+        {formatMoney(row?.total, row?.currency) ?? '—'}
+      </td>
+      <td
+        className="max-w-40 truncate px-3 py-2 text-xs"
+        title={row?.linkedTo.join(', ')}
+      >
+        {row?.linkedTo.length ? row.linkedTo.join(', ') : '—'}
+      </td>
+      <td
+        className={cn(
+          'whitespace-nowrap px-3 py-2 text-xs',
+          STATUS_STYLES[row?.status ?? 'unlinked']
+        )}
+      >
         {document && file.assetId ? (
           <Link
             href={`/documents/${file.assetId}`}
-            className={cn(
-              'truncate text-sm font-medium underline-offset-4 hover:underline',
-              file.nameUnknown && 'italic text-muted-foreground'
-            )}
+            className="underline-offset-4 hover:underline"
           >
-            {file.fileName}
+            {STATUS_LABELS[row?.status ?? 'unlinked']}
           </Link>
         ) : (
-          <span
-            className={cn(
-              'truncate text-sm font-medium',
-              file.nameUnknown && 'italic text-muted-foreground'
-            )}
-          >
-            {file.fileName}
-          </span>
+          STATUS_LABELS[row?.status ?? 'unlinked']
         )}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {formatDay(file.uploadedAt)}
-        </span>
-      </div>
-
-      <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-        {file.sizeBytes ? <span>{formatBytes(file.sizeBytes)}</span> : null}
-        {file.mimeType ? <span>{file.mimeType}</span> : null}
-        {/* An ingested report with no stored bytes: say so, because the
-            missing Download button otherwise looks like a fault. */}
-        {!file.assetId ? <span>rows only — file not kept</span> : null}
-      </div>
-
-      {file.produced.length ? (
-        <ul className="mt-3 space-y-1.5">
-          {file.produced.map((item, index) => (
-            <li key={index} className="text-sm">
-              <ProducedLine item={item} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">
-          Stored, but nothing was read from it.
-        </p>
-      )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-right">
         {file.assetId ? (
-          <Button asChild size="sm" variant="outline">
-            <a href={`/api/a-plus/assets/${file.assetId}`} download>
-              <Download className="mr-1.5 h-3.5 w-3.5" />
-              Download
+          <Button
+            asChild
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 p-0 text-muted-foreground"
+          >
+            <a
+              href={`/api/a-plus/assets/${file.assetId}`}
+              download
+              aria-label="Download"
+            >
+              <Download className="h-3.5 w-3.5" />
             </a>
           </Button>
         ) : null}
-
-        {document ? (
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            Filed as
-            <select
-              value={document.role}
-              disabled={busy === document.documentId}
-              onChange={(event) =>
-                onRoleChange(
-                  document.documentId,
-                  event.target.value as DocumentRole
-                )
-              }
-              className="h-8 rounded-md border bg-background px-2 text-sm text-foreground"
-            >
-              {DocumentRoleSchema.options.map((role) => (
-                <option key={role} value={role}>
-                  {ROLE_LABELS[role]}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
-        {document && file.assetId ? (
-          <Button asChild size="sm" variant="outline">
-            <Link href={`/documents/${file.assetId}`}>
-              {document.needsReview ? 'Review' : 'Open'}
-            </Link>
-          </Button>
-        ) : null}
-
         <Button
           size="sm"
           variant="ghost"
-          className="ml-auto text-muted-foreground hover:text-destructive"
+          aria-label="Delete"
+          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
           disabled={busy === file.id}
           onClick={onDelete}
         >
-          <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-          Delete
+          <Trash2 className="h-3.5 w-3.5" />
         </Button>
-      </div>
-    </div>
-  );
-}
-
-function ProducedLine({ item }: { item: Produced }) {
-  if (item.kind === 'report-rows') {
-    return (
-      <span>
-        <span className="font-medium">{item.label}</span>
-        <span className="text-muted-foreground">
-          {/* What the FILE holds, not what this import added. A re-import of an
-              overlapping range records rowsNew: 0 — true, and not what anyone
-              means by "how big is this file". */}
-          {' — '}
-          {item.rowsParsed.toLocaleString()} rows
-          {item.observedFrom && item.observedTo
-            ? `, ${item.observedFrom} → ${item.observedTo}`
-            : ''}
-          {item.rowsNew === 0 && item.rowsParsed > 0
-            ? ' (all already held when imported)'
-            : ''}
-        </span>
-        {item.unmappedHeaders?.length ? (
-          <span className="block text-xs text-amber-700">
-            Columns not recognised: {item.unmappedHeaders.join(', ')}
-          </span>
-        ) : null}
-      </span>
-    );
-  }
-
-  if (item.kind === 'box-labels') {
-    return (
-      <span>
-        <span className="font-medium">Shipment {item.shipmentId}</span>
-        <span className="text-muted-foreground">
-          {` — ${item.boxes} ${item.boxes === 1 ? 'box' : 'boxes'}, ${
-            item.units
-          } units`}
-          {item.destinationFc ? ` to ${item.destinationFc}` : ''}
-        </span>
-      </span>
-    );
-  }
-
-  if (item.kind === 'issued-po-render') {
-    const total = formatMoney(item.total, item.currency);
-    return (
-      <span>
-        <span className="font-medium">Purchase order {item.poNumber}</span>
-        <span className="text-muted-foreground">
-          {' — issued in Sellavant'}
-          {item.vendorName ? ` — ${item.vendorName}` : ''}
-          {item.issueDate ? `, ${item.issueDate}` : ''}
-          {total ? `, ${total}` : ''}
-          {item.shipmentIds?.length
-            ? ` — shipment ${item.shipmentIds.join(', ')}`
-            : ''}
-        </span>
-        {/* Deleting this file loses nothing: the order re-renders on the next
-            download. Worth a word here, because everywhere else on this page
-            deletion is destructive. */}
-        <span className="block text-xs text-muted-foreground">
-          The order's printable file — re-created on demand if deleted.
-        </span>
-      </span>
-    );
-  }
-
-  const total = formatMoney(item.total, item.currency);
-  return (
-    <span>
-      <span className="font-medium">{ROLE_LABELS[item.role]}</span>
-      <span className="text-muted-foreground">
-        {item.vendorName ? ` — ${item.vendorName}` : ''}
-        {item.documentDate ? `, ${item.documentDate}` : ''}
-        {total ? `, ${total}` : ''}
-        {/* Same number as an order we issued: this file is that order's copy,
-            not a second PO. */}
-        {item.issuedPoNumber
-          ? ` — copy of ${item.issuedPoNumber}, issued in Sellavant`
-          : ''}
-        {item.shipmentIds?.length
-          ? ` — shipment ${item.shipmentIds.join(', ')}`
-          : ''}
-      </span>
-      {item.needsReview ? (
-        <span className="block text-xs text-amber-700">
-          Needs a look before these figures are used as cost.
-        </span>
-      ) : null}
-    </span>
+      </td>
+    </tr>
   );
 }
 
