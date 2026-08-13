@@ -5,6 +5,7 @@ import {
   documentStorage,
   getStoredDocument,
   listDocuments,
+  dismissSuggestedLink,
   purchaseGrouping,
   roleForRecognisedKind,
   setDocumentRole,
@@ -275,6 +276,39 @@ describe('purchaseGrouping', () => {
       'auth0|seller::asset-1',
       'auth0|seller::asset-2',
     ]);
+  });
+
+  it('a suggestion answered "these are separate" stays answered', async () => {
+    // Same vendor, same day, nothing shared — exactly the pairing the
+    // suggester proposes and exactly the one that is often WRONG: two
+    // same-day invoices with sequential numbers are two orders, and grouping
+    // them makes one invoice the cost basis for both. Until this filter, the
+    // only way to silence the suggestion was to accept it.
+    await store({
+      assetId: 'asset-1',
+      extracted: extracted({ vendorName: 'Same Day Co' }),
+    });
+    await store({
+      assetId: 'asset-2',
+      extracted: extracted({ vendorName: 'Same Day Co' }),
+    });
+
+    const before = await purchaseGrouping({ userId: 'auth0|seller' });
+    expect(before.suggestions).toHaveLength(1);
+
+    // One direction suffices for the filter; the route writes both anyway so
+    // the answer survives whichever document is deleted first.
+    await dismissSuggestedLink({
+      userId: 'auth0|seller',
+      documentId: 'auth0|seller::asset-1',
+      dismissedDocumentId: 'auth0|seller::asset-2',
+    });
+
+    const after = await purchaseGrouping({ userId: 'auth0|seller' });
+    expect(after.suggestions).toHaveLength(0);
+    // The documents themselves stay listed and ungrouped — the answer removed
+    // a question, not a file.
+    expect(after.documents).toHaveLength(2);
   });
 
   it('returns the documents alongside, so a caller need not fetch twice', async () => {

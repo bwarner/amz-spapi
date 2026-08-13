@@ -248,6 +248,31 @@ function deriveRow(file: FileEntry): DerivedRow {
   };
 }
 
+/** Rows per page. Enough that a normal library is one page. */
+const PAGE_SIZE = 50;
+
+/**
+ * The month bucket a row files under. Extracted document dates are USUALLY
+ * ISO, but a raw "Jul 31, 2026" reaches here off some documents — sliced
+ * blindly that minted a garbage facet named "Jul 31," (seen live). A date
+ * that does not start ISO buckets by upload month instead.
+ */
+function monthKeyOf(date: string | undefined, uploadedAt: number): string {
+  if (date && /^\d{4}-\d{2}/.test(date)) return date.slice(0, 7);
+  return new Date(uploadedAt).toISOString().slice(0, 7);
+}
+
+/** "2026-08" → "Aug 2026". The key stays ISO for sorting; only eyes get this. */
+function monthLabel(key: string): string {
+  const [year, month] = key.split('-').map(Number);
+  if (!year || !month) return key;
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 function formatBytesTotal(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   if (bytes < 1024 * 1024 * 1024)
@@ -303,6 +328,7 @@ export default function DocumentsPage() {
   const [statusFacet, setStatusFacet] = useState<RowStatus | null>(null);
   const [periodFacet, setPeriodFacet] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
   const [pending, setPending] = useState<FileEntry | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   /**
@@ -357,7 +383,7 @@ export default function DocumentsPage() {
       if (!row) return false;
       if (kindFacet && row.kind !== kindFacet) return false;
       if (statusFacet && row.status !== statusFacet) return false;
-      if (periodFacet && (row.date ?? '').slice(0, 7) !== periodFacet)
+      if (periodFacet && monthKeyOf(row.date, file.uploadedAt) !== periodFacet)
         return false;
       if (!needle) return true;
       // Searching the vendor as well as the file name: half these files are
@@ -368,6 +394,13 @@ export default function DocumentsPage() {
         .includes(needle);
     });
   }, [view, rows, kindFacet, statusFacet, periodFacet, query]);
+
+  const pageCount = Math.max(Math.ceil(visible.length / PAGE_SIZE), 1);
+  const currentPage = Math.min(page, pageCount - 1);
+  const paged = visible.slice(
+    currentPage * PAGE_SIZE,
+    (currentPage + 1) * PAGE_SIZE
+  );
 
   /** Facet counts over the WHOLE library, so numbers hold still while
    * filtering — a count that shrinks as you filter reads as data loss. */
@@ -382,8 +415,8 @@ export default function DocumentsPage() {
       if (!row) continue;
       kinds.set(row.kind, (kinds.get(row.kind) ?? 0) + 1);
       statuses.set(row.status, (statuses.get(row.status) ?? 0) + 1);
-      const month = (row.date ?? '').slice(0, 7);
-      if (month) periods.set(month, (periods.get(month) ?? 0) + 1);
+      const month = monthKeyOf(row.date, file.uploadedAt);
+      periods.set(month, (periods.get(month) ?? 0) + 1);
       bytes += file.sizeBytes ?? 0;
       lastImport = Math.max(lastImport, file.uploadedAt);
     }
@@ -467,21 +500,53 @@ export default function DocumentsPage() {
     [load]
   );
 
-  const jumpToFile = useCallback((fileId: string) => {
-    // Clear the filters first: the chosen file may not be in the current facet,
-    // and scrolling to a row that is filtered out looks like nothing happened.
-    setKindFacet(null);
-    setStatusFacet(null);
-    setPeriodFacet(null);
-    setQuery('');
-    setHighlighted(fileId);
-    // After the state above has rendered the row, not before.
-    requestAnimationFrame(() => {
-      document
-        .getElementById(`file-${fileId}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-  }, []);
+  // The other answer. A suggestion with only an accept button is a nag, and
+  // for two same-day invoices from one supplier, accepting is exactly wrong —
+  // it makes one invoice the cost basis for both.
+  const rejectPurchase = useCallback(
+    async (documentIds: string[]) => {
+      setBusy(documentIds.join(','));
+      try {
+        const response = await fetch('/api/documents/purchase/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ documentIds }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          setError(payload.error ?? 'Could not record that.');
+          return;
+        }
+        await load();
+      } finally {
+        setBusy(null);
+      }
+    },
+    [load]
+  );
+
+  const jumpToFile = useCallback(
+    (fileId: string) => {
+      // Clear the filters first: the chosen file may not be in the current
+      // facet, and scrolling to a row that is filtered out looks like nothing
+      // happened. Then land on the PAGE that holds it — with pagination, the
+      // row may not be rendered at all otherwise.
+      setKindFacet(null);
+      setStatusFacet(null);
+      setPeriodFacet(null);
+      setQuery('');
+      const index = (view?.files ?? []).findIndex((file) => file.id === fileId);
+      setPage(index >= 0 ? Math.floor(index / PAGE_SIZE) : 0);
+      setHighlighted(fileId);
+      // After the state above has rendered the row, not before.
+      requestAnimationFrame(() => {
+        document
+          .getElementById(`file-${fileId}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    },
+    [view]
+  );
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6">
@@ -575,16 +640,26 @@ export default function DocumentsPage() {
                     </li>
                   ))}
                 </ul>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="mt-3"
-                  disabled={busy === suggestion.documentIds.join(',')}
-                  onClick={() => confirmPurchase(suggestion.documentIds)}
-                >
-                  <Link2 className="mr-1.5 h-3.5 w-3.5" />
-                  These are one purchase
-                </Button>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy === suggestion.documentIds.join(',')}
+                    onClick={() => confirmPurchase(suggestion.documentIds)}
+                  >
+                    <Link2 className="mr-1.5 h-3.5 w-3.5" />
+                    These are one purchase
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    disabled={busy === suggestion.documentIds.join(',')}
+                    onClick={() => rejectPurchase(suggestion.documentIds)}
+                  >
+                    These are separate
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
@@ -613,6 +688,7 @@ export default function DocumentsPage() {
                   setStatusFacet('review');
                   setKindFacet(null);
                   setPeriodFacet(null);
+                  setPage(0);
                 }}
               >
                 Start reviewing
@@ -627,7 +703,10 @@ export default function DocumentsPage() {
             <span className="text-xs text-muted-foreground">newest first</span>
             <Input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(0);
+              }}
               placeholder="Search name or supplier"
               className="h-8 w-full sm:w-56"
             />
@@ -641,7 +720,10 @@ export default function DocumentsPage() {
                 title="Kind"
                 entries={facets.kinds}
                 active={kindFacet}
-                onPick={setKindFacet}
+                onPick={(value) => {
+                  setKindFacet(value);
+                  setPage(0);
+                }}
               />
               <Facet
                 title="Status"
@@ -654,21 +736,26 @@ export default function DocumentsPage() {
                     facets.statuses.get(status) ?? 0,
                   ])}
                 active={statusFacet ? STATUS_LABELS[statusFacet] : null}
-                onPick={(label) =>
+                onPick={(label) => {
+                  setPage(0);
                   setStatusFacet(
                     label === null
                       ? null
                       : ((Object.entries(STATUS_LABELS).find(
                           ([, text]) => text === label
                         )?.[0] ?? null) as RowStatus | null)
-                  )
-                }
+                  );
+                }}
               />
               <Facet
                 title="Period"
                 entries={facets.periods}
                 active={periodFacet}
-                onPick={setPeriodFacet}
+                onPick={(value) => {
+                  setPeriodFacet(value);
+                  setPage(0);
+                }}
+                format={monthLabel}
               />
               <div className="mt-4 border-t pt-3 text-xs text-muted-foreground">
                 <p>
@@ -699,7 +786,7 @@ export default function DocumentsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((file) => (
+                  {paged.map((file) => (
                     <LibraryRow
                       key={file.id}
                       file={file}
@@ -722,9 +809,40 @@ export default function DocumentsPage() {
                   ) : null}
                 </tbody>
               </table>
-              <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-                End of the list — {visible.length} shown
-              </p>
+              <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                <span>
+                  {visible.length > PAGE_SIZE
+                    ? `Showing ${currentPage * PAGE_SIZE + 1}\u2013${
+                        currentPage * PAGE_SIZE + paged.length
+                      } of ${visible.length}`
+                    : `End of the list \u2014 ${visible.length} shown`}
+                </span>
+                {pageCount > 1 ? (
+                  <span className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2"
+                      disabled={currentPage === 0}
+                      onClick={() => setPage(currentPage - 1)}
+                    >
+                      Previous
+                    </Button>
+                    <span className="tabular-nums">
+                      {currentPage + 1}/{pageCount}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2"
+                      disabled={currentPage >= pageCount - 1}
+                      onClick={() => setPage(currentPage + 1)}
+                    >
+                      Next
+                    </Button>
+                  </span>
+                ) : null}
+              </div>
             </div>
           </div>
         </section>
@@ -805,11 +923,15 @@ function Facet({
   entries,
   active,
   onPick,
+  format,
 }: {
   title: string;
   entries: Array<readonly [string, number]>;
   active: string | null;
   onPick: (value: string | null) => void;
+  /** Display transform for a key — the Period facet turns "2026-08" into
+      "Aug 2026" while filtering keeps the sortable ISO key. */
+  format?: (key: string) => string;
 }) {
   if (!entries.length) return null;
   return (
@@ -830,7 +952,7 @@ function Facet({
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              <span className="truncate">{label}</span>
+              <span className="truncate">{format?.(label) ?? label}</span>
               <span className="ml-2 shrink-0 tabular-nums">{count}</span>
             </button>
           </li>
