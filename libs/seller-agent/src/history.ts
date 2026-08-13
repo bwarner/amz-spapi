@@ -3,14 +3,49 @@ import type { ModelMessage, UIMessage } from 'ai';
 export interface HistoryConfig {
   maxMessages?: number;
   minRecentMessages?: number;
+  /**
+   * Per-tool-output character cap on REPLAY. A tool result larger than this is
+   * replaced with a marked, clipped preview before it is sent back to the
+   * model. Applied uniformly to every settled result, every request — a cap
+   * that spared "recent" results would rewrite each one the turn it stopped
+   * being recent, invalidating the prompt cache mid-prefix every turn.
+   */
+  maxToolOutputChars?: number;
+  /**
+   * Context budget, in characters of serialised parts (≈4 chars per token).
+   * `maxContextChars` is the ceiling that TRIGGERS a trim; the trim then cuts
+   * to `targetContextChars`. The gap between them is hysteresis: trimming to
+   * the target leaves headroom, so the prefix then stays byte-identical —
+   * cacheable — for many turns before the next trim.
+   */
+  maxContextChars?: number;
+  targetContextChars?: number;
 }
 
 const DEFAULT_MAX_MESSAGES = 20;
 const DEFAULT_MIN_RECENT_MESSAGES = 10;
+/** ~2k tokens. The largest single result worth replaying wholesale. */
+const DEFAULT_MAX_TOOL_OUTPUT_CHARS = 8_000;
+/** ~60k tokens of history — the ceiling that triggers a trim… */
+const DEFAULT_MAX_CONTEXT_CHARS = 240_000;
+/** …and the ~40k-token low-water mark it cuts down to. */
+const DEFAULT_TARGET_CONTEXT_CHARS = 160_000;
 
 /**
  * Trims conversation history to reduce token usage while preserving context.
- * Preserves tool call/result pairs and ensures remaining messages start with a user message.
+ *
+ * Three passes, in order (#133 — one live conversation reached 948k tokens
+ * per TURN and burned the daily cap in seven):
+ *
+ *  1. Sanitise every message: repair malformed tool inputs, drop orphaned
+ *     approvals, and cap oversized tool OUTPUTS with a marked preview.
+ *  2. Count-based trim (the original behaviour): oldest messages go once the
+ *     conversation exceeds `maxMessages`.
+ *  3. Budget-based trim: if what remains still serialises over
+ *     `maxContextChars`, drop oldest messages down to `targetContextChars`.
+ *
+ * Both trims preserve tool call/result pairing and re-align to a user
+ * message, and neither cuts into the last `minRecentMessages`.
  */
 export function trimHistory(
   messages: UIMessage[],
@@ -20,19 +55,34 @@ export function trimHistory(
   const minRecentMessages =
     config.minRecentMessages ?? DEFAULT_MIN_RECENT_MESSAGES;
 
-  if (messages.length <= maxMessages) {
-    return sanitizeMessages(messages);
-  }
+  const sanitized = sanitizeMessages(
+    messages,
+    config.maxToolOutputChars ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS
+  );
 
-  const toRemove = messages.length - maxMessages;
+  const counted =
+    sanitized.length <= maxMessages
+      ? sanitized
+      : trimFrom(sanitized, sanitized.length - maxMessages, minRecentMessages);
+
+  return trimToBudget(counted, {
+    maxContextChars: config.maxContextChars ?? DEFAULT_MAX_CONTEXT_CHARS,
+    targetContextChars:
+      config.targetContextChars ?? DEFAULT_TARGET_CONTEXT_CHARS,
+    minRecentMessages,
+  });
+}
+
+/** Drop roughly `toRemove` oldest messages, respecting pairing and starts. */
+function trimFrom(
+  messages: UIMessage[],
+  toRemove: number,
+  minRecentMessages: number
+): UIMessage[] {
   const safeToRemove = Math.min(toRemove, messages.length - minRecentMessages);
-
-  if (safeToRemove <= 0) {
-    return sanitizeMessages(messages);
-  }
+  if (safeToRemove <= 0) return messages;
 
   let trimIndex = safeToRemove;
-
   for (let i = trimIndex; i < messages.length - minRecentMessages; i++) {
     const msg = messages[i];
     if (msg?.role === 'user') {
@@ -45,12 +95,51 @@ export function trimHistory(
   }
 
   let trimmed = messages.slice(trimIndex);
-
   while (trimmed.length > minRecentMessages && trimmed[0]?.role !== 'user') {
     trimmed = trimmed.slice(1);
   }
+  return trimmed;
+}
 
-  return sanitizeMessages(trimmed);
+/** Serialised size of one message's parts — the replay cost proxy. */
+function messageChars(message: UIMessage): number {
+  try {
+    return JSON.stringify(message.parts ?? []).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Enforce the character budget by dropping oldest messages.
+ *
+ * Does NOTHING while under the ceiling — that is the hysteresis that keeps
+ * the prefix byte-identical (and therefore prompt-cacheable) between trims.
+ * When the ceiling is crossed, cuts to the lower target in one chunk, so the
+ * next many turns are again append-only.
+ */
+function trimToBudget(
+  messages: UIMessage[],
+  budget: {
+    maxContextChars: number;
+    targetContextChars: number;
+    minRecentMessages: number;
+  }
+): UIMessage[] {
+  const sizes = messages.map(messageChars);
+  let total = sizes.reduce((sum, size) => sum + size, 0);
+  if (total <= budget.maxContextChars) return messages;
+
+  let drop = 0;
+  while (
+    total > budget.targetContextChars &&
+    drop < messages.length - budget.minRecentMessages
+  ) {
+    total -= sizes[drop];
+    drop += 1;
+  }
+  if (drop === 0) return messages;
+  return trimFrom(messages, drop, budget.minRecentMessages);
 }
 
 function hasUnresolvedToolCalls(message: UIMessage): boolean {
@@ -134,7 +223,53 @@ function repairToolInput<T extends { type: string; input?: unknown }>(
   return isDictionary ? part : { ...part, input: {} };
 }
 
-function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
+/**
+ * Cap an oversized tool OUTPUT with a marked, clipped preview.
+ *
+ * The compounding at the heart of #133: a tool result enters the history once
+ * and is then re-sent on every step of every later turn. One 100k-character
+ * report dump costs ~25k tokens × every subsequent model call. The current
+ * turn is unaffected — the SDK feeds the model this turn's results directly,
+ * full-size — so what is capped here is exactly the replay, where the
+ * assistant's own answer text already carries the conclusions.
+ *
+ * The marker says what happened and what to do, because a silent clip reads
+ * as a complete result: the model would total a truncated list and present
+ * the sum as the whole (the same failure the spreadsheet preview note
+ * exists to prevent).
+ */
+function capToolOutput<
+  T extends { type: string; state?: string; output?: unknown }
+>(part: T, maxChars: number): T {
+  if (!part.type.startsWith('tool-') || part.type === 'tool-result') {
+    return part;
+  }
+  if (part.output === undefined) return part;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(part.output) ?? '';
+  } catch {
+    return part;
+  }
+  if (serialized.length <= maxChars) return part;
+  return {
+    ...part,
+    output: {
+      truncated: true,
+      note:
+        `This result was ${serialized.length} characters and has been ` +
+        'clipped from the conversation history to save context. The preview ' +
+        'below is INCOMPLETE — never total or enumerate from it. Call the ' +
+        'tool again if you need the full result.',
+      preview: serialized.slice(0, maxChars),
+    },
+  };
+}
+
+function sanitizeMessages(
+  messages: UIMessage[],
+  maxToolOutputChars: number
+): UIMessage[] {
   // Only the final assistant message can still have its approvals resolved, so
   // it is the only one allowed to carry them.
   const lastAssistantIndex = messages.reduce(
@@ -151,7 +286,8 @@ function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
 
     const cleanParts = msg.parts
       .filter(keepable)
-      .map((part) => repairToolInput(part));
+      .map((part) => repairToolInput(part))
+      .map((part) => capToolOutput(part, maxToolOutputChars));
 
     // Every part was dropped. Returning the message untouched would put the
     // orphans straight back, so return it empty-partsed instead: the turn

@@ -33,7 +33,7 @@ import { createProcurementOps } from '../../../lib/procurement-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
 import { createAdsOps } from '../../../lib/ads-ops';
-import { recordModelUsage } from '../../../lib/model-usage';
+import { costOfUsage, recordModelUsage } from '../../../lib/model-usage';
 import {
   assertChatTurnWithinBudget,
   BudgetExceededError,
@@ -506,6 +506,21 @@ export async function POST(request: Request) {
           chatId,
           steps: steps?.length,
         });
+        // A runaway context should be visible in the dev terminal AS it
+        // happens, not in the ledger afterwards (#133). Cached input is the
+        // figure to watch: high cached share means the trim hysteresis is
+        // holding; high UNcached input means the prefix moved.
+        const { costUsd } = costOfUsage(response?.modelId ?? 'unknown', usage);
+        log.info(
+          {
+            steps: steps?.length,
+            inputTokens: usage.inputTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            outputTokens: usage.outputTokens,
+            estimatedUsd: Number(costUsd.toFixed(4)),
+          },
+          'turn usage'
+        );
       } catch (error) {
         // Metering must never cost the seller their answer.
         log.error(
