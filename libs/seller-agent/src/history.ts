@@ -110,6 +110,30 @@ function isKeepableToolPart(
   return isLastAssistantMessage && APPROVAL_TOOL_STATES.has(state);
 }
 
+/**
+ * A settled tool part whose `input` is not an object poisons the whole
+ * conversation on replay: it converts to a `tool_use` block without a
+ * dictionary and Anthropic rejects the request —
+ *
+ *   messages.45.content.1.tool_use.input: Input should be a valid dictionary
+ *
+ * — on EVERY turn after the one that wrote it. Seen live with a
+ * `total-report-rows` call that failed schema validation: the SDK persisted
+ * the errored part with no `input` at all. The call already happened and its
+ * (error) result is worth keeping, so repair the record rather than drop it.
+ */
+function repairToolInput<T extends { type: string; input?: unknown }>(
+  part: T
+): T {
+  if (!part.type.startsWith('tool-') || part.type === 'tool-result') {
+    return part;
+  }
+  const input = part.input;
+  const isDictionary =
+    typeof input === 'object' && input !== null && !Array.isArray(input);
+  return isDictionary ? part : { ...part, input: {} };
+}
+
 function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
   // Only the final assistant message can still have its approvals resolved, so
   // it is the only one allowed to carry them.
@@ -125,14 +149,16 @@ function sanitizeMessages(messages: UIMessage[]): UIMessage[] {
     const keepable = (part: unknown) =>
       isKeepableToolPart(part as { type: string; state?: string }, isLast);
 
-    if (msg.parts.every(keepable)) return msg;
-
-    const cleanParts = msg.parts.filter(keepable);
+    const cleanParts = msg.parts
+      .filter(keepable)
+      .map((part) => repairToolInput(part));
 
     // Every part was dropped. Returning the message untouched would put the
     // orphans straight back, so return it empty-partsed instead: the turn
     // produced nothing the model can act on, and saying nothing is correct.
-    if (cleanParts.length === 0) return { ...msg, parts: [] };
+    if (cleanParts.length === 0 && msg.parts.length > 0) {
+      return { ...msg, parts: [] };
+    }
 
     return { ...msg, parts: cleanParts };
   });
