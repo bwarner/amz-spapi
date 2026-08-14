@@ -120,6 +120,10 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Reading the inventory ledger...',
     'Inventory ledger read',
   ],
+  'get-payout-breakdown': [
+    'Building your payout register...',
+    'Payout register ready',
+  ],
   'sync-report': ['Pulling the report from Amazon...', 'Report imported'],
   'render-chart': ['Drawing the chart...', 'Chart rendered'],
 };

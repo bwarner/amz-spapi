@@ -168,3 +168,10 @@ export type {
   SearchDocumentsParams,
   SuggestedLink,
 } from './lib/document-search.js';
+
+export {
+  getPayoutBreakdown,
+  buildPayouts,
+  bucketFor,
+} from './lib/payout-breakdown.js';
+export type { Payout, PayoutBucket } from './lib/payout-breakdown.js';

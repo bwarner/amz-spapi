@@ -48,7 +48,9 @@ function agent() {
     provider,
     marketplaceId: 'ATVPDKIKX0DER',
     spCache: { hasSellerId: () => true },
-    reportOps: {},
+    reportOps: {
+      getPayoutBreakdown: async () => ({ payouts: [], unreconciled: 0 }),
+    },
   } as never) as unknown as {
     tools: Record<string, { description: string }>;
     // The SDK keeps what it was constructed with under `settings`; the tools
@@ -104,5 +106,44 @@ describe('a 403 is not the end of the question', () => {
 
     expect(text).toMatch(/before offering ANY manual workaround/i);
     expect(text).toMatch(/check-report-coverage/);
+  });
+});
+
+/**
+ * The payout tool exists so the split is NOT reassembled from grouped totals
+ * every fortnight. Two things have to hold: it must be reachable, and it must
+ * refuse to vouch for a settlement whose parts do not add up to Amazon's own
+ * stated deposit — a plausible figure that does not reconcile is worse than no
+ * figure, because it gets keyed into an accounting system.
+ */
+describe('get-payout-breakdown', () => {
+  function payoutTool() {
+    return agent().tools['get-payout-breakdown'] as unknown as {
+      description: string;
+      execute: (input: { from?: string; to?: string }) => Promise<{
+        success: boolean;
+        note?: string;
+        payouts?: unknown[];
+      }>;
+    };
+  }
+
+  it('is registered wherever report tools are', () => {
+    expect(payoutTool()).toBeDefined();
+  });
+
+  it('tells the model not to rebuild the split by hand', () => {
+    expect(payoutTool().description).toMatch(/instead of assembling/i);
+    expect(payoutTool().description).toMatch(/clawback/i);
+  });
+
+  it('says an unreconciled row must not be entered', () => {
+    expect(payoutTool().description).toMatch(/NOT to enter that row/i);
+  });
+
+  it('separates an empty window from "Amazon paid nothing"', () => {
+    expect(payoutTool().description).toMatch(
+      /NOT that there were\s+no payouts/i
+    );
   });
 });

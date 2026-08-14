@@ -3,6 +3,7 @@ import {
   getCoverage,
   queryLedgerRows,
   queryReportAggregate,
+  getPayoutBreakdown,
   syncReport,
   isIngestError,
   type ReportKind,
@@ -95,5 +96,8 @@ export function createReportOps(params: {
         })),
       };
     },
+
+    getPayoutBreakdown: async ({ from, to }) =>
+      getPayoutBreakdown({ sellerId: params.sellerId, from, to }),
   };
 }
