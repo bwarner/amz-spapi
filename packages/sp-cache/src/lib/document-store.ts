@@ -546,7 +546,28 @@ export async function purchaseGrouping(
     }
   }
 
-  if (!confirmations.size) return { ...derived, documents };
+  // "These are separate" — the answer the suggestion card was missing. A
+  // dismissal is stored on the document (the same dismissedLinks the detail
+  // page's suggested-links use), and a suggestion where any member has
+  // dismissed another is a question a human already answered NO to. Without
+  // this, rejecting was impossible and the only way to silence a wrong
+  // suggestion was to accept it — making one invoice the cost basis for two.
+  const dismissedBy = new Map<string, Set<string>>();
+  for (const doc of documents) {
+    if (doc.dismissedLinks?.length) {
+      dismissedBy.set(doc.documentId, new Set(doc.dismissedLinks));
+    }
+  }
+  const saidSeparate = (ids: string[]) =>
+    ids.some((a) => ids.some((b) => a !== b && dismissedBy.get(a)?.has(b)));
+
+  const openSuggestions = derived.suggestions.filter(
+    (suggestion) => !saidSeparate(suggestion.documentIds)
+  );
+
+  if (!confirmations.size) {
+    return { ...derived, suggestions: openSuggestions, documents };
+  }
 
   // Merge any derived groups that a confirmation spans. Two documents joined by
   // a human pull their whole derived groups together — otherwise confirming one
@@ -579,8 +600,9 @@ export async function purchaseGrouping(
 
   return {
     purchases: merged,
-    // A suggestion a human already answered is not a question any more.
-    suggestions: derived.suggestions.filter(
+    // A suggestion a human already answered is not a question any more —
+    // whichever way they answered it.
+    suggestions: openSuggestions.filter(
       (suggestion) =>
         !suggestion.documentIds.every((id) => confirmations.has(id))
     ),
