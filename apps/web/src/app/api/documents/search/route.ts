@@ -96,6 +96,9 @@ export async function POST(request: Request) {
       })),
       total: result.total,
       mode: embedded ? 'hybrid' : 'keyword',
+      // Counts over the WHOLE match set, for filter chips — "8 shown of 41"
+      // can still say what the other 33 are. Absent on the fallback path.
+      facets: result.facets,
       // A partitioned index can answer 200 with partitions failed — a SUBSET
       // presented as if complete. Passed through rather than folded away.
       partial: result.partial,

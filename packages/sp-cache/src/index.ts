@@ -165,6 +165,7 @@ export type {
   DocumentSearchFilters,
   DocumentSearchHit,
   DocumentSearchResult,
+  DocumentSearchFacets,
   SearchDocumentsParams,
   SuggestedLink,
 } from './lib/document-search.js';

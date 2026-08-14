@@ -495,3 +495,89 @@ describe('the index definition and the queries agree', () => {
     expect(definition.name).toBe(DOCUMENT_SEARCH_INDEX);
   });
 });
+
+describe('facets', () => {
+  it('asks for role and period facets with generated month ranges', async () => {
+    await searchDocuments({ userId: 'seller-a', text: 'coffee' });
+
+    const facets = (sent?.body as Record<string, unknown>)['facets'] as Record<
+      string,
+      { field: string; date_ranges?: Array<{ name: string }> }
+    >;
+    expect(facets['role'].field).toBe('role');
+    expect(facets['period'].field).toBe('extracted.documentDate');
+    // Six months plus the open-started "older" bucket. Names are the months
+    // themselves, so the chips need no translation table.
+    expect(facets['period'].date_ranges).toHaveLength(7);
+    expect(
+      facets['period'].date_ranges?.every(
+        (range) => /^\d{4}-\d{2}$/.test(range.name) || range.name === 'older'
+      )
+    ).toBe(true);
+  });
+
+  it('normalises service facets into roles and periods, zero-count buckets dropped', async () => {
+    respondWith([], {
+      facets: {
+        role: {
+          field: 'role',
+          total: 8,
+          missing: 0,
+          other: 0,
+          terms: [
+            { term: 'commercial-invoice', count: 6 },
+            { term: 'purchase-order', count: 2 },
+            { term: 'receipt', count: 0 },
+          ],
+        },
+        period: {
+          field: 'extracted.documentDate',
+          total: 8,
+          missing: 3,
+          other: 0,
+          date_ranges: [
+            {
+              name: '2026-07',
+              start: '2026-07-01T00:00:00.000Z',
+              end: '2026-08-01T00:00:00.000Z',
+              count: 4,
+            },
+            { name: '2026-06', count: 0 },
+            {
+              name: '2026-05',
+              start: '2026-05-01T00:00:00.000Z',
+              end: '2026-06-01T00:00:00.000Z',
+              count: 1,
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await searchDocuments({
+      userId: 'seller-a',
+      text: 'coffee',
+    });
+    expect(result.facets).toEqual({
+      roles: [
+        { role: 'commercial-invoice', count: 6 },
+        { role: 'purchase-order', count: 2 },
+      ],
+      periods: [
+        { label: '2026-07', from: '2026-07-01', to: '2026-08-01', count: 4 },
+        { label: '2026-05', from: '2026-05-01', to: '2026-06-01', count: 1 },
+      ],
+    });
+  });
+
+  it('a response without facets stays without facets — absent, not empty', async () => {
+    const result = await searchDocuments({
+      userId: 'seller-a',
+      text: 'coffee',
+    });
+    // "The service answered no facets" and "nothing matched any bucket" are
+    // different statements; only the second may render an empty chip row.
+    expect(result.facets).toBeUndefined();
+    expect('facets' in result).toBe(false);
+  });
+});
