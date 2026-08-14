@@ -161,6 +161,27 @@ export {
   documentSearchTypeKey,
   EMBEDDING_DIMENSIONS,
 } from './lib/document-search.js';
+export {
+  requestAdsReport,
+  collectAdsReport,
+  adsRowsAsCsv,
+  AdsReportSyncError,
+} from './lib/ads-report-sync.js';
+export type {
+  AdsReportClient,
+  CollectAdsReportResult,
+} from './lib/ads-report-sync.js';
+export {
+  readAdsRun,
+  writeAdsRun,
+  listAdsRuns,
+  adsRunId,
+  adsSyncStorage,
+  ingestedAdsWindows,
+  overlapsIngestedWindow,
+  AdsSyncStoreError,
+} from './lib/ads-sync-store.js';
+export type { AdsSyncRun, AdsSyncStatus } from './lib/ads-sync-store.js';
 export type {
   DocumentSearchFilters,
   DocumentSearchHit,

@@ -505,7 +505,7 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       spend: ['spend', 'cost'],
       // "7 Day Total Sales" — the attribution window is part of the name.
       sales: ['7daytotalsales', 'sales', 'totalsales'],
-      orders: ['7daytotalorders', 'orders'],
+      orders: ['7daytotalorders', 'orders', 'purchases'],
       units: ['7daytotalunits', 'units'],
     },
   },

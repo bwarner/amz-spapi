@@ -219,6 +219,11 @@ function isDocumentFile(file: File): boolean {
   );
 }
 
+/** True when the drag payload is files, not in-page text or a URL. */
+function isFileDrag(event: React.DragEvent): boolean {
+  return Array.from(event.dataTransfer.types).includes('Files');
+}
+
 const CHAT_ID_KEY = 'sellavant-chat-id';
 
 /** The scrolling transcript, so Cmd/Ctrl+A can be aimed at it. */
@@ -249,8 +254,20 @@ export default function ChatPage() {
   );
   const [uploadingCount, setUploadingCount] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /**
+   * Nested children each fire their own dragenter/leave, so a boolean flip
+   * flickers the overlay as the pointer crosses the transcript, composer and
+   * buttons. Depth tracks how many of our descendants currently contain the
+   * drag; overlay stays up until it leaves the column entirely.
+   *
+   * `relatedTarget` is the usual alternative, and it does not work here: a
+   * file dragged in from the OS has no DOM origin, so relatedTarget is null
+   * even when moving between children.
+   */
+  const fileDragDepthRef = useRef(0);
   const chatIdRef = useRef<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatList, setChatList] = useState<ChatSummary[]>([]);
@@ -788,6 +805,40 @@ export default function ChatPage() {
     setInput(prompt);
   };
 
+  const clearFileDrag = () => {
+    fileDragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+  };
+
+  const handleFileDragEnter = (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    fileDragDepthRef.current += 1;
+    setIsDraggingFiles(true);
+  };
+
+  const handleFileDragLeave = (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    fileDragDepthRef.current -= 1;
+    if (fileDragDepthRef.current <= 0) clearFileDrag();
+  };
+
+  const handleFileDragOver = (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    // Without this the browser will not fire `drop`, and the textarea would
+    // receive a file path instead of an attachment.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleFileDrop = (event: React.DragEvent) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    clearFileDrag();
+    void handleFilesSelected(event.dataTransfer.files);
+  };
+
   const activeTitle =
     chatList.find((chat) => chat.chatId === activeChatId)?.title ?? 'New chat';
 
@@ -803,8 +854,31 @@ export default function ChatPage() {
         onNewChat={handleNewChat}
       />
 
-      {/* Chat column */}
-      <SidebarInset className="relative flex min-w-0 flex-1 flex-col">
+      {/* Chat column. The drop target is the whole column, not the composer:
+          aiming a file at a one-line textarea is the reason people think
+          attach "doesn't work". The picker still exists for when there is
+          nothing to drag. */}
+      <SidebarInset
+        className="relative flex min-w-0 flex-1 flex-col"
+        onDragEnter={handleFileDragEnter}
+        onDragLeave={handleFileDragLeave}
+        onDragOver={handleFileDragOver}
+        onDrop={handleFileDrop}
+      >
+        {isDraggingFiles ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-background/80 p-6"
+            aria-hidden
+          >
+            <div className="rounded-xl border-2 border-dashed border-primary bg-primary/5 px-8 py-6 text-center shadow-sm">
+              <Paperclip className="mx-auto h-6 w-6 text-primary" />
+              <p className="mt-3 text-sm font-medium">Drop to attach</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Images, PDFs and spreadsheets
+              </p>
+            </div>
+          </div>
+        ) : null}
         {/* Conversation header */}
         <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
           {/*
@@ -982,7 +1056,7 @@ export default function ChatPage() {
                 size="icon"
                 onClick={() => fileInputRef.current?.click()}
                 className="h-11 w-11 shrink-0 rounded-full"
-                title="Attach product photos"
+                title="Attach images, PDFs or spreadsheets"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
