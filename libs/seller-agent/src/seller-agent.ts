@@ -276,7 +276,36 @@ export interface SellerReportOps {
     to?: string;
     filters?: Record<string, string[]>;
   }): Promise<ReportAggregateResult>;
+  /**
+   * Settlements as bookkeeping entries: dated deposits, split three ways.
+   *
+   * Its own op rather than a shape of `queryReportAggregate` because the split
+   * is an exact rule with two traps — reimbursement clawbacks share an amount
+   * type with reimbursement income, and marketplace tax has an offsetting row
+   * that must travel with it — and a model reassembling that from grouped
+   * totals produces a figure that looks right and does not reconcile.
+   */
+  getPayoutBreakdown(params: {
+    from?: string;
+    to?: string;
+  }): Promise<{ payouts: PayoutEntry[]; unreconciled: number }>;
 }
+
+/** One deposit, in the shape an accounting register wants it. */
+export type PayoutEntry = {
+  settlementId: string;
+  depositDate?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  currency?: string;
+  sales: number;
+  refunds: number;
+  expenses: number;
+  net: number;
+  /** False means do NOT key this in — see the tool description. */
+  reconciles: boolean;
+  discrepancy?: number;
+};
 
 /** Totals for one grouping of stored report rows. */
 export type ReportAggregateResult = {
@@ -3563,6 +3592,72 @@ function getReportTools(reportOps: SellerReportOps) {
       },
     },
 
+    'get-payout-breakdown': {
+      description:
+        'Amazon payouts as BOOKKEEPING ENTRIES: one row per deposit, with its ' +
+        'date and a three-way split — sales, refunds, expenses — that adds up ' +
+        'to the money that landed. THE tool for "what did Amazon pay me", ' +
+        '"I need my payouts for my accounting software", "break down my ' +
+        'deposits", quarterly bookkeeping and reconciling a bank statement. ' +
+        'Use it instead of assembling settlement totals by hand: the split is ' +
+        'not obvious (reimbursement clawbacks share an amount type with ' +
+        'reimbursement income; marketplace tax has an offsetting row that ' +
+        'must travel with it) and a hand-built version looks right while ' +
+        "being wrong. The buckets match Amazon's own Net Proceeds panel in " +
+        'Seller Central, so the seller can key them straight in without ' +
+        'reconciling anything twice. ' +
+        'Reads stored rows only — free, instant, and it cannot 403. ' +
+        'EVERY row carries `reconciles`. When it is false the split does NOT ' +
+        "add up to Amazon's stated deposit, which means the settlement is " +
+        'partly imported or contains something uncategorised: say so, quote ' +
+        'the discrepancy, and tell the user NOT to enter that row. Never ' +
+        'present an unreconciled payout as a figure to use. ' +
+        'Empty means nothing was imported for the window, NOT that there were ' +
+        'no payouts — check-report-coverage tells the two apart.',
+      inputSchema: z.object({
+        from: z
+          .string()
+          .optional()
+          .describe('YYYY-MM-DD, inclusive, matched on the DEPOSIT date'),
+        to: z.string().optional().describe('YYYY-MM-DD, inclusive'),
+      }),
+      execute: async (input: { from?: string; to?: string }) => {
+        try {
+          const result = await reportOps.getPayoutBreakdown(input);
+          if (result.payouts.length === 0) {
+            return {
+              success: true as const,
+              payouts: [],
+              note:
+                'No settlements with a deposit date in this window. That means ' +
+                'nothing is imported for it, not that Amazon paid nothing — ' +
+                'run check-report-coverage before saying anything either way.',
+            };
+          }
+          return {
+            success: true as const,
+            ...result,
+            ...(result.unreconciled > 0
+              ? {
+                  note:
+                    `${result.unreconciled} of ${result.payouts.length} payouts ` +
+                    'do NOT reconcile: their sales + refunds + expenses does ' +
+                    'not equal the deposit Amazon states. Those rows are not ' +
+                    'fit to enter into an accounting system. Name them, give ' +
+                    'the discrepancy, and say the likely cause is a partly ' +
+                    'imported settlement.',
+                }
+              : {}),
+          };
+        } catch (error) {
+          return {
+            success: false as const,
+            error: describeHttpError(error, 'Payout breakdown failed.'),
+          };
+        }
+      },
+    },
+
     'check-report-coverage': {
       description:
         'What FBA report data has actually been ingested for a window, and where ' +
@@ -5283,6 +5378,15 @@ DATA THE SELLER HAS ALREADY IMPORTED (check before fetching, every topic):
   report is the richest source there is — every fee, refund and reimbursement Amazon
   actually paid — and it is already stored. check-report-coverage then total-report-rows
   answers "analyse my settlements this year" completely, offline, for any window.
+- BOOKKEEPING questions have their own tool: get-payout-breakdown. "What did Amazon
+  pay me", "I need my deposits for my accounting software", "break these down so I
+  can enter them" — one dated row per deposit, split into sales / refunds / expenses
+  the way Amazon's own Net Proceeds panel splits it, so the seller keys it straight
+  in. Do NOT rebuild that split by hand out of total-report-rows: a reimbursement
+  clawback shares its amount type with reimbursement income, and marketplace tax has
+  an offsetting row that must travel with it, so a hand-built version looks right
+  and does not add up. Check the reconciles flag on every row and refuse to hand
+  over one that is false.
 - Prefer stored rows over a live Amazon call whenever both could answer. Stored rows are
   free, instant, cover any window, and cannot 403. Reach for the API when the question is
   about something too recent to have been imported, or genuinely not in a report.
