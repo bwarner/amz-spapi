@@ -109,6 +109,11 @@ export const SOURCES: Source[] = [
   // is a point-in-time reading and Amazon keeps no history, so a missed day is
   // unrecoverable by any backfill.
   { domain: 'sync', collection: 'inventory_snapshots' },
+  // Ads report sync (#145). Two jobs: telling a failed fetch apart from a
+  // quiet period (the data alone cannot), and recording which windows the
+  // sync owns so a manual upload of the same window is refused rather than
+  // silently doubling every row.
+  { domain: 'sync', collection: 'ads_runs' },
 ];
 
 export type IndexSpec = {
@@ -339,6 +344,14 @@ export const INDEXES: IndexSpec[] = [
     collection: 'sync_finance_events',
     name: 'idx_finance_events_seller_window',
     keys: ['`sellerId`', '`windowFrom`'],
+  },
+  {
+    // Staleness and window-ownership reads, both scoped to one advertiser
+    // profile. No primary index on this cluster (ADR-0004), so the leading
+    // key is required rather than an optimisation.
+    collection: 'sync_ads_runs',
+    name: 'idx_ads_runs_user_updated',
+    keys: ['`userId`', '`updatedAt`'],
   },
 ];
 
