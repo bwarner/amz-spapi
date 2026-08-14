@@ -10,6 +10,9 @@
   "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
   "references": [
     {
+      "path": "../../packages/models/tsconfig.lib.json"
+    },
+    {
       "path": "../../packages/sp-cache/tsconfig.lib.json"
     }
   ]

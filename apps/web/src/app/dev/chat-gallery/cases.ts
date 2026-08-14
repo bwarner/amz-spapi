@@ -295,6 +295,225 @@ export const GALLERY_CASES: GalleryCase[] = [
       }),
     ]),
   },
+  // ---------------------------------------------------------------- charts
+  {
+    id: 'chart-line-spend-vs-sales',
+    title: 'Dual-axis chart, with a gap in the data',
+    note:
+      'Spend as bars against ACOS as a line — two units, so two axes. Jul 4 ' +
+      'has spend and no sales, so its ACOS is null: the line must BREAK there ' +
+      'rather than drop to zero, which would draw pure waste as the most ' +
+      'efficient day on the chart.',
+    message: assistant([
+      toolPart({
+        type: 'tool-render-chart',
+        input: { title: 'Spend vs ACOS' },
+        output: {
+          success: true,
+          chart: {
+            title: 'Spend vs ACOS — Sponsored Products',
+            // A time axis: days are ordered, so joining them is a real claim.
+            xKind: 'time',
+            caption:
+              'Jul 1–8 2026, US profile, 14d attribution window. All 12 ' +
+              'enabled campaigns.',
+            currencyCode: 'USD',
+            series: [
+              { label: 'Spend', render: 'bar', format: 'currency' },
+              {
+                label: 'ACOS',
+                render: 'line',
+                format: 'percent',
+                axis: 'right',
+              },
+            ],
+            points: [
+              { label: 'Jul 1', values: [120.5, 0.22] },
+              { label: 'Jul 2', values: [98.25, 0.31] },
+              { label: 'Jul 3', values: [143.8, 0.19] },
+              { label: 'Jul 4', values: [86.4, null] },
+              { label: 'Jul 5', values: [0, null] },
+              { label: 'Jul 6', values: [151.2, 0.27] },
+              { label: 'Jul 7', values: [133.65, 0.24] },
+              { label: 'Jul 8', values: [110.900001, 0.29] },
+            ],
+          },
+        },
+      }),
+      text(
+        'Spend held steady through the week while ACOS drifted up on Jul 2 ' +
+          'and Jul 6. Jul 5 spent nothing, and Jul 4–5 have no ACOS at all — ' +
+          'spend with no attributed sales.'
+      ),
+    ]),
+  },
+  {
+    id: 'chart-bar-acos-by-campaign',
+    title: 'Bar chart with real campaign names',
+    note:
+      'Amazon campaign names are long. Twelve of them under vertical bars ' +
+      'overlap into an unreadable band, so the layout flips sideways on its ' +
+      'own — the model has no say in orientation.',
+    message: assistant([
+      toolPart({
+        type: 'tool-render-chart',
+        input: { title: 'ACOS by campaign' },
+        output: {
+          success: true,
+          chart: {
+            title: 'ACOS by campaign',
+            xKind: 'category',
+            caption:
+              'Last 30 days, 14d attribution. Top 10 of 137 campaigns by ' +
+              'spend — this is not the whole account.',
+            series: [{ label: 'ACOS', render: 'bar', format: 'percent' }],
+            points: [
+              { label: 'SP | Brand Defense | Exact', values: [0.18] },
+              { label: 'SP | Auto | Discovery', values: [0.62] },
+              { label: 'SP | Competitor ASINs | Product', values: [0.44] },
+              { label: 'SP | Category | Broad', values: [0.51] },
+              { label: 'SP | Long Tail | Phrase', values: [0.29] },
+              { label: 'SP | Retargeting | Views', values: [0.37] },
+              { label: 'SP | Seasonal Q3 | Exact', values: [0.22] },
+              { label: 'SP | New Launch | Auto', values: [0.78] },
+              { label: 'SP | Bestseller | Exact', values: [0.15] },
+              { label: 'SP | Clearance | Broad', values: [0.83] },
+            ],
+          },
+        },
+      }),
+    ]),
+  },
+  {
+    id: 'chart-combo-many-campaigns',
+    title: 'Combo chart over a dozen long campaign names',
+    note:
+      'The shape the first real chart took: bars plus a line, so the sideways ' +
+      'rule declines it — and then the axis silently thinned twelve names down ' +
+      'to six, leaving bars the prose referred to and the reader could not ' +
+      'find. Every category now keeps a tilted, elided label; the full name is ' +
+      'still on the tooltip.',
+    message: assistant([
+      toolPart({
+        type: 'tool-render-chart',
+        input: { title: 'Spend vs Sales by campaign' },
+        output: {
+          success: true,
+          chart: {
+            title: 'Spend vs. Sales by Campaign (Top 12 by Spend)',
+            // Campaigns have no order, so ACOS is points — a line here would
+            // change shape purely by re-sorting the list.
+            xKind: 'category',
+            caption:
+              'Jul 15 – Aug 13 2026 (30 days), 14-day attribution. Top 12 by ' +
+              'spend, excluding Camping Mug and Gran del Val (different ' +
+              'product lines). Null ACOS = spend with no attributed sales.',
+            currencyCode: 'USD',
+            series: [
+              { label: 'Spend', render: 'bar', format: 'currency' },
+              { label: 'Sales', render: 'bar', format: 'currency' },
+              {
+                label: 'ACOS',
+                render: 'point',
+                format: 'percent',
+                axis: 'right',
+              },
+            ],
+            points: [
+              { label: 'Auto - Triple Wall Cups', values: [483, 1327, 0.36] },
+              { label: 'SP- Phrase Camping Mug', values: [1002, 2044, 0.49] },
+              { label: 'Broad - coffee press', values: [268, 352, 0.76] },
+              { label: 'Exact 2 - coffee press', values: [210, 305, 0.69] },
+              { label: 'E/P/B - insulated cups', values: [188, 308, 0.61] },
+              { label: 'PATA 1 - Insulated Cup', values: [96, 214, 0.45] },
+              { label: 'Phrase - 15oz Press', values: [64, 492, 0.13] },
+              { label: 'Auto (All) - Tumbler', values: [88, 119, 0.74] },
+              { label: 'B/P/E - SKW - teapot', values: [79, 63, 1.27] },
+              { label: 'Exact - 500pk cups', values: [33, 21, 1.58] },
+              { label: 'Broad Modifier - Tea Pot', values: [41, 58, 0.71] },
+              // Live today: impressions but no clicks, so no ACOS at all.
+              { label: 'New 500PK Cups - Auto', values: [4, null, null] },
+            ],
+          },
+        },
+      }),
+    ]),
+  },
+  {
+    id: 'chart-isolated-point',
+    title: 'A line value stranded between two gaps',
+    note:
+      'Campaign 3 is the ONLY one with an ACOS — its neighbours are spend ' +
+      'with no attributed sales. A line segment needs two points, so a lone ' +
+      'value has nothing to connect to and, without a dot, draws nothing at ' +
+      'all. The chart would then under-report: a real figure rendered as ' +
+      'absent, indistinguishable from the nulls around it.',
+    message: assistant([
+      toolPart({
+        type: 'tool-render-chart',
+        input: { title: 'Isolated ACOS' },
+        output: {
+          success: true,
+          chart: {
+            title: 'Spend vs ACOS — mostly unattributed',
+            xKind: 'category',
+            caption:
+              'Jul 15 – Aug 13 2026, 14-day attribution. Null ACOS = spend ' +
+              'with no attributed sales.',
+            currencyCode: 'USD',
+            series: [
+              { label: 'Spend', render: 'bar', format: 'currency' },
+              {
+                label: 'ACOS',
+                render: 'point',
+                format: 'percent',
+                axis: 'right',
+              },
+            ],
+            points: [
+              { label: 'Broad Modifier - Tea Pot', values: [5.1, null] },
+              { label: 'SP - PATA - Dec 3', values: [8.4, null] },
+              { label: 'SP - Auto - Dec 3', values: [28.0, 1.4] },
+              { label: 'PATA 2 - Dec 3', values: [5.2, null] },
+              { label: 'PATA 1 - Dec 3', values: [1.1, null] },
+            ],
+          },
+        },
+      }),
+    ]),
+  },
+  {
+    id: 'chart-invalid',
+    title: 'A chart spec that no longer parses',
+    note:
+      'Tool output survives storage and comes back later. A spec that fails ' +
+      'validation must fall back to the plain tool card — one bad historical ' +
+      'chart cannot be allowed to throw inside the message list and take the ' +
+      'whole conversation down with it.',
+    message: assistant([
+      toolPart({
+        type: 'tool-render-chart',
+        input: { title: 'Broken' },
+        output: {
+          success: true,
+          // Two series, one value per point: the arity rule rejects this.
+          chart: {
+            title: 'Mismatched',
+            xKind: 'category',
+            caption: 'Should not render',
+            series: [
+              { label: 'Spend', render: 'bar', format: 'count' },
+              { label: 'Sales', render: 'bar', format: 'count' },
+            ],
+            points: [
+              { label: 'Jul 1', values: [1] },
+              { label: 'Jul 2', values: [2] },
+            ],
+          },
+        },
+      }),
+    ]),
+  },
   // ----------------------------------------------------------------- prose
   {
     id: 'thinking',

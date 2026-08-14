@@ -10,6 +10,7 @@ import type {
   ImageGenerator,
   ModelTier,
 } from '@amz-spapi/ai-provider';
+import { ChartSpecSchema, type ChartSpec } from '@farvisionllc/models';
 
 /**
  * Host-provided access to the media asset library. Implementations MUST
@@ -2657,6 +2658,92 @@ function describeHttpError(error: unknown, fallback: string): string {
  * looks enough like performance data to invite an answer about wasted spend,
  * and every description below says plainly that it is not.
  */
+/**
+ * Drawing a chart from numbers the model already has.
+ *
+ * Takes no ops and reaches nothing: every value comes from a tool result
+ * earlier in the same turn, which is why the guidance about provenance is the
+ * important half of this tool. Nothing here can verify that the numbers were
+ * fetched rather than remembered — the mandatory caption and the instructions
+ * are the only defences, so both are written to make fabrication awkward and
+ * visible rather than merely discouraged.
+ *
+ * `execute` is a pass-through: the schema has already done the work, and what
+ * it returns is what the browser draws.
+ */
+function getChartTools() {
+  return {
+    'render-chart': {
+      description:
+        'Draw a chart in the conversation from data you have ALREADY fetched ' +
+        'in this turn. Use it when the point of the answer is a SHAPE — a ' +
+        'trend across periods, or several things compared — for example spend ' +
+        'and ACOS over the last 30 days, or ACOS by campaign. ' +
+        'Do NOT use it for a single number or a two-row comparison; say those ' +
+        'in a sentence. ' +
+        'Set xKind: "time" when the x axis is days/weeks/months, "category" ' +
+        'when it is campaigns, keywords, ASINs or match types. It decides ' +
+        'which marks are honest. On a TIME axis use "line" for a trend and ' +
+        '"bar" for a quantity. On a CATEGORY axis "line" is REFUSED — joining ' +
+        'campaigns implies movement between them, and re-sorting the list ' +
+        'would change the line while every number stayed the same. Use "bar" ' +
+        'for quantities (spend, sales) and "point" for a ratio measured per ' +
+        'category (ACOS, CTR), usually on the right axis. ' +
+        'Every value must come from a tool result in this conversation: never ' +
+        'from memory, never estimated, never interpolated to fill a gap. Where ' +
+        'there is no data, pass null — NOT zero. A campaign with spend and no ' +
+        'sales has no ACOS at all, and plotting it as 0 would draw pure waste ' +
+        'as the most efficient point on the chart. ' +
+        'The caption is required and is where the chart stops overstating ' +
+        'itself: give the date range, the attribution window behind any ' +
+        'advertising figure, and say plainly when the chart shows only part of ' +
+        'the data ("top 10 of 137 campaigns by spend"). It must describe the ' +
+        'selection you ACTUALLY made, not a tidy rule that resembles it — if ' +
+        'you also dropped rows for your own reasons (a different product line, ' +
+        'a campaign too new to judge), name them and say why. "Top 12 of 31 by ' +
+        'spend" is FALSE if you also removed two of the biggest spenders. ' +
+        'Percentages are FRACTIONS — 0.22 means 22%. Money is in the ' +
+        "advertiser profile's own currency, named in currencyCode. " +
+        'After drawing, still state the conclusion in words: the chart is ' +
+        'evidence for your recommendation, not a replacement for making one — ' +
+        'and that conclusion must respect what the caption admits. On a ' +
+        'category chart describe levels and outliers, never a trend or a ' +
+        'direction: calling an arbitrary ordering a trend is the same false ' +
+        'claim the chart is forbidden from drawing.',
+      inputSchema: ChartSpecSchema,
+      execute: async (spec: ChartSpec) => ({
+        success: true as const,
+        chart: spec,
+      }),
+      /**
+       * The inverse of `look-at-photo`, and for the inverse reason.
+       *
+       * There, `execute` returns cheap metadata and this re-loads the pixels
+       * the model cannot otherwise see. Here the model already holds every
+       * number — it just typed them into the call — so echoing the series back
+       * would duplicate them in context and keep paying for that on every
+       * later turn, since tool results persist for the life of the
+       * conversation. The model gets an acknowledgement; the browser gets the
+       * data.
+       */
+      toModelOutput: ({ output }: { output: { chart: ChartSpec } }) => ({
+        type: 'content' as const,
+        value: [
+          {
+            type: 'text' as const,
+            text:
+              `Chart "${output.chart.title}" is now displayed in the ` +
+              `conversation (${output.chart.points.length} points; ` +
+              `${output.chart.series.map((s) => s.label).join(', ')}). The ` +
+              'user can see it. Do not restate the individual data points — ' +
+              'refer to the chart and give them the conclusion.',
+          },
+        ],
+      }),
+    },
+  };
+}
+
 function getAdsTools(adsOps: SellerAdsOps) {
   const profileId = z
     .string()
@@ -3313,7 +3400,8 @@ function getReportTools(reportOps: SellerReportOps) {
         'other columns, over the whole file — not a preview of it. This is how ' +
         'you answer "what did I pay in storage fees for these two ASINs", ' +
         '"which SKUs cost me the most in FBA fees", "how many units were ' +
-        'reimbursed" and every other question of that shape. Reads stored rows ' +
+        'reimbursed", "what did each payout come to" and every other question ' +
+        'of that shape. Reads stored rows ' +
         'and never calls Amazon, so it is free and instant.\n' +
         'NEVER add up rows by hand and NEVER answer a totals question from an ' +
         'attached spreadsheet preview — a preview is the first 50 rows and its ' +
@@ -3323,7 +3411,27 @@ function getReportTools(reportOps: SellerReportOps) {
         'COMPLETE monthly storage charge and already includes the utilisation ' +
         'surcharge (storageFeeBase + storageFeeSurcharge are its breakdown — ' +
         'total those to explain a fee, never to build one, and never add them ' +
-        'to amountTotal); settlement -> amount; reimbursement -> amountTotal ' +
+        'to amountTotal); ' +
+        'settlement -> TWO different questions with two different measures. ' +
+        'For the PAYOUT LIST ("what did Amazon pay me and when", the shape of ' +
+        'a bookkeeping or Quicken question): measure amountTotal grouped by ' +
+        '["settlementId","depositDate"]. Amazon puts the deposit date and the ' +
+        'net payout on ONE totals row per settlement and leaves both blank on ' +
+        'every transaction row beneath it, so amountTotal selects exactly ' +
+        'those rows and returns one dated payout each — the transaction rows ' +
+        'have no amountTotal and drop out on their own. ' +
+        'For the FEE BREAKDOWN ("where did the money go"): measure amount, ' +
+        'grouped by amountType, amountDescription, transactionType, msku or ' +
+        'settlementId. Summing amount over a settlement reproduces its ' +
+        'amountTotal exactly, so the two views reconcile. ' +
+        'Do NOT reach for depositDate with measure amount — it is missing on ' +
+        'all but one row in a thousand, and the result looks like the dates ' +
+        'are absent when they are simply on the other row. Do NOT group a ' +
+        'settlement by date either: date follows the per-transaction POSTED ' +
+        'date, so it scatters one payout across the whole period. Never tell ' +
+        'the user a settlement date is unavailable until amountTotal grouped ' +
+        'by depositDate has come back empty; ' +
+        'reimbursement -> amountTotal ' +
         'or quantity; ledger-detail -> quantity; search-term (Sponsored ' +
         'Products) -> spend, sales, clicks, impressions, orders or units, ' +
         'grouped by campaignName, adGroupName, searchTerm or matchType — how ' +
@@ -4661,6 +4769,12 @@ export function createSellerAgent({
     : {};
   const reportTools = reportOps ? getReportTools(reportOps) : {};
   const adsTools = adsOps ? getAdsTools(adsOps) : {};
+  // Unconditional, unlike every other group here. Charting reaches nothing, so
+  // there is no capability to gate it on — and the obvious gate is wrong:
+  // `hasAmazonConnection` is `!!spCache`, but Ads is a separate application an
+  // advertiser can connect without ever linking a Seller account, so gating on
+  // SP would hide charts from exactly the user with the most to chart.
+  const chartTools = getChartTools();
   const documentTools = documentOps ? getDocumentTools(documentOps) : {};
   const procurementTools = procurementOps
     ? getProcurementTools(procurementOps)
@@ -4703,6 +4817,7 @@ export function createSellerAgent({
     ...complianceTools,
     ...reportTools,
     ...adsTools,
+    ...chartTools,
     ...documentTools,
     ...procurementTools,
     ...listingWriteTools,
@@ -5063,6 +5178,64 @@ create-ad-negative-keywords / update-ad-negative-keywords):
   so they are on record), and PAUSED negatives block nothing.`
     : '';
 
+  /**
+   * Always present, because the tool always is. Written as its own constant
+   * rather than folded into the ads block: a chart is just as right for a
+   * settlement trend or a returns breakdown as for spend.
+   */
+  const chartInstructions = `
+- render-chart: draw a chart in the conversation. Reaches nothing on its own —
+  you supply numbers you have ALREADY fetched this turn.
+
+CHARTS:
+- Chart when the point is a SHAPE: a trend across two or more periods, or three
+  or more things compared. A single number, or a two-row comparison, belongs in
+  a sentence — do not chart it. One chart per turn unless asked for more.
+- xKind says what the x axis IS, and it decides which marks are honest.
+  "time" (days, weeks, months) is an ordered continuum, so a line between two
+  points asserts something true about what happened in between — use "line" for
+  a trend, "bar" for a quantity.
+  "category" (campaigns, keywords, ASINs, match types) has NO inherent order,
+  so "line" is refused there: sort the campaigns differently and the line
+  changes shape while every number stays the same, which is a claim the data
+  never made. Use "bar" for quantities and "point" for a ratio measured per
+  category — spend and sales as bars with ACOS as points on the right axis is
+  the standard campaign chart.
+- Whatever the caption admits, the WORDS AFTER the chart must respect. A caption
+  saying "ordered by settlement id, deposit dates were not available" cannot be
+  followed by "the trend is stable" or "the last four periods" — that reads an
+  ordering you just called arbitrary as though it were time, which is the same
+  false claim the chart itself is forbidden from drawing. On a category chart
+  describe LEVELS and OUTLIERS ("five payouts cluster near $3,200, one is
+  $2,256"), never direction, movement or trend. If you find yourself wanting to
+  say "trend", either get the real dates and chart them on a time axis, or stop
+  at what the data supports.
+- Every value must come from a tool result in THIS conversation. Never from
+  memory of an earlier turn, never estimated, never interpolated to close a gap.
+  If you have not fetched it, do not draw it.
+- Missing data is null, never 0. Spend with no attributed sales has no ACOS at
+  all; drawing it as 0 puts pure waste at the efficient end of the chart and
+  inverts the ranking the seller asked for.
+- The caption is required and is where the chart stops overstating itself: the
+  date range, the attribution window behind any advertising figure, and any
+  truncation said outright ("top 10 of 137 campaigns by spend"). A chart showing
+  a tenth of the account without saying so is a false claim, not a simplified one.
+- The caption must describe the selection you ACTUALLY made, not a tidy rule
+  that resembles it. If you dropped rows for your own reasons — a different
+  product line, a campaign too new to judge, an outlier that flattened the
+  scale — name them and say why. "Top 12 of 31 by spend" is FALSE if you also
+  removed two of the biggest spenders; the honest caption is "top 12 by spend,
+  excluding Camping Mug and Gran del Val (different product lines)". A caption
+  that states a mechanical rule you did not follow is worse than no caption,
+  because it invites the reader to trust a selection nobody made.
+- Percentages are FRACTIONS (0.22 is 22%). Money is in the advertiser profile's
+  own currency — set currencyCode; a CA profile reports CAD.
+- 60 points and 4 series are the ceilings. A longer window gets aggregated to
+  weeks, or narrowed to a top-N by spend, and the caption says which was done.
+- Chart, then conclude. The chart is the evidence for your recommendation, not a
+  substitute for making one: still state the number that matters and what you
+  would change.`;
+
   const hasListingsTools = Boolean(spCache?.hasSellerId());
   const listingsInstructions = hasListingsTools
     ? `
@@ -5096,7 +5269,7 @@ AVAILABLE TOOLS:
 - get-settlements: payout periods with totals and processing status ("what did
   Amazon pay me").
 - get-financial-events: itemized fees/charges/refunds for a date window or one
-  order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
+  order — the tool for fee breakdowns and margin questions.${listingsInstructions}${listingWriteInstructions}${imageInstructions}${photoInstructions}${imageEditInstructions}${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}${chartInstructions}
 
 ${TITLE_POLICY_PROMPT}
 
@@ -5156,6 +5329,14 @@ WHEN AN AMAZON CALL FAILS:
 - Before blaming authentication, check whether you have already called another
   account-connected tool successfully in this conversation. If you have, say so — it is
   the evidence that separates "not authorized for this API" from "not connected".
+- A 403 is not the end of the question. Before offering ANY manual workaround —
+  re-authorizing, downloading a report, uploading a file — run check-report-coverage
+  for the report that backs the question. It is free and instant, and the data is
+  routinely already imported: a seller asked for three months of payouts, got a
+  Finances 403, and was told to go download settlement reports they had imported
+  weeks earlier. Diagnose the 403 in one line, then answer from stored rows if they
+  cover the window, and name the uncovered part rather than the whole question.
+  Ask for a file only when coverage really is empty.
 - 401 across every call, or a token refresh failure, IS an authentication problem.
 
 FINANCE ANSWERS:
@@ -5258,7 +5439,7 @@ NOTE: Your Amazon account is not yet connected. You can still:
 - Discuss listing optimization strategies
 - Explain how to improve titles, bullet points, and descriptions
 - Provide guidance on inventory management and order fulfillment
-- Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}
+- Help with keyword research and competitive analysis concepts${webInstructions}${sourcingInstructions}${procurementInstructions}${adsInstructions}${chartInstructions}
 
 ${TITLE_POLICY_PROMPT}
 
