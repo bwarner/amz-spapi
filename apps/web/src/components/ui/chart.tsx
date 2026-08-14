@@ -197,7 +197,12 @@ function ChartTooltipContent({
         {payload.map((item) => {
           const key = `${nameKey || item.name || item.dataKey || 'value'}`;
           const itemConfig = getPayloadConfigFromPayload(config, item, key);
-          const indicatorColor = color || item.payload.fill || item.color;
+          // Optional chaining diverges from upstream shadcn on purpose. That
+          // wrapper was written against Recharts 2, where every tooltip item
+          // carries a `payload`; in Recharts 3 some item shapes do not, and a
+          // bare `item.payload.fill` throws inside render — taking the whole
+          // conversation down over a hover.
+          const indicatorColor = color || item.payload?.fill || item.color;
 
           return (
             <div
@@ -247,7 +252,10 @@ function ChartTooltipContent({
                         {itemConfig?.label || item.name}
                       </span>
                     </div>
-                    {item.value && (
+                    {/* `!= null`, not a truthiness check: upstream renders
+                        NOTHING for a genuine 0, so a zero-spend day would read
+                        as missing data rather than as zero. */}
+                    {item.value != null && (
                       <span className="text-foreground font-mono font-medium tabular-nums">
                         {item.value.toLocaleString()}
                       </span>

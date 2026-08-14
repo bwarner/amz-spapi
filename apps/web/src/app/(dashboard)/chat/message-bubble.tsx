@@ -16,8 +16,13 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import type { ToolUIPart, UIMessage } from 'ai';
-import { APlusDocumentSchema, type APlusDocument } from '@farvisionllc/models';
+import {
+  APlusDocumentSchema,
+  type APlusDocument,
+  type ChartSpec,
+} from '@farvisionllc/models';
 import { APlusPreview } from '@/components/aplus-preview/aplus-preview';
+import { ChatChart } from '@/components/chat-chart/chat-chart';
 import {
   MarkdownTable,
   MarkdownTableCell,
@@ -33,6 +38,7 @@ import {
   ToolOutput,
 } from '@/components/ai-elements/tool';
 import { approvalSummary, isStalled, toolTitle } from './tool-presentation';
+import { CHART_TOOL_PART_TYPE, extractChartSpec } from './charts';
 import { extractDownloads, type ProducedFile } from './downloads';
 import { extractListingToolImages, type ListingImage } from './listing-images';
 import { Button } from '@/components/ui/button';
@@ -170,7 +176,9 @@ type MessageBlock =
    * A file the turn produced. Read from the tool result rather than from a
    * markdown link the model had to remember to write.
    */
-  | { kind: 'downloads'; files: ProducedFile[] };
+  | { kind: 'downloads'; files: ProducedFile[] }
+  /** A chart the model drew from data it fetched earlier in the turn. */
+  | { kind: 'chart'; spec: ChartSpec };
 
 /**
  * A tool call: one line, expandable to what it was asked for and what it
@@ -435,6 +443,18 @@ function MessageBubbleImpl({
       }
 
       if (
+        part.type === CHART_TOOL_PART_TYPE &&
+        part.state === 'output-available'
+      ) {
+        // Read from the OUTPUT, not the streaming input: a spec assembled
+        // half-way through the call would draw a chart missing most of its
+        // series. The generic tool card still renders beside this, and its
+        // JSON dump is what answers "that number looks wrong".
+        const spec = extractChartSpec(part.output);
+        if (spec) blocks.push({ kind: 'chart', spec });
+      }
+
+      if (
         LISTING_IMAGE_TOOL_TYPES.has(part.type) &&
         part.state === 'output-available'
       ) {
@@ -450,7 +470,11 @@ function MessageBubbleImpl({
     }
   }
 
-  const hasAPlusDoc = blocks.some((block) => block.kind === 'aplus');
+  // Blocks that need the full bubble width. A chart squeezed into 80% of a
+  // column is harder to read than the table it replaced.
+  const hasWideBlock = blocks.some(
+    (block) => block.kind === 'aplus' || block.kind === 'chart'
+  );
   const hasText = blocks.some(
     (block) => block.kind === 'text' && block.text.trim()
   );
@@ -482,7 +506,7 @@ function MessageBubbleImpl({
           // one long unwrapped line inside makes the bubble - and the page -
           // scroll sideways instead of the line wrapping.
           'min-w-0 rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3',
-          hasAPlusDoc
+          hasWideBlock
             ? 'w-full max-w-full sm:max-w-[95%]'
             : 'max-w-[92%] sm:max-w-[80%]',
           isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
@@ -593,6 +617,26 @@ function MessageBubbleImpl({
                       page-width layout and boxing it inside a gutter would
                       misrepresent how it lays out on Amazon. */}
                   <APlusPreview doc={block.doc} />
+                </Artifact>
+              );
+
+            case 'chart':
+              return (
+                <Artifact key={index} className="mt-3">
+                  <ArtifactHeader>
+                    <div className="min-w-0">
+                      <ArtifactTitle>{block.spec.title}</ArtifactTitle>
+                      {/* The caption carries the date and attribution windows
+                          and any truncation. It belongs beside the chart, not
+                          buried in the prose underneath it. */}
+                      <ArtifactDescription>
+                        {block.spec.caption}
+                      </ArtifactDescription>
+                    </div>
+                  </ArtifactHeader>
+                  <div className="px-3 pb-3">
+                    <ChatChart spec={block.spec} />
+                  </div>
                 </Artifact>
               );
 

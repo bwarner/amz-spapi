@@ -121,6 +121,7 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Inventory ledger read',
   ],
   'sync-report': ['Pulling the report from Amazon...', 'Report imported'],
+  'render-chart': ['Drawing the chart...', 'Chart rendered'],
 };
 
 /** A call that carries a result. */
