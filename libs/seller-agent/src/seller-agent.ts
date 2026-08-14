@@ -2705,7 +2705,11 @@ function getChartTools() {
         'Percentages are FRACTIONS — 0.22 means 22%. Money is in the ' +
         "advertiser profile's own currency, named in currencyCode. " +
         'After drawing, still state the conclusion in words: the chart is ' +
-        'evidence for your recommendation, not a replacement for making one.',
+        'evidence for your recommendation, not a replacement for making one — ' +
+        'and that conclusion must respect what the caption admits. On a ' +
+        'category chart describe levels and outliers, never a trend or a ' +
+        'direction: calling an arbitrary ordering a trend is the same false ' +
+        'claim the chart is forbidden from drawing.',
       inputSchema: ChartSpecSchema,
       execute: async (spec: ChartSpec) => ({
         success: true as const,
@@ -3396,7 +3400,8 @@ function getReportTools(reportOps: SellerReportOps) {
         'other columns, over the whole file — not a preview of it. This is how ' +
         'you answer "what did I pay in storage fees for these two ASINs", ' +
         '"which SKUs cost me the most in FBA fees", "how many units were ' +
-        'reimbursed" and every other question of that shape. Reads stored rows ' +
+        'reimbursed", "what did each payout come to" and every other question ' +
+        'of that shape. Reads stored rows ' +
         'and never calls Amazon, so it is free and instant.\n' +
         'NEVER add up rows by hand and NEVER answer a totals question from an ' +
         'attached spreadsheet preview — a preview is the first 50 rows and its ' +
@@ -3406,7 +3411,27 @@ function getReportTools(reportOps: SellerReportOps) {
         'COMPLETE monthly storage charge and already includes the utilisation ' +
         'surcharge (storageFeeBase + storageFeeSurcharge are its breakdown — ' +
         'total those to explain a fee, never to build one, and never add them ' +
-        'to amountTotal); settlement -> amount; reimbursement -> amountTotal ' +
+        'to amountTotal); ' +
+        'settlement -> TWO different questions with two different measures. ' +
+        'For the PAYOUT LIST ("what did Amazon pay me and when", the shape of ' +
+        'a bookkeeping or Quicken question): measure amountTotal grouped by ' +
+        '["settlementId","depositDate"]. Amazon puts the deposit date and the ' +
+        'net payout on ONE totals row per settlement and leaves both blank on ' +
+        'every transaction row beneath it, so amountTotal selects exactly ' +
+        'those rows and returns one dated payout each — the transaction rows ' +
+        'have no amountTotal and drop out on their own. ' +
+        'For the FEE BREAKDOWN ("where did the money go"): measure amount, ' +
+        'grouped by amountType, amountDescription, transactionType, msku or ' +
+        'settlementId. Summing amount over a settlement reproduces its ' +
+        'amountTotal exactly, so the two views reconcile. ' +
+        'Do NOT reach for depositDate with measure amount — it is missing on ' +
+        'all but one row in a thousand, and the result looks like the dates ' +
+        'are absent when they are simply on the other row. Do NOT group a ' +
+        'settlement by date either: date follows the per-transaction POSTED ' +
+        'date, so it scatters one payout across the whole period. Never tell ' +
+        'the user a settlement date is unavailable until amountTotal grouped ' +
+        'by depositDate has come back empty; ' +
+        'reimbursement -> amountTotal ' +
         'or quantity; ledger-detail -> quantity; search-term (Sponsored ' +
         'Products) -> spend, sales, clicks, impressions, orders or units, ' +
         'grouped by campaignName, adGroupName, searchTerm or matchType — how ' +
@@ -5176,6 +5201,15 @@ CHARTS:
   never made. Use "bar" for quantities and "point" for a ratio measured per
   category — spend and sales as bars with ACOS as points on the right axis is
   the standard campaign chart.
+- Whatever the caption admits, the WORDS AFTER the chart must respect. A caption
+  saying "ordered by settlement id, deposit dates were not available" cannot be
+  followed by "the trend is stable" or "the last four periods" — that reads an
+  ordering you just called arbitrary as though it were time, which is the same
+  false claim the chart itself is forbidden from drawing. On a category chart
+  describe LEVELS and OUTLIERS ("five payouts cluster near $3,200, one is
+  $2,256"), never direction, movement or trend. If you find yourself wanting to
+  say "trend", either get the real dates and chart them on a time axis, or stop
+  at what the data supports.
 - Every value must come from a tool result in THIS conversation. Never from
   memory of an earlier turn, never estimated, never interpolated to close a gap.
   If you have not fetched it, do not draw it.
@@ -5295,6 +5329,14 @@ WHEN AN AMAZON CALL FAILS:
 - Before blaming authentication, check whether you have already called another
   account-connected tool successfully in this conversation. If you have, say so — it is
   the evidence that separates "not authorized for this API" from "not connected".
+- A 403 is not the end of the question. Before offering ANY manual workaround —
+  re-authorizing, downloading a report, uploading a file — run check-report-coverage
+  for the report that backs the question. It is free and instant, and the data is
+  routinely already imported: a seller asked for three months of payouts, got a
+  Finances 403, and was told to go download settlement reports they had imported
+  weeks earlier. Diagnose the 403 in one line, then answer from stored rows if they
+  cover the window, and name the uncovered part rather than the whole question.
+  Ask for a file only when coverage really is empty.
 - 401 across every call, or a token refresh failure, IS an authentication problem.
 
 FINANCE ANSWERS:

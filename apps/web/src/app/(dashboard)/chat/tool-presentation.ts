@@ -131,6 +131,9 @@ export const SETTLED_TOOL_STATES = new Set([
   'output-denied',
 ]);
 
+/** Settled, but with nothing to show for it. */
+const FAILED_TOOL_STATES = new Set(['output-error', 'output-denied']);
+
 /**
  * Whether an unsettled call has actually stopped.
  *
@@ -153,10 +156,20 @@ export function isStalled(state: string, isActive: boolean): boolean {
   return !isActive;
 }
 
-/** The heading for a call: its verb where we have one, its name otherwise. */
+/**
+ * The heading for a call: its verb where we have one, its name otherwise.
+ *
+ * A failed call gets the ATTEMPT, not the outcome. Every settled state used to
+ * take the success label, so a 403 on the settlements API rendered as
+ * "Settlements retrieved" beside a red Error badge — the header claiming the
+ * data arrived while the badge said it had not. The badge carries the verdict;
+ * this only has to say what was tried, so the running label loses its ellipsis
+ * (nothing is still in progress) and makes no claim either way.
+ */
 export function toolTitle(toolName: string, state: string): string {
   const labels = TOOL_LABELS[toolName];
   if (!labels) return toolName;
+  if (FAILED_TOOL_STATES.has(state)) return labels[0].replace(/[.…]+$/, '');
   return SETTLED_TOOL_STATES.has(state) ? labels[1] : labels[0];
 }
 

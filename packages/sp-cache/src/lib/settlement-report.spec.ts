@@ -34,6 +34,17 @@ const SETTLEMENT_HEADER =
 const TOTALS_ROW =
   '90210\t2026-07-01\t2026-07-15\t2026-07-17\t1420.55\tUSD\t\t\t\t\t\t\t\t\t\t';
 
+/**
+ * A transaction row: settlement-level columns EMPTY, transaction columns full.
+ *
+ * The blanks matter and are not laziness. Amazon repeats the settlement id on
+ * every row but leaves the start, end and deposit dates — and total-amount —
+ * populated only on the totals row above. This fixture used to carry the dates
+ * on every row, which is tidier and wrong, and a reader who trusted it
+ * concluded that grouping transaction rows by depositDate would work. In real
+ * data 17 rows out of 17,496 carry it. The payout date has to come from the
+ * totals row, and this fixture now says so.
+ */
 function transactionRow(
   amountType: string,
   description: string,
@@ -41,7 +52,7 @@ function transactionRow(
   sku = 'SKU-1'
 ): string {
   return (
-    `90210\t2026-07-01\t2026-07-15\t2026-07-17\t\tUSD\tOrder\t111-2223334-5556667\t\t` +
+    `90210\t\t\t\t\tUSD\tOrder\t111-2223334-5556667\t\t` +
     `amazon.com\t${amountType}\t${description}\t${amount}\t2026-07-08\t${sku}\t1`
   );
 }

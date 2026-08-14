@@ -49,6 +49,30 @@ describe('toolTitle', () => {
     );
   });
 
+  it('never claims success for a call that failed', () => {
+    // Seen in the wild: a 403 on the Finances API rendered as "Settlements
+    // retrieved" beside a red Error badge — the header saying the data had
+    // arrived while the badge said it had not.
+    expect(toolTitle('get-settlements', 'output-error')).toBe(
+      'Fetching settlements'
+    );
+    expect(toolTitle('get-settlements', 'output-error')).not.toMatch(
+      /retrieved/
+    );
+  });
+
+  it('does not claim success for a denied write either', () => {
+    expect(toolTitle('apply-listing-images', 'output-denied')).toBe(
+      'Updating the live listing'
+    );
+  });
+
+  it('still reads as finished when the call actually succeeded', () => {
+    expect(toolTitle('get-settlements', 'output-available')).toBe(
+      'Settlements retrieved'
+    );
+  });
+
   it('falls back to the tool name rather than inventing a verb', () => {
     expect(toolTitle('some-new-tool', 'output-available')).toBe(
       'some-new-tool'

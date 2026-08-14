@@ -157,6 +157,15 @@ describe('tool description', () => {
     expect(description()).toMatch(/0\.22 means 22%/);
   });
 
+  it('binds the written conclusion to what the caption admits', () => {
+    // Seen in the wild: a caption said "ordered by settlement id, deposit
+    // dates were not available", and the very next line called it a stable
+    // trend over the last four periods. The chart was honest and the prose
+    // beside it was not.
+    expect(description()).toMatch(/levels and outliers/i);
+    expect(description()).toMatch(/never a trend|never .*direction/i);
+  });
+
   it('explains why a line is refused across categories', () => {
     // Without the reason, a rejected call reads as an arbitrary rule and the
     // model retries the same shape.
