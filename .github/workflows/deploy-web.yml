@@ -1,33 +1,43 @@
 # Web deploys, promoted by commit rather than by branch.
 #
 # `main` is the only integration branch. Merging deploys to staging; publishing
-# a GitHub Release deploys that exact commit to production. Merging code does
-# not put it in front of customers, which is the whole point of the split.
+# a GitHub Release deploys that commit to production. Merging code does not put
+# it in front of customers, which is the whole point of the split.
 #
-# Vercel's own Git integration cannot express this: it deploys production from
-# one configured branch and has no notion of a tag. So `vercel.json` sets
-# `git.deploymentEnabled: false` and the deploys happen here, where the trigger
-# is ours to choose.
+# THE SHAPE, AND WHY IT IS NOT BRANCH-DRIVEN
+# ------------------------------------------
+# Vercel's Production environment here has **no branch configuration**, so no
+# push deploys to production — it happens only from this workflow, on a release.
+# `staging` is a Vercel CUSTOM ENVIRONMENT with its own variables and its own
+# domain, also with no branch tracking, so it too is deployed explicitly.
+#
+# What is deliberately left alone is Preview, which still tracks all unassigned
+# branches. PR previews keep working automatically and cost nothing to maintain.
+# (An earlier draft of this file disabled git deployments wholesale, which would
+# have taken PR previews with it.)
+#
+# The custom environment is what makes staging a real environment rather than a
+# borrowed one: its variables are its own, so it needs no branch scoping — and
+# branch-scoped Preview variables cannot target `main` anyway while any project
+# treats `main` as its production branch.
 #
 # WHY TWO BUILDS AND NOT `vercel promote`
 # ---------------------------------------
 # `vercel promote` repoints production at an already-built deployment with no
-# rebuild, which is the ideal "build once, promote the same artifact". It is
-# WRONG for this app. Next.js inlines every `NEXT_PUBLIC_*` value into the
-# client bundle at build time, and ours differ per environment — most sharply
-# `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, which is `pk_test_…` for preview and
-# `pk_live_…` for production. Promoting a staging build would serve customers a
-# bundle containing the Stripe TEST key and staging URLs, and it would look
-# like a successful deploy.
+# rebuild — the ideal "build once, promote the same artifact". It is WRONG here.
+# Next.js inlines every `NEXT_PUBLIC_*` value into the client bundle at build
+# time, and ours differ per environment, most sharply
+# `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`: `pk_test_…` for staging, `pk_live_…` for
+# production. Promoting a staging build would serve customers a bundle holding
+# the Stripe TEST key and staging URLs, and it would report success.
 #
-# So what is promoted here is the COMMIT, not the artifact: production is built
-# fresh from the release tag with production variables. The guarantee is "the
-# same source that passed staging", which is weaker than byte identity and is
-# the strongest thing available while public values are baked in at build time.
+# So the COMMIT is promoted, not the artifact: production builds fresh from the
+# release tag with production variables. Weaker than byte identity, and the
+# strongest guarantee available while public values are baked in at build time.
 #
 # (The CDK side does get true artifact identity — ADR-0006 content-addresses
-# Lambda bundles, so the asset hash IS the build output. The difference is that
-# nothing there is inlined at build time.)
+# Lambda bundles. Nothing there is inlined at build time. The same phrase means
+# different things on the two halves of this system.)
 name: Deploy web
 
 on:
@@ -61,21 +71,12 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
 
-      # `pull` fetches the PREVIEW variables, so the build inlines staging's
-      # public values — the test Stripe key included.
-      - run: npx vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
-      - run: npx vercel build --token=${{ secrets.VERCEL_TOKEN }}
-      - id: deploy
-        run: |
-          url=$(npx vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          echo "staging: $url"
-
-      # A stable hostname, so staging is somewhere you can bookmark rather than
-      # a new generated URL every merge. Skipped rather than failed when unset:
-      # the deploy itself succeeded and is reachable at its own URL.
-      - if: vars.STAGING_ALIAS != ''
-        run: npx vercel alias set "${{ steps.deploy.outputs.url }}" "${{ vars.STAGING_ALIAS }}" --token=${{ secrets.VERCEL_TOKEN }}
+      # The custom environment's own variables — staging's Auth0 tenant, its
+      # Couchbase scope, and the Stripe TEST key. `staging.sellavant.com` is
+      # attached to this environment in Vercel, so no aliasing step is needed.
+      - run: npx vercel pull --yes --environment=staging --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx vercel build --target=staging --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx vercel deploy --prebuilt --target=staging --token=${{ secrets.VERCEL_TOKEN }}
 
   production:
     if: github.event_name == 'release'
@@ -89,8 +90,6 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
       - uses: pnpm/action-setup@v4
-        with:
-          node-version: 24
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -102,7 +101,7 @@ jobs:
       - run: npx vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       # Recorded because `vercel rollback` is the fix for a bad production
-      # deploy, and it needs the previous deployment's identity. Finding that
+      # deploy and it needs the previous deployment's identity. Finding that
       # after the fact, under pressure, is worse than printing it now.
       - run: |
           echo "Deployed ${{ github.event.release.tag_name }} (${{ github.sha }})"
