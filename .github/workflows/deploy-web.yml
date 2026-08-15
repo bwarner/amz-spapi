@@ -1,0 +1,109 @@
+# Web deploys, promoted by commit rather than by branch.
+#
+# `main` is the only integration branch. Merging deploys to staging; publishing
+# a GitHub Release deploys that exact commit to production. Merging code does
+# not put it in front of customers, which is the whole point of the split.
+#
+# Vercel's own Git integration cannot express this: it deploys production from
+# one configured branch and has no notion of a tag. So `vercel.json` sets
+# `git.deploymentEnabled: false` and the deploys happen here, where the trigger
+# is ours to choose.
+#
+# WHY TWO BUILDS AND NOT `vercel promote`
+# ---------------------------------------
+# `vercel promote` repoints production at an already-built deployment with no
+# rebuild, which is the ideal "build once, promote the same artifact". It is
+# WRONG for this app. Next.js inlines every `NEXT_PUBLIC_*` value into the
+# client bundle at build time, and ours differ per environment — most sharply
+# `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, which is `pk_test_…` for preview and
+# `pk_live_…` for production. Promoting a staging build would serve customers a
+# bundle containing the Stripe TEST key and staging URLs, and it would look
+# like a successful deploy.
+#
+# So what is promoted here is the COMMIT, not the artifact: production is built
+# fresh from the release tag with production variables. The guarantee is "the
+# same source that passed staging", which is weaker than byte identity and is
+# the strongest thing available while public values are baked in at build time.
+#
+# (The CDK side does get true artifact identity — ADR-0006 content-addresses
+# Lambda bundles, so the asset hash IS the build output. The difference is that
+# nothing there is inlined at build time.)
+name: Deploy web
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+concurrency:
+  # Never two deploys to one target at once. Not cancel-in-progress: a half-
+  # finished deploy that is cancelled leaves the alias wherever it got to.
+  group: deploy-web-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+
+jobs:
+  staging:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Gives the run an audit trail and somewhere to hang protection rules.
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      # `pull` fetches the PREVIEW variables, so the build inlines staging's
+      # public values — the test Stripe key included.
+      - run: npx vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx vercel build --token=${{ secrets.VERCEL_TOKEN }}
+      - id: deploy
+        run: |
+          url=$(npx vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "staging: $url"
+
+      # A stable hostname, so staging is somewhere you can bookmark rather than
+      # a new generated URL every merge. Skipped rather than failed when unset:
+      # the deploy itself succeeded and is reachable at its own URL.
+      - if: vars.STAGING_ALIAS != ''
+        run: npx vercel alias set "${{ steps.deploy.outputs.url }}" "${{ vars.STAGING_ALIAS }}" --token=${{ secrets.VERCEL_TOKEN }}
+
+  production:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      # The tag, not the branch head. A release cut from an older commit must
+      # deploy THAT commit — otherwise the release notes describe one thing and
+      # production runs another.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: pnpm/action-setup@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      # Recorded because `vercel rollback` is the fix for a bad production
+      # deploy, and it needs the previous deployment's identity. Finding that
+      # after the fact, under pressure, is worse than printing it now.
+      - run: |
+          echo "Deployed ${{ github.event.release.tag_name }} (${{ github.sha }})"
+          echo "Roll back with: vercel rollback"
