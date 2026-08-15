@@ -22,6 +22,7 @@ type Fixture = {
   routes?: string[];
   couchbase?: boolean;
   amazonCredentials?: boolean;
+  callsCredentialService?: boolean;
 };
 
 /** A throwaway workspace root laid out the way discoverLambdaApps expects. */
@@ -50,6 +51,9 @@ function workspace(apps: Record<string, Fixture>): string {
             ...(fixture.amazonCredentials === undefined
               ? {}
               : { amazonCredentials: fixture.amazonCredentials }),
+            ...(fixture.callsCredentialService === undefined
+              ? {}
+              : { callsCredentialService: fixture.callsCredentialService }),
           },
         },
       })
@@ -719,5 +723,163 @@ describe('amazon credential access', () => {
         `${name} has secrets but no Auth0 audience`
       ).toBeTruthy();
     }
+  });
+});
+
+/**
+ * Service principals on the credential function (#152).
+ *
+ * Configuration, not a secret — these are Auth0 subjects, and a caller proves it
+ * is one with a client secret that lives in Secrets Manager. What the tests
+ * guard is the blast radius: only the function that mints may learn the list,
+ * and a stage with no principal must deploy with none rather than with an empty
+ * string that reads as "configured".
+ */
+describe('service principals', () => {
+  const mixed = () =>
+    workspace({
+      minter: { packaging: 'zip', couchbase: true, amazonCredentials: true },
+      bystander: { packaging: 'zip', couchbase: true },
+    });
+
+  const varsFor = (template: Template, suffix: string) => {
+    const fn = Object.values(
+      template.findResources('AWS::Lambda::Function')
+    ).find((f) => String(f.Properties.FunctionName).endsWith(suffix));
+    return (fn?.Properties.Environment?.Variables ?? {}) as Record<
+      string,
+      string
+    >;
+  };
+
+  it('passes the configured list to the minting function', () => {
+    const template = synth(mixed(), {
+      ...STAGES.dev,
+      servicePrincipals: ['one@clients', 'two@clients'],
+    });
+
+    expect(varsFor(template, 'minter')['SERVICE_PRINCIPALS']).toBe(
+      'one@clients,two@clients'
+    );
+  });
+
+  it('gives it to no other function', () => {
+    // A principal list on `sync-worker` would tell a general-purpose runtime
+    // which identity can mint for every seller. It has no use for it.
+    const template = synth(mixed(), {
+      ...STAGES.dev,
+      servicePrincipals: ['one@clients'],
+    });
+
+    expect(
+      varsFor(template, 'bystander')['SERVICE_PRINCIPALS']
+    ).toBeUndefined();
+  });
+
+  it('omits the variable entirely for a stage with no principal', () => {
+    // Not `SERVICE_PRINCIPALS=""`. Both refuse every mint, but only one of them
+    // says so in a `cdk diff`.
+    const template = synth(mixed(), {
+      ...STAGES.dev,
+      servicePrincipals: undefined,
+    });
+
+    expect(varsFor(template, 'minter')['SERVICE_PRINCIPALS']).toBeUndefined();
+  });
+});
+
+/**
+ * Asking for credentials versus holding them (#152).
+ *
+ * The two capabilities look similar and are opposites. `amazonCredentials` can
+ * mint a token for any connected seller; `callsCredentialService` can only ask,
+ * and only for a seller it names. The tests are about keeping that boundary
+ * legible in the template, where an IAM review actually happens.
+ */
+describe('credential service callers', () => {
+  const pair = () =>
+    workspace({
+      minter: {
+        packaging: 'zip',
+        couchbase: true,
+        amazonCredentials: true,
+        routes: ['POST /credentials/service/access-token'],
+      },
+      caller: {
+        packaging: 'zip',
+        couchbase: true,
+        callsCredentialService: true,
+      },
+    });
+
+  const varsFor = (template: Template, suffix: string) => {
+    const fn = Object.values(
+      template.findResources('AWS::Lambda::Function')
+    ).find((f) => String(f.Properties.FunctionName).endsWith(suffix));
+    return (fn?.Properties.Environment?.Variables ?? {}) as Record<
+      string,
+      unknown
+    >;
+  };
+
+  it('points the caller at the secret and the API', () => {
+    const vars = varsFor(synth(pair()), 'caller');
+
+    expect(vars['AUTH0_SERVICE_PRINCIPAL_SECRET_ID']).toBe(
+      STAGES.dev.auth0ServicePrincipal?.secretName
+    );
+    expect(vars['CREDENTIALS_API_BASE_URL']).toBeDefined();
+  });
+
+  it('gives the caller no KMS grant', () => {
+    // The whole distinction. A caller that could decrypt would not need to ask,
+    // and the credential slice's argument is that exactly one function can.
+    const template = Template.fromStack(stackOf(pair()));
+    const statements = Object.values(
+      template.findResources('AWS::IAM::Policy')
+    ).flatMap(
+      (p) =>
+        p.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>
+    );
+
+    const callerKms = statements.filter(
+      (s) =>
+        JSON.stringify(s['Action']).includes('kms:Decrypt') &&
+        JSON.stringify(s).includes('caller')
+    );
+    expect(callerKms).toEqual([]);
+  });
+
+  it('does not give the minting function the machine identity', () => {
+    // It has no use for one, and holding both would let the function that can
+    // mint for everybody also authenticate as the principal allowed to ask.
+    const vars = varsFor(synth(pair()), 'minter');
+
+    expect(vars['AUTH0_SERVICE_PRINCIPAL_SECRET_ID']).toBeUndefined();
+    expect(vars['CREDENTIALS_API_BASE_URL']).toBeUndefined();
+  });
+
+  it('refuses a caller that is also served by the API', () => {
+    // Function needs the API's id, the API's integration needs the function.
+    // CloudFormation reports that cycle as neither of those things.
+    expect(() =>
+      synth(
+        workspace({
+          minter: { packaging: 'zip', couchbase: true, routes: ['GET /x'] },
+          caller: {
+            packaging: 'zip',
+            couchbase: true,
+            callsCredentialService: true,
+            routes: ['GET /y'],
+          },
+        })
+      )
+    ).toThrow(/cycle/);
+  });
+
+  it('refuses a stage with no service principal secret configured', () => {
+    expect(() =>
+      synth(pair(), { ...STAGES.dev, auth0ServicePrincipal: undefined })
+    ).toThrow(/auth0ServicePrincipal/);
   });
 });

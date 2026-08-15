@@ -38,6 +38,38 @@ export type StageConfig = {
   auth0Domain?: string;
   auth0Audience?: string;
   /**
+   * Auth0 subjects allowed to mint tokens on a seller's behalf (#152).
+   *
+   * The unattended callers — the sync dispatcher's workers — which have no user
+   * of their own. A machine-to-machine `sub` is `<client_id>@clients`.
+   *
+   * Per stage and never shared, because dev, staging and production are three
+   * separate Auth0 tenants with three separate client ids. A single constant
+   * would mean a principal created for dev is trusted in production.
+   *
+   * Identifiers, not credentials: holding one grants nothing, since the client
+   * proves itself with a secret that lives in Secrets Manager and never here.
+   * That is why this may be an environment variable when `LWA_CLIENT_SECRET`
+   * may not.
+   *
+   * Empty or absent refuses every service mint, which is the right state for a
+   * stage whose M2M application has not been created yet.
+   */
+  servicePrincipals?: string[];
+  /**
+   * Where the service principal's own Auth0 credentials are kept (#152).
+   *
+   * A pointer only, like the others. The secret holds the tenant domain,
+   * audience, client id and client secret together because they are rotated as
+   * one unit — see `getAuth0ServicePrincipal`. Created out of band by
+   * `scripts/auth0-service-principal-secret.sh`; CDK never holds its contents.
+   *
+   * Absent means a stage has no unattended caller, and any Lambda declaring
+   * `callsCredentialService` then fails synth rather than deploying a worker
+   * guaranteed to throw on its first message.
+   */
+  auth0ServicePrincipal?: { secretName: string };
+  /**
    * Where this stage's Couchbase connection is kept, for Lambdas that read it
    * (#55, [ADR-0010](../../docs/adr/0010-lambdas-reach-couchbase-over-the-data-api.md)).
    *
@@ -166,6 +198,24 @@ const envAuth0 = (name: StageName, key: 'DOMAIN' | 'AUDIENCE') =>
   process.env[`SELLAVANT_AUTH0_${key}`] ||
   undefined;
 
+/**
+ * Service principal subjects for a stage, comma-separated.
+ *
+ * No cross-stage `SELLAVANT_SERVICE_PRINCIPALS` fallback, unlike the Auth0
+ * pair above. A shared fallback there is harmless — every stage validating
+ * against one tenant is a visible misconfiguration — but here it would extend
+ * trust silently: set it once for dev and production accepts dev's principal.
+ */
+const envServicePrincipals = (name: StageName): string[] | undefined => {
+  const raw = process.env[`SELLAVANT_${name.toUpperCase()}_SERVICE_PRINCIPALS`];
+  if (!raw) return undefined;
+  const entries = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length > 0 ? entries : undefined;
+};
+
 export const STAGES: Record<StageName, StageConfig> = {
   dev: {
     stageName: 'dev',
@@ -190,9 +240,19 @@ export const STAGES: Record<StageName, StageConfig> = {
     },
     auth0Domain: envAuth0('dev', 'DOMAIN') || 'sellavant-dev.us.auth0.com',
     auth0Audience: envAuth0('dev', 'AUDIENCE') || 'https://local.sellavant.com',
+    // "Sellavant Sync Worker (dev)" in the sellavant-dev tenant. Only dev has a
+    // default: staging and production are different tenants whose M2M
+    // applications do not exist yet, and inventing an id for them would deploy a
+    // configuration that looks complete and refuses every mint.
+    servicePrincipals: envServicePrincipals('dev') ?? [
+      'AV0aVbr7Bkrgf3YuOzNT3fwUGpnwMbZV@clients',
+    ],
     alarmEmail: process.env.SELLAVANT_DEV_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-dev-couchbase' },
     amazonOauth: { secretName: 'sellavant-dev-amazon-oauth' },
+    auth0ServicePrincipal: {
+      secretName: 'sellavant-dev-auth0-service-principal',
+    },
   },
   staging: {
     stageName: 'staging',
@@ -209,9 +269,13 @@ export const STAGES: Record<StageName, StageConfig> = {
       envAuth0('staging', 'DOMAIN') || 'genai-18232523504408604.us.auth0.com',
     auth0Audience:
       envAuth0('staging', 'AUDIENCE') || 'https://staging.sellavant.com',
+    servicePrincipals: envServicePrincipals('staging'),
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-staging-couchbase' },
     amazonOauth: { secretName: 'sellavant-staging-amazon-oauth' },
+    auth0ServicePrincipal: {
+      secretName: 'sellavant-staging-auth0-service-principal',
+    },
   },
   prod: {
     stageName: 'prod',
@@ -229,6 +293,7 @@ export const STAGES: Record<StageName, StageConfig> = {
     },
     auth0Domain: envAuth0('prod', 'DOMAIN') || 'sellvant.us.auth0.com',
     auth0Audience: envAuth0('prod', 'AUDIENCE') || 'https://www.sellavant.com',
+    servicePrincipals: envServicePrincipals('prod'),
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,
     // Every precondition for deploying prod is now met, in this order:
     //
@@ -250,6 +315,9 @@ export const STAGES: Record<StageName, StageConfig> = {
     // Both exist; verified with `secretsmanager list-secrets`.
     couchbase: { secretName: 'sellavant-prod-couchbase' },
     amazonOauth: { secretName: 'sellavant-prod-amazon-oauth' },
+    auth0ServicePrincipal: {
+      secretName: 'sellavant-prod-auth0-service-principal',
+    },
   },
 };
 

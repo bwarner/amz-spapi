@@ -53,6 +53,7 @@ function withSellers(
     user_id: string;
     seller_id: string;
     marketplace_id: string;
+    profile_name?: string;
   }>,
   shed: Array<{ sellerId: string; domain: string }> = []
 ) {
@@ -65,7 +66,72 @@ const SELLER = {
   user_id: 'auth0|1',
   seller_id: 'A2HXBWIE3KMLKV',
   marketplace_id: 'ATVPDKIKX0DER',
+  profile_name: 'sp-ATVPDKIKX0DER-msi1l2wg',
 };
+
+/**
+ * What the eligibility query asks for (#152).
+ *
+ * These assert on the SQL text, which is unusual and is the point: everything
+ * else in this file mocks `executeQuery`, so a query that matches nothing in the
+ * real database passes every other test here while the nightly run enqueues zero
+ * messages and reports success. That is exactly what happened — the query still
+ * filtered on the pre-#55 plaintext `refresh_token`, which no document has
+ * carried since the credentials moved to KMS ciphertext.
+ */
+describe('eligibility', () => {
+  const eligibilityQuery = () =>
+    (executeQuery.mock.calls.find(
+      (call) => call[0] === 'credentials'
+    )?.[1] as string) ?? '';
+
+  it('does not filter on the plaintext refresh token, which no longer exists', async () => {
+    withSellers([SELLER]);
+    await handler();
+
+    expect(eligibilityQuery()).not.toMatch(/\brefresh_token\b/);
+  });
+
+  it('filters on the encrypted material instead', async () => {
+    withSellers([SELLER]);
+    await handler();
+
+    const query = eligibilityQuery();
+    expect(query).toContain('encrypted_secrets');
+    // An explicit `false` is excluded; absent is not, because a pre-#55
+    // document carries no flag and dropping it would silently skip a working
+    // connection.
+    expect(query).toContain('has_refresh_token');
+  });
+
+  it('excludes disconnected profiles', async () => {
+    withSellers([SELLER]);
+    await handler();
+
+    expect(eligibilityQuery()).toContain('`deleted` IS MISSING');
+  });
+
+  it('asks for one row per seller, since the cursor cannot separate marketplaces', async () => {
+    // `cursorKey` is user::seller::domain. Two messages for one seller would
+    // share a cursor and each advance it past the other's unsynced windows.
+    withSellers([SELLER]);
+    await handler();
+
+    expect(eligibilityQuery()).toContain('GROUP BY user_id, seller_id');
+  });
+
+  it('carries the profile name to the worker', async () => {
+    // Part of the credential document key. Without it the worker cannot say
+    // which connection to mint from, and must refuse rather than guess.
+    withSellers([SELLER]);
+    await handler();
+
+    for (const entry of entries()) {
+      const body = JSON.parse(entry.MessageBody) as { profileName: string };
+      expect(body.profileName).toBe(SELLER.profile_name);
+    }
+  });
+});
 
 describe('fan-out', () => {
   it('enqueues every domain for every seller', async () => {
