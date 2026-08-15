@@ -609,12 +609,15 @@ describe('the service mint route', () => {
 
   const serviceRequest = (
     subject: string = MACHINE,
-    body: Record<string, unknown> = {}
+    body: Record<string, unknown> = {},
+    scope = 'credentials:mint'
   ) => ({
     routeKey: 'POST /credentials/service/access-token',
     requestContext: {
       http: { method: 'POST' },
-      authorizer: { jwt: { claims: { sub: subject } } },
+      // `scope` as a space-delimited claim, which is the shape a real Auth0
+      // client-credentials token carries.
+      authorizer: { jwt: { claims: { sub: subject, scope } } },
     },
     body: JSON.stringify({
       onBehalfOf: SUBJECT,
@@ -711,6 +714,16 @@ describe('the service mint route', () => {
       },
       body: JSON.stringify({ onBehalfOf: SUBJECT }),
     });
+
+    expect(result.statusCode).toBe(403);
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses an allow-listed principal whose token carries no scope', async () => {
+    // Both halves are required, and they are administered in different places:
+    // the allow-list here, the client grant in the Auth0 tenant. Revoking the
+    // grant must stop the mints without needing a deploy.
+    const result = await handler(serviceRequest(MACHINE, {}, ''));
 
     expect(result.statusCode).toBe(403);
     expect(mintAccessToken).not.toHaveBeenCalled();

@@ -26,6 +26,7 @@ import { disconnect } from './disconnect.js';
 import {
   authorizeServiceMint,
   isServicePrincipal,
+  scopesOf,
   SERVICE_MINT_ROUTE,
 } from './service-principal.js';
 import {
@@ -68,7 +69,13 @@ export type CredentialsEvent = {
   isBase64Encoded?: boolean;
   requestContext?: {
     http?: { method?: string };
-    authorizer?: { jwt?: { claims?: Record<string, string | undefined> } };
+    authorizer?: {
+      jwt?: {
+        claims?: Record<string, string | undefined>;
+        /** Populated only when the route declares authorizationScopes. */
+        scopes?: string[] | null;
+      };
+    };
   };
 };
 
@@ -316,6 +323,7 @@ export async function handler(event?: CredentialsEvent): Promise<LambdaResult> {
     if (isServiceMintRequest(event)) {
       const authorized = await authorizeServiceMint({
         subject: userId,
+        scopes: scopesOf(event?.requestContext?.authorizer?.jwt ?? {}),
         body: parseBody(event),
       });
       if (!authorized.ok) {

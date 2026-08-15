@@ -48,6 +48,34 @@ import type { ServiceFailure } from './lwa.js';
 export const SERVICE_MINT_ROUTE = 'POST /credentials/service/access-token';
 
 /**
+ * The scope a machine token must carry to mint.
+ *
+ * Defined on the API in the Auth0 tenant and granted per application. Deliberately
+ * narrower than the route: it says "mint a token on behalf of a seller" and not
+ * "manage credentials", so a later `credentials:connect` cannot be reached by a
+ * principal granted this one.
+ */
+export const MINT_SCOPE = 'credentials:mint';
+
+/**
+ * Scopes from the verified token.
+ *
+ * API Gateway's JWT authorizer populates `jwt.scopes` only when the route
+ * declares `authorizationScopes`; ours does not, because the check belongs here
+ * where it can be reported with a usable message rather than as a bare 403 from
+ * the gateway. So the raw `scope` claim is the reliable source, and it is a
+ * space-delimited string. Both are read, because a route that later declares
+ * scopes must not silently start refusing everything.
+ */
+export function scopesOf(jwt: {
+  claims?: Record<string, string | undefined>;
+  scopes?: string[] | null;
+}): string[] {
+  if (jwt.scopes?.length) return jwt.scopes;
+  return (jwt.claims?.['scope'] ?? '').split(' ').filter(Boolean);
+}
+
+/**
  * The service principals this stage trusts, from configuration.
  *
  * An environment variable is right for this and wrong for the LWA client
@@ -167,6 +195,8 @@ export type ServiceMintAuthorization =
 export async function authorizeServiceMint(params: {
   /** The verified `sub` from the gateway. */
   subject: string;
+  /** The verified scopes from the same token. */
+  scopes: string[];
   body: unknown;
   env?: NodeJS.ProcessEnv;
 }): Promise<ServiceMintAuthorization> {
@@ -181,6 +211,25 @@ export async function authorizeServiceMint(params: {
         detail:
           'This route is for configured service principals. A user token ' +
           'mints for its own connections on the per-profile route instead.',
+      },
+    };
+  }
+
+  // Both, not either. The allow-list says which client we trust; the scope says
+  // what that client was granted, and the two are administered in different
+  // places — the list here, the grant in the Auth0 tenant. Requiring both means
+  // revoking the client grant is sufficient to stop the mints without a deploy,
+  // and that adding a principal to the list does not by itself grant anything.
+  if (!params.scopes.includes(MINT_SCOPE)) {
+    return {
+      ok: false,
+      failure: {
+        status: 403,
+        error: 'Forbidden',
+        detail:
+          `This token carries no "${MINT_SCOPE}" scope. The application needs ` +
+          'a client grant for it on the API — a grant on user-delegated ' +
+          'access rather than client access presents as exactly this.',
       },
     };
   }
