@@ -7,6 +7,7 @@ import {
   type SyncJobResult,
 } from '@amz-spapi/sp-sync';
 import { useSecretsManagerConnection } from '@amz-spapi/aws-secrets';
+import { mintSellerAccessToken } from './seller-token.js';
 
 /**
  * Runs one sync job unit per SQS message (#36, ADR-0009).
@@ -78,54 +79,50 @@ type SyncMessage = {
   sellerId: string;
   marketplaceId: string;
   domain: SyncDomain;
+  /**
+   * Which stored connection to mint from.
+   *
+   * Part of the credential document key, so it cannot be derived here — a
+   * seller may hold several SP-API profiles and only the dispatcher knows which
+   * row it enumerated. Required rather than defaulted: guessing would sync one
+   * marketplace's data under another's cursor.
+   */
+  profileName: string;
   dispatchedAt?: string;
 };
 
 /**
- * Credentials for one seller.
+ * A client for one seller, which asks for tokens rather than holding them.
  *
- * Resolved per message rather than per invocation: a batch can hold several
- * sellers, and a client built once would carry the wrong account's refresh
- * token into the rest of the batch — which authenticates successfully and
- * returns another seller's data.
+ * Built per message rather than per invocation: a batch can hold several
+ * sellers, and a client built once would carry the wrong account's token into
+ * the rest of the batch — which authenticates successfully and returns another
+ * seller's data.
+ *
+ * `mintAccessToken` is the whole design (#152). This runtime never sees the
+ * refresh token or the LWA client secret; it presents its own machine identity
+ * to the credential service and receives a short-lived Amazon token for one
+ * named seller. That keeps the property #55 established — the material that
+ * mints tokens for every connected account lives in exactly one function — while
+ * still giving this client its automatic retry on a 401, because a rejected
+ * token simply causes it to ask again.
+ *
+ * No `clientId` and no `clientSecret` are passed, and their absence is the
+ * point rather than an omission.
  */
-async function clientFor(message: SyncMessage): Promise<SpApiClient> {
-  const credentials = await resolveCredentials(message);
+function clientFor(message: SyncMessage): SpApiClient {
   return new SpApiClient({
-    ...credentials,
     sellerId: message.sellerId,
     marketplaceId: message.marketplaceId,
+    mintAccessToken: () =>
+      mintSellerAccessToken({
+        onBehalfOf: message.userId,
+        apiType: 'SP_API',
+        profileName: message.profileName,
+        sellerId: message.sellerId,
+        domain: message.domain,
+      }),
   });
-}
-
-/**
- * Everything needed to call SP-API as one seller.
- *
- * A seam, and deliberately NOT environment variables. A Lambda env var is not a
- * secret: it is written into the CloudFormation template, shown in the console,
- * and returned by `GetFunctionConfiguration` to anyone with read access on the
- * function. `LWA_CLIENT_SECRET` mints access tokens from every seller's refresh
- * token, so putting it there would widen the blast radius of read-only Lambda
- * access to every connected account.
- *
- * It belongs in Secrets Manager, fetched at runtime, with the refresh token
- * coming from the credential service (#55) — which exists so the plaintext
- * token never enters a general-purpose runtime at all.
- *
- * Until that lands this throws. A worker that silently ran without credentials
- * would advance cursors over windows it never fetched, which is the single
- * failure the whole cursor design exists to prevent.
- */
-async function resolveCredentials(message: SyncMessage): Promise<{
-  clientId: string;
-  clientSecret: string;
-  refreshToken: string;
-}> {
-  throw new Error(
-    `No credential source configured for seller ${message.sellerId}. ` +
-      'The worker needs the credential service (#55), which reads the LWA ' +
-      'secret from Secrets Manager rather than from the environment.'
-  );
 }
 
 export async function handler(event: SqsEvent): Promise<SqsBatchResponse> {
@@ -134,6 +131,17 @@ export async function handler(event: SqsEvent): Promise<SqsBatchResponse> {
   for (const record of event.Records ?? []) {
     try {
       const message = JSON.parse(record.body) as SyncMessage;
+      if (!message.profileName) {
+        // No default, and no falling back to "the seller's only profile". A
+        // message without one predates the credential wiring (#152); minting
+        // for a guessed profile would file one marketplace's data under
+        // another's cursor, which reads as a successful sync.
+        throw new Error(
+          `Message for seller ${message.sellerId} carries no profileName, so ` +
+            'no connection can be identified. Re-dispatch rather than retry.'
+        );
+      }
+
       const job = SYNC_JOBS[message.domain];
       if (!job) {
         // An unknown domain will never succeed, so retrying it until the
@@ -146,7 +154,7 @@ export async function handler(event: SqsEvent): Promise<SqsBatchResponse> {
         userId: message.userId,
         sellerId: message.sellerId,
         marketplaceId: message.marketplaceId,
-        client: await clientFor(message),
+        client: clientFor(message),
         now: new Date(),
       });
 

@@ -59,6 +59,14 @@ export type SyncMessage = {
   sellerId: string;
   marketplaceId: string;
   domain: SyncDomain;
+  /**
+   * The connection to mint from (#152).
+   *
+   * Carried on the message because it is part of the credential document key
+   * and the worker cannot derive it: a seller may hold several SP-API profiles,
+   * and only this query knows which row produced this message.
+   */
+  profileName: string;
   /** Stamped by the dispatcher so a worker can measure queue latency. */
   dispatchedAt: string;
 };
@@ -67,6 +75,7 @@ type SellerRow = {
   user_id: string;
   seller_id: string;
   marketplace_id: string;
+  profile_name: string;
 };
 
 /**
@@ -75,6 +84,28 @@ type SellerRow = {
  * Only SP_API profiles carrying a `seller_id`: that id is what report and
  * finance data is keyed by, and a profile without one cannot have its results
  * stored anywhere sensible (#70).
+ *
+ * **Eligibility is `encrypted_secrets`, not `refresh_token`.** Before #55 the
+ * token sat in the document in the clear; it is now KMS ciphertext under
+ * `encrypted_secrets`, with `has_refresh_token` recording what the ciphertext
+ * contains. Filtering on the old field is not merely outdated — it matches
+ * nothing, so the dispatcher enqueues zero messages and the run reports success
+ * having done nothing at all. That is the exact silent-zero this query has to
+ * avoid, which is why the condition names both the ciphertext and the flag.
+ *
+ * A document from before #55 carries no `has_refresh_token`. Absent is treated
+ * as eligible rather than excluded: guessing `false` would silently drop a
+ * working connection, while attempting it fails visibly on the cursor and sheds
+ * after ten runs. Only an explicit `false` — connected, but with no refresh
+ * token to mint from — is excluded.
+ *
+ * ONE row per user × seller, deliberately. `cursorKey` is
+ * `userId::sellerId::domain` with no marketplace in it, so two messages for one
+ * seller's two marketplaces would share a cursor and each would advance it past
+ * the other's unsynced windows. `MIN` picks the same profile every run rather
+ * than an arbitrary one, which matters because the alternative is a seller whose
+ * synced marketplace changes between nights. Syncing a seller's *other*
+ * marketplaces needs the cursor to carry one, and that is a separate change.
  */
 async function eligibleSellers(): Promise<SellerRow[]> {
   // Collections are flat per environment scope (`<domain>_<entity>`, ADR-0005)
@@ -82,11 +113,18 @@ async function eligibleSellers(): Promise<SellerRow[]> {
   // fails loudly here rather than resolving to nothing at runtime.
   const { rows } = await executeQuery<SellerRow>(
     'credentials',
-    `SELECT DISTINCT user_id, seller_id, marketplace_id
+    `SELECT user_id,
+            seller_id,
+            MIN(marketplace_id) AS marketplace_id,
+            MIN(profile_name) AS profile_name
        FROM credentials_profiles
       WHERE api_type = 'SP_API'
         AND seller_id IS NOT MISSING
-        AND refresh_token IS NOT MISSING`,
+        AND profile_name IS NOT MISSING
+        AND \`deleted\` IS MISSING
+        AND encrypted_secrets IS NOT MISSING
+        AND (has_refresh_token IS MISSING OR has_refresh_token = TRUE)
+      GROUP BY user_id, seller_id`,
     { readonly: true }
   );
   return rows;
@@ -122,6 +160,7 @@ export async function handler(): Promise<{
         userId: seller.user_id,
         sellerId: seller.seller_id,
         marketplaceId: seller.marketplace_id,
+        profileName: seller.profile_name,
         domain,
         dispatchedAt,
       });

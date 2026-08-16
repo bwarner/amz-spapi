@@ -11,7 +11,8 @@
       "description": "Runs one sp-sync job unit per SQS message, reporting partial batch failures.",
       "timeoutSeconds": 300,
       "memoryMb": 1024,
-      "couchbase": true
+      "couchbase": true,
+      "callsCredentialService": true
     }
   },
   "targets": {

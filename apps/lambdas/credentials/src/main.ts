@@ -24,6 +24,12 @@ import { mintAccessToken } from './access-token.js';
 import { connect, ConnectRequestSchema } from './connect.js';
 import { disconnect } from './disconnect.js';
 import {
+  authorizeServiceMint,
+  isServicePrincipal,
+  scopesOf,
+  SERVICE_MINT_ROUTE,
+} from './service-principal.js';
+import {
   CREDENTIALS_COLLECTION,
   CREDENTIALS_DOMAIN,
   credentialDocKey,
@@ -63,7 +69,13 @@ export type CredentialsEvent = {
   isBase64Encoded?: boolean;
   requestContext?: {
     http?: { method?: string };
-    authorizer?: { jwt?: { claims?: Record<string, string | undefined> } };
+    authorizer?: {
+      jwt?: {
+        claims?: Record<string, string | undefined>;
+        /** Populated only when the route declares authorizationScopes. */
+        scopes?: string[] | null;
+      };
+    };
   };
 };
 
@@ -270,6 +282,24 @@ function isConnectRequest(event: CredentialsEvent | undefined): boolean {
   );
 }
 
+/**
+ * Whether this is the unattended mint route (#152).
+ *
+ * The fallback matches the FULL path rather than a suffix, unlike
+ * `isAccessTokenRequest` — the two paths both end in `/access-token`, so a
+ * suffix test would make them indistinguishable under direct invocation and the
+ * more permissive of the two would win. Under API Gateway `routeKey` is exact
+ * and the question does not arise.
+ */
+function isServiceMintRequest(event: CredentialsEvent | undefined): boolean {
+  if (event?.routeKey) return event.routeKey === SERVICE_MINT_ROUTE;
+  return (
+    event?.requestContext?.http?.method === 'POST' &&
+    (event?.rawPath ?? '').replace(/\/+$/, '') ===
+      '/credentials/service/access-token'
+  );
+}
+
 export async function handler(event?: CredentialsEvent): Promise<LambdaResult> {
   const userId = subjectOf(event);
   if (!userId) {
@@ -285,6 +315,80 @@ export async function handler(event?: CredentialsEvent): Promise<LambdaResult> {
   const profileName = event?.pathParameters?.['profileName'];
 
   try {
+    // Both service checks come first, and they are a pair: the route decides
+    // which kind of caller is expected, and each kind is refused on the other's
+    // routes. Neither check is redundant — without the first a user token could
+    // name someone else in a body, and without the second a machine token would
+    // fall through to routes it has no business reaching.
+    if (isServiceMintRequest(event)) {
+      const authorized = await authorizeServiceMint({
+        subject: userId,
+        scopes: scopesOf(event?.requestContext?.authorizer?.jwt ?? {}),
+        body: parseBody(event),
+      });
+      if (!authorized.ok) {
+        logger.warn('refused a service mint', {
+          actor: userId,
+          error: authorized.failure.error,
+        });
+        return json(authorized.failure.status, {
+          error: authorized.failure.error,
+          detail: authorized.failure.detail,
+        });
+      }
+
+      const { onBehalfOf, apiType, profileName } = authorized.request;
+      const result = await mintAccessToken(onBehalfOf, apiType, profileName);
+
+      // `actor` and `onBehalfOf` are separate fields on purpose. This is the
+      // only record that a token was issued, and for unattended work the
+      // question it has to answer is "which automated run acted for which
+      // seller" — one merged id cannot answer it.
+      if (result.ok) {
+        logger.info('minted access token for a service principal', {
+          actor: userId,
+          onBehalfOf,
+          apiType,
+          profileName,
+          sellerId: authorized.request.sellerId,
+          domain: authorized.request.domain,
+          refreshed: result.token.refreshed,
+          expiresAt: result.token.expires_at,
+        });
+        return json(200, result.token);
+      }
+
+      logger.warn('could not mint access token for a service principal', {
+        actor: userId,
+        onBehalfOf,
+        apiType,
+        profileName,
+        error: result.failure.error,
+      });
+      return json(result.failure.status, {
+        error: result.failure.error,
+        detail: result.failure.detail,
+      });
+    }
+
+    // Mint-only. A machine token would otherwise reach these routes and be
+    // treated as a user — harmless today, because `credentialDocKey` would look
+    // up profiles the machine does not have and 404, but that is an accident of
+    // the key layout rather than a rule. Stating the rule means a later change
+    // to how documents are keyed cannot quietly turn it into a privilege.
+    if (isServicePrincipal(userId)) {
+      logger.warn('service principal reached a user route', {
+        actor: userId,
+        routeKey: event?.routeKey,
+      });
+      return json(403, {
+        error: 'Forbidden',
+        detail:
+          'A service principal may only mint tokens, on ' +
+          `"${SERVICE_MINT_ROUTE}".`,
+      });
+    }
+
     // Checked before the profile branch: `/credentials/connect` has no path
     // parameters, so it would otherwise fall through to the list route and
     // silently answer a connection attempt with a listing.

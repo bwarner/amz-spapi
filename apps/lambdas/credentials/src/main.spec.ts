@@ -596,3 +596,161 @@ describe('the disconnect route', () => {
     expect(JSON.stringify(logged)).toContain('disconnected an amazon account');
   });
 });
+
+/**
+ * Unattended callers (#152).
+ *
+ * Dispatch only — whether a request is authorized is `service-principal.spec.ts`.
+ * What matters here is that the two kinds of caller cannot reach each other's
+ * routes, because every other guarantee in this function rests on that.
+ */
+describe('the service mint route', () => {
+  const MACHINE = 'AV0aVbr7Bkrgf3YuOzNT3fwUGpnwMbZV@clients';
+
+  const serviceRequest = (
+    subject: string = MACHINE,
+    body: Record<string, unknown> = {},
+    scope = 'credentials:mint'
+  ) => ({
+    routeKey: 'POST /credentials/service/access-token',
+    requestContext: {
+      http: { method: 'POST' },
+      // `scope` as a space-delimited claim, which is the shape a real Auth0
+      // client-credentials token carries.
+      authorizer: { jwt: { claims: { sub: subject, scope } } },
+    },
+    body: JSON.stringify({
+      onBehalfOf: SUBJECT,
+      apiType: 'SP_API',
+      profileName: 'sp-ATVPDKIKX0DER-ms3x3t97',
+      sellerId: 'A2HXBWIE3KMLKV',
+      domain: 'finances',
+      ...body,
+    }),
+  });
+
+  beforeEach(() => {
+    process.env.SERVICE_PRINCIPALS = MACHINE;
+    // Nothing shed, unless a test says otherwise.
+    executeQuery.mockResolvedValue({ rows: [] });
+    mintAccessToken.mockResolvedValue({
+      ok: true,
+      token: {
+        access_token: 'Atza|SERVICE',
+        expires_at: 3,
+        token_type: 'bearer',
+        refreshed: true,
+      },
+    });
+  });
+
+  it('mints for the NAMED seller, not for the machine', async () => {
+    // The single most important assertion in this file: get the argument order
+    // or the source of this id wrong and the sync silently syncs the wrong
+    // account with a token that works.
+    const result = await handler(serviceRequest());
+
+    expect(result.statusCode).toBe(200);
+    expect(mintAccessToken).toHaveBeenCalledWith(
+      SUBJECT,
+      'SP_API',
+      'sp-ATVPDKIKX0DER-ms3x3t97'
+    );
+  });
+
+  it('logs actor and subject separately', async () => {
+    await handler(serviceRequest());
+
+    const line = JSON.stringify(logged);
+    expect(line).toContain('minted access token for a service principal');
+    expect(line).toContain(MACHINE);
+    expect(line).toContain(SUBJECT);
+  });
+
+  it('refuses a user token on this route', async () => {
+    const result = await handler(serviceRequest('auth0|a-real-person'));
+
+    expect(result.statusCode).toBe(403);
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses a service principal on every user route', async () => {
+    // Mint-only. Each of these would otherwise treat the machine as a user.
+    const machineClaims = {
+      requestContext: { authorizer: { jwt: { claims: { sub: MACHINE } } } },
+    };
+
+    for (const event of [
+      { ...machineClaims },
+      {
+        ...machineClaims,
+        routeKey: ACCESS_TOKEN_ROUTE,
+        pathParameters: { apiType: 'SP_API', profileName: 'p' },
+      },
+      { ...machineClaims, routeKey: CONNECT_ROUTE, body: '{}' },
+      {
+        ...machineClaims,
+        routeKey: DISCONNECT_ROUTE,
+        pathParameters: { apiType: 'SP_API', profileName: 'p' },
+      },
+    ]) {
+      const result = await handler(event);
+      expect(result.statusCode).toBe(403);
+    }
+
+    expect(mintAccessToken).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+
+  it('does not confuse the two access-token paths on direct invocation', async () => {
+    // Both end in `/access-token`, and `sam local invoke` sends no routeKey.
+    // A suffix match would let the user route answer the service path.
+    const result = await handler({
+      rawPath: '/credentials/service/access-token',
+      requestContext: {
+        http: { method: 'POST' },
+        authorizer: { jwt: { claims: { sub: 'auth0|a-real-person' } } },
+      },
+      body: JSON.stringify({ onBehalfOf: SUBJECT }),
+    });
+
+    expect(result.statusCode).toBe(403);
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses an allow-listed principal whose token carries no scope', async () => {
+    // Both halves are required, and they are administered in different places:
+    // the allow-list here, the client grant in the Auth0 tenant. Revoking the
+    // grant must stop the mints without needing a deploy.
+    const result = await handler(serviceRequest(MACHINE, {}, ''));
+
+    expect(result.statusCode).toBe(403);
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the stage configures no principal', async () => {
+    delete process.env.SERVICE_PRINCIPALS;
+
+    const result = await handler(serviceRequest());
+
+    expect(result.statusCode).toBe(403);
+    expect(mintAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('passes a mint failure through rather than reporting success', async () => {
+    mintAccessToken.mockResolvedValue({
+      ok: false,
+      failure: {
+        status: 409,
+        error: 'Reconnect',
+        detail: 'Revoked at Amazon.',
+      },
+    });
+
+    const result = await handler(serviceRequest());
+
+    expect(result.statusCode).toBe(409);
+    expect(JSON.parse(result.body).error).toBe('Reconnect');
+  });
+});

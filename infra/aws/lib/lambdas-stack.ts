@@ -110,6 +110,13 @@ export class LambdasStack extends Stack {
         );
       }
 
+      // Its own machine identity, and nothing of the seller's (#152). No KMS
+      // grant and no Amazon OAuth secret: this function can ask for a token for
+      // a named seller, and cannot produce one itself.
+      if (app.callsCredentialService) {
+        this.auth0ServicePrincipalSecret(config).grantRead(fn);
+      }
+
       // `$LATEST` is mutable and cannot be rolled back to — there is only ever
       // one of it, and deploying over it destroys what was there. Publishing a
       // version per change and pointing a fixed alias at it gives callers one
@@ -143,6 +150,8 @@ export class LambdasStack extends Stack {
           authorizer: createAuth0Authorizer(config),
         })
       : undefined;
+
+    this.wireCredentialServiceCallers(apps, httpApi?.api.apiEndpoint);
 
     // Watches real traffic rather than probing a synthetic endpoint — see the
     // construct, and ADR-0007 on why `/health` is not the uptime signal.
@@ -268,6 +277,76 @@ export class LambdasStack extends Stack {
   private cachedAmazonOauthSecret?: secretsmanager.ISecret;
 
   /**
+   * Tell unattended callers where the credential service lives (#152).
+   *
+   * After the API is built, because the URL is only known then — and safe to do
+   * that way for one specific reason: an unattended caller is queue-driven and
+   * declares no routes, so it is not an integration target. A function that WAS
+   * a target would create a CloudFormation cycle (function needs the API's id,
+   * the API's integration needs the function), which surfaces as an error naming
+   * neither of them. That is why this refuses rather than trusting the caller to
+   * have noticed.
+   */
+  private wireCredentialServiceCallers(
+    apps: LambdaApp[],
+    apiEndpoint: string | undefined
+  ): void {
+    for (const app of apps.filter(
+      (candidate) => candidate.callsCredentialService
+    )) {
+      if (app.routes?.length) {
+        throw new Error(
+          `Lambda "${app.name}" declares callsCredentialService and also ` +
+            'declares routes. A function cannot both be served by the private ' +
+            'API and be told its URL — that is a CloudFormation cycle.'
+        );
+      }
+
+      if (!apiEndpoint) {
+        throw new Error(
+          `Lambda "${app.name}" declares callsCredentialService, but no ` +
+            'function declares routes, so this stage has no private API for it ' +
+            'to call.'
+        );
+      }
+
+      this.functions
+        .get(app.name)
+        ?.addEnvironment('CREDENTIALS_API_BASE_URL', apiEndpoint);
+    }
+  }
+
+  /**
+   * The service principal's Auth0 credentials, referenced by name (#152).
+   *
+   * Same out-of-band construction as the other two, for the same reason: CDK
+   * must never hold the value. Created by
+   * `scripts/auth0-service-principal-secret.sh`.
+   */
+  private auth0ServicePrincipalSecret(
+    config: StageConfig
+  ): secretsmanager.ISecret {
+    if (!config.auth0ServicePrincipal) {
+      throw new Error(
+        `Stage "${config.stageName}" has no auth0ServicePrincipal ` +
+          'configuration, but a Lambda declares ' +
+          'metadata.lambda.callsCredentialService. Add it to ' +
+          'infra/aws/config/stages.ts, or drop the declaration.'
+      );
+    }
+
+    this.cachedAuth0ServicePrincipalSecret ??=
+      secretsmanager.Secret.fromSecretNameV2(
+        this,
+        'Auth0ServicePrincipalSecret',
+        config.auth0ServicePrincipal.secretName
+      );
+    return this.cachedAuth0ServicePrincipalSecret;
+  }
+
+  private cachedAuth0ServicePrincipalSecret?: secretsmanager.ISecret;
+
+  /**
    * The credentials KMS key, IMPORTED from the key stack's export.
    *
    * Imported rather than passed in as a construct, and that is the load-bearing
@@ -344,6 +423,21 @@ export class LambdasStack extends Stack {
           ? {
               AMAZON_OAUTH_SECRET_ID: config.amazonOauth.secretName,
               KMS_CREDENTIAL_KEY_ID: credentialsKeyAlias(config),
+            }
+          : {}),
+        // Auth0 subjects, not secrets — see `servicePrincipals` in stages.ts.
+        // Omitted rather than set empty when a stage has none, so `cdk diff`
+        // distinguishes "no principal configured" from "configured with
+        // nothing", which are the same at runtime and different to a reader.
+        ...(app.amazonCredentials && config.servicePrincipals?.length
+          ? { SERVICE_PRINCIPALS: config.servicePrincipals.join(',') }
+          : {}),
+        // A pointer again. The base URL is added after the API exists — see
+        // `wireCredentialServiceCallers`.
+        ...(app.callsCredentialService && config.auth0ServicePrincipal
+          ? {
+              AUTH0_SERVICE_PRINCIPAL_SECRET_ID:
+                config.auth0ServicePrincipal.secretName,
             }
           : {}),
       },

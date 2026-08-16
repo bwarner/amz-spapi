@@ -11,7 +11,17 @@ import type { paths as FinancesPaths } from '@amz-spapi/amazon-sp-generated/lib/
 import type { paths as InboundPaths } from '@amz-spapi/amazon-sp-generated/lib/fulfillmentInboundV0';
 
 export interface SpApiClientConfig {
-  clientId: string; // LWA Client ID
+  /**
+   * LWA Client ID. Optional, and only because `mintAccessToken` exists.
+   *
+   * It is used in exactly one place — the `refresh_token` grant below — which
+   * `mintAccessToken` replaces outright. A caller that asks somebody else for
+   * tokens has no LWA application of its own and would have to invent a value
+   * to satisfy this field; requiring it would make the type demand a credential
+   * the whole point of that seam is to avoid holding. `canRefresh` is what
+   * enforces the real rule: one of the two routes must be complete.
+   */
+  clientId?: string;
   clientSecret?: string; // For token refresh
   accessToken?: string; // LWA access token
   refreshToken?: string; // For automatic token refresh
@@ -309,7 +319,14 @@ export class SpApiClient {
   private canRefresh(): boolean {
     return Boolean(
       this.config.mintAccessToken ||
-        (this.config.refreshToken && this.config.clientSecret)
+        (this.config.refreshToken &&
+          this.config.clientSecret &&
+          // Part of the LWA route now that it is optional. Without this a
+          // client holding a refresh token and a secret but no client id would
+          // report itself able to refresh, then fail at the grant with
+          // `invalid_client` — a message that points at the application rather
+          // than at the missing field.
+          this.config.clientId)
     );
   }
 
@@ -335,7 +352,7 @@ export class SpApiClient {
           new URLSearchParams({
             grant_type: 'refresh_token',
             refresh_token: this.config.refreshToken!,
-            client_id: this.config.clientId,
+            client_id: this.config.clientId!,
             client_secret: this.config.clientSecret!,
           }),
           {

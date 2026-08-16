@@ -59,6 +59,22 @@ export type LambdaAppMetadata = {
    * should call this one.
    */
   amazonCredentials?: boolean;
+  /**
+   * Whether this function ASKS the credential service for tokens (#152).
+   *
+   * The other half of `amazonCredentials`, and deliberately a different
+   * capability. That one holds the material and can mint for anyone; this one
+   * holds only a machine identity and can ask for a named seller, receiving a
+   * short-lived token and never the refresh token behind it.
+   *
+   * For unattended work — a scheduled worker has no user whose token it could
+   * carry. Grants read on the Auth0 service-principal secret and supplies the
+   * private API's base URL.
+   *
+   * The two must never be set together: a function holding both would have the
+   * dangerous grant *and* a reason to look routine.
+   */
+  callsCredentialService?: boolean;
 };
 
 export type LambdaApp = LambdaAppMetadata & {
@@ -203,7 +219,9 @@ export function parseLambdaMetadata(
   // Strict rather than truthy, because these govern IAM grants. `"false"` and
   // `"no"` are both truthy strings, and either would silently widen access —
   // to every collection in the environment, or to every seller's credentials.
-  const flag = (key: 'couchbase' | 'amazonCredentials'): boolean => {
+  const flag = (
+    key: 'couchbase' | 'amazonCredentials' | 'callsCredentialService'
+  ): boolean => {
     const value = metadata[key];
     if (value !== undefined && typeof value !== 'boolean') {
       fail(
@@ -215,6 +233,7 @@ export function parseLambdaMetadata(
   };
   const couchbase = flag('couchbase');
   const amazonCredentials = flag('amazonCredentials');
+  const callsCredentialService = flag('callsCredentialService');
 
   // A function that can mint tokens but cannot read the profiles they are
   // stored on is a misconfiguration that only shows up at the first request.
@@ -223,6 +242,19 @@ export function parseLambdaMetadata(
       name,
       'metadata.lambda.amazonCredentials needs couchbase: true — the ' +
         'encrypted secrets live on the profile documents'
+    );
+  }
+
+  // Holding the material AND asking somebody else for it is contradictory, and
+  // the dangerous reading is the one that would win: a reviewer seeing
+  // `callsCredentialService` would take the function for a mere caller while it
+  // also held `kms:Decrypt` on every seller's credentials.
+  if (amazonCredentials && callsCredentialService) {
+    fail(
+      name,
+      'metadata.lambda.amazonCredentials and callsCredentialService are ' +
+        'mutually exclusive — a function either holds the credential material ' +
+        'or asks the service that does'
     );
   }
 
@@ -239,6 +271,7 @@ export function parseLambdaMetadata(
       memoryMb: numberOrUndefined('memoryMb'),
       couchbase,
       amazonCredentials,
+      callsCredentialService,
       routes: parseRoutes(name, metadata['routes']),
     },
   };
