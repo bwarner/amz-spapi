@@ -20,7 +20,19 @@ export type StageConfig = {
   vercel?: {
     teamSlug: string;
     projectName: string;
-    environment: 'production' | 'preview';
+    /**
+     * The Vercel environment whose deployments may assume this stage's role.
+     *
+     * Goes into the OIDC trust policy verbatim as the `environment:` segment of
+     * `sub`, so it must match the environment NAME exactly. Verified against a
+     * real token: `owner:<team>:project:<project>:environment:development`.
+     *
+     * Not limited to the three built-ins, because a custom environment is an
+     * environment like any other here — `staging` is one. Typing this as
+     * `'production' | 'preview'` would have made a staging role unexpressible,
+     * which is why staging had no AWS access at all.
+     */
+    environment: 'production' | 'preview' | 'development' | (string & {});
   };
   /**
    * The Auth0 tenant that issues the access tokens the API accepts, and the
@@ -205,6 +217,20 @@ export const STAGES: Record<StageName, StageConfig> = {
     allowedOrigins: ['https://staging.sellavant.com'],
     retainAssets: true,
     noncurrentObjectExpirationDays: 60,
+    /**
+     * The Vercel CUSTOM environment named `staging`, not Preview.
+     *
+     * Deployments to it are explicit (`vercel deploy --target=staging`), and
+     * its OIDC subject carries `environment:staging`. That distinction is what
+     * keeps this role separate from dev's: dev claims `environment:preview`, so
+     * a PR preview cannot assume staging's role even though both stages live in
+     * the same AWS account.
+     */
+    vercel: {
+      teamSlug: 'bfwarnergmailcoms-projects',
+      projectName: 'sellavant',
+      environment: 'staging',
+    },
     auth0Domain:
       envAuth0('staging', 'DOMAIN') || 'genai-18232523504408604.us.auth0.com',
     auth0Audience:
