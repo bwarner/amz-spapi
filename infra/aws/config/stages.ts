@@ -33,6 +33,19 @@ export type StageConfig = {
      * which is why staging had no AWS access at all.
      */
     environment: 'production' | 'preview' | 'development' | (string & {});
+    /**
+     * Whether this stage's stack CREATES the account-level OIDC provider.
+     *
+     * IAM keys an OIDC provider by URL, and the URL carries the team, not the
+     * stage — so two stages sharing an AWS account want the same one, and the
+     * second to deploy fails with `EntityAlreadyExistsException`. Exactly one
+     * stage per ACCOUNT sets this; the rest reference the ARN, which is fully
+     * determined by the account and the URL.
+     *
+     * Dev owns it in the shared dev/staging account because dev deployed first.
+     * Production owns it in its own account, where it is the only stage.
+     */
+    ownsOidcProvider?: boolean;
   };
   /**
    * The Auth0 tenant that issues the access tokens the API accepts, and the
@@ -199,6 +212,9 @@ export const STAGES: Record<StageName, StageConfig> = {
       teamSlug: 'bfwarnergmailcoms-projects',
       projectName: 'sellavant',
       environment: 'preview',
+      // Dev deployed first in the shared dev/staging account, so it holds the
+      // account-level provider that staging references.
+      ownsOidcProvider: true,
     },
     auth0Domain: envAuth0('dev', 'DOMAIN') || 'sellavant-dev.us.auth0.com',
     auth0Audience: envAuth0('dev', 'AUDIENCE') || 'https://local.sellavant.com',
@@ -252,6 +268,8 @@ export const STAGES: Record<StageName, StageConfig> = {
       teamSlug: 'bfwarnergmailcoms-projects',
       projectName: 'sellavant',
       environment: 'production',
+      // Its own account, where it is the only stage.
+      ownsOidcProvider: true,
     },
     auth0Domain: envAuth0('prod', 'DOMAIN') || 'sellvant.us.auth0.com',
     auth0Audience: envAuth0('prod', 'AUDIENCE') || 'https://www.sellavant.com',
