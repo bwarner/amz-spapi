@@ -9,12 +9,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const getAuth0ServicePrincipal = vi.fn();
-vi.mock('@amz-spapi/aws-secrets', () => ({
+vi.mock('./auth0-service-principal.js', () => ({
   getAuth0ServicePrincipal: () => getAuth0ServicePrincipal(),
 }));
 
 const { mintSellerAccessToken, clearMachineToken, ServiceTokenError } =
-  await import('./seller-token.js');
+  await import('./service-mint.js');
 
 const SECRET = 'shh-this-is-the-client-secret';
 

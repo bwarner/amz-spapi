@@ -6,8 +6,10 @@ import {
   type SyncDomain,
   type SyncJobResult,
 } from '@amz-spapi/sp-sync';
-import { useSecretsManagerConnection } from '@amz-spapi/aws-secrets';
-import { mintSellerAccessToken } from './seller-token.js';
+import {
+  mintSellerAccessToken,
+  useSecretsManagerConnection,
+} from '@amz-spapi/aws-secrets';
 
 /**
  * Runs one sync job unit per SQS message (#36, ADR-0009).

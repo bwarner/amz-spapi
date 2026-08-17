@@ -1,4 +1,4 @@
-import { getAuth0ServicePrincipal } from '@amz-spapi/aws-secrets';
+import { getAuth0ServicePrincipal } from './auth0-service-principal.js';
 
 /**
  * How an unattended worker gets an Amazon access token (#152).
