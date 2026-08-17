@@ -6,6 +6,11 @@ import axios, {
   AxiosError,
   InternalAxiosRequestConfig,
 } from 'axios';
+import {
+  createCampaignTree,
+  type AdCampaignTreeRequest,
+  type AdCampaignTreeResult,
+} from './campaign-tree.js';
 
 export interface AmazonAdsClientConfig {
   clientId: string; // LwA Client ID
@@ -72,6 +77,19 @@ export type AdsNegativeMatchType =
   | 'NEGATIVE_EXACT'
   | 'NEGATIVE_PHRASE'
   | 'NEGATIVE_BROAD';
+
+/** How closely a shopper's search must match a keyword for it to compete. */
+export type AdsKeywordMatchType = 'EXACT' | 'PHRASE' | 'BROAD';
+
+/**
+ * How a campaign finds shoppers.
+ *
+ * `AUTO` lets Amazon choose the terms — the usual starting point, and the
+ * source a harvest funnel reads from. `MANUAL` means the campaign serves only
+ * on targets supplied explicitly, so a MANUAL campaign with no keywords can
+ * never show an impression.
+ */
+export type AdsTargetingType = 'AUTO' | 'MANUAL';
 
 /**
  * The two halves of a v3 bulk mutation, which arrive TOGETHER in a 207.
@@ -942,6 +960,7 @@ export class AmazonAdsApiClient {
     campaigns: { path: '/sp/campaigns', media: 'spCampaign.v3' },
     adGroups: { path: '/sp/adGroups', media: 'spAdGroup.v3' },
     keywords: { path: '/sp/keywords', media: 'spKeyword.v3' },
+    productAds: { path: '/sp/productAds', media: 'spProductAd.v3' },
     negativeKeywords: {
       path: '/sp/negativeKeywords',
       media: 'spNegativeKeyword.v3',
@@ -1166,6 +1185,198 @@ export class AmazonAdsApiClient {
       'negativeKeywords',
       'put',
       updates.map((u) => ({ keywordId: u.keywordId, state: u.state }))
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sponsored Products, creation (#146)
+  //
+  // A different risk class from everything above, and the comment on
+  // WRITE_ENDPOINTS said so before any of this existed: the writes above can
+  // each be undone by a second call, and a create cannot. Amazon has no delete
+  // that returns a campaign to not-existing — only archive, which is permanent
+  // and which this client deliberately does not expose.
+  //
+  // Two things make it safe enough to offer anyway.
+  //
+  // FIRST, everything is created PAUSED, whatever the caller asked for. That is
+  // what converts an irreversible operation into a reversible one in the only
+  // sense that matters here — money. A paused tree spends nothing, so a mistake
+  // costs a console cleanup rather than a budget. Enabling is a separate,
+  // already-reversible `updateCampaigns` call the seller makes after looking at
+  // what was actually built.
+  //
+  // SECOND, a tree is four POSTs and each answers 207 independently, so partial
+  // trees are not an edge case — they are the normal failure. `createCampaignTree`
+  // reports the tree that EXISTS rather than the one that was asked for, and
+  // computes whether it can serve at all, because the dangerous outcome is not
+  // an error: it is a campaign that looks created, is missing its product ads,
+  // and can never show an impression.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create campaigns. Always PAUSED — see the section comment.
+   *
+   * `startDate` is omitted rather than defaulted to today: Amazon defaults it
+   * itself, in the profile's timezone, which is the one place that knows what
+   * "today" means for this advertiser.
+   */
+  public async createCampaigns(
+    campaigns: Array<{
+      name: string;
+      targetingType: AdsTargetingType;
+      dailyBudget: number;
+      /** Defaults to Amazon's own recommendation for the targeting type. */
+      biddingStrategy?:
+        | 'LEGACY_FOR_SALES'
+        | 'AUTO_FOR_SALES'
+        | 'MANUAL'
+        | 'RULE_BASED';
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = campaigns.map((c) => {
+      if (!c.name.trim()) {
+        throw new Error('A campaign needs a name.');
+      }
+      AmazonAdsApiClient.assertPositive(c.dailyBudget, 'dailyBudget', c.name);
+      return {
+        name: c.name,
+        targetingType: c.targetingType,
+        // Not the caller's choice. See the section comment.
+        state: 'PAUSED',
+        budget: { budget: c.dailyBudget, budgetType: 'DAILY' },
+        ...(c.biddingStrategy
+          ? { dynamicBidding: { strategy: c.biddingStrategy } }
+          : {}),
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.campaigns,
+      'campaigns',
+      'post',
+      items
+    );
+  }
+
+  /** Create ad groups under existing campaigns. Always PAUSED. */
+  public async createAdGroups(
+    adGroups: Array<{ campaignId: string; name: string; defaultBid: number }>
+  ): Promise<AdsMutationResult> {
+    const items = adGroups.map((g) => {
+      if (!g.name.trim()) throw new Error('An ad group needs a name.');
+      AmazonAdsApiClient.assertPositive(g.defaultBid, 'defaultBid', g.name);
+      return {
+        campaignId: g.campaignId,
+        name: g.name,
+        defaultBid: g.defaultBid,
+        state: 'PAUSED',
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.adGroups,
+      'adGroups',
+      'post',
+      items
+    );
+  }
+
+  /**
+   * Put SKUs into an ad group. Without at least one, a campaign can never
+   * serve — which is why `createCampaignTree` treats zero as a failed tree
+   * rather than a partial success.
+   *
+   * `sku` is preferred over `asin` when both are given: a seller's own SKU
+   * identifies THEIR listing, while an ASIN identifies a product several
+   * sellers may offer (see the SKU/FNSKU distinction the catalog code relies
+   * on). Advertising the ASIN when the seller meant their SKU can point spend
+   * at a listing they do not own.
+   */
+  public async createProductAds(
+    productAds: Array<{
+      campaignId: string;
+      adGroupId: string;
+      sku?: string;
+      asin?: string;
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = productAds.map((a) => {
+      if (!a.sku && !a.asin) {
+        throw new Error(
+          `A product ad in ad group ${a.adGroupId} names neither sku nor asin.`
+        );
+      }
+      return {
+        campaignId: a.campaignId,
+        adGroupId: a.adGroupId,
+        state: 'PAUSED',
+        ...(a.sku ? { sku: a.sku } : { asin: a.asin }),
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.productAds,
+      'productAds',
+      'post',
+      items
+    );
+  }
+
+  /**
+   * Create keywords. Always PAUSED.
+   *
+   * `bid` is optional because an omitted bid inherits the ad group's default,
+   * which is usually what a seller means by "add these keywords" — and is
+   * strictly safer than this code inventing a number.
+   */
+  public async createKeywords(
+    keywords: Array<{
+      campaignId: string;
+      adGroupId: string;
+      keywordText: string;
+      matchType: AdsKeywordMatchType;
+      bid?: number;
+    }>
+  ): Promise<AdsMutationResult> {
+    const items = keywords.map((k) => {
+      if (!k.keywordText.trim()) {
+        throw new Error('A keyword needs text.');
+      }
+      AmazonAdsApiClient.assertPositive(k.bid, 'bid', k.keywordText);
+      return {
+        campaignId: k.campaignId,
+        adGroupId: k.adGroupId,
+        keywordText: k.keywordText,
+        matchType: k.matchType,
+        state: 'PAUSED',
+        ...(k.bid !== undefined ? { bid: k.bid } : {}),
+      };
+    });
+    return this.mutateResource(
+      AmazonAdsApiClient.WRITE_ENDPOINTS.keywords,
+      'keywords',
+      'post',
+      items
+    );
+  }
+
+  /**
+   * Build a whole campaign, PAUSED, reporting what exists (#146).
+   *
+   * Delegates: the decision layer — which levels to attempt, when to stop, and
+   * whether the result can serve — lives in `campaign-tree.ts`, where it is
+   * testable without a transport. This method exists so callers holding a client
+   * do not have to assemble the writer themselves.
+   */
+  public async createCampaignTree(
+    request: AdCampaignTreeRequest
+  ): Promise<AdCampaignTreeResult> {
+    return createCampaignTree(
+      {
+        createCampaigns: (c) => this.createCampaigns(c),
+        createAdGroups: (g) => this.createAdGroups(g),
+        createProductAds: (a) => this.createProductAds(a),
+        createKeywords: (k) => this.createKeywords(k),
+      },
+      request
     );
   }
 }

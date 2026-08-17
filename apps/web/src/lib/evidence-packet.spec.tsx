@@ -34,6 +34,10 @@ function document(
       signals: [],
     },
     extracted: {
+      // `documentType` is required by the schema, and the cast was hiding its
+      // absence rather than allowing it — `as` on a mismatched object shape is
+      // an error, not a widening. 'invoice' matches the recognition above.
+      documentType: 'invoice',
       vendorName: 'Yiwu Textile Co',
       currency: 'USD',
       total: 9880,

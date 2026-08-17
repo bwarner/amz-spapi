@@ -111,6 +111,13 @@ const TOOL_LABELS: Record<string, [string, string]> = {
     'Updating negative keywords...',
     'Negative keyword update submitted',
   ],
+  'create-ad-campaign': [
+    'Creating campaign, ad group, ads and targets...',
+    // Not "campaign created": the tree can be partial, and it is always
+    // PAUSED. The result itself says which levels exist and whether it can
+    // serve — this label must not preempt that with better news.
+    'Campaign build finished — see what was created',
+  ],
   'total-report-rows': ['Totalling report rows...', 'Report totals ready'],
   'check-report-coverage': [
     'Checking report coverage...',
@@ -198,7 +205,43 @@ const APPROVAL_TOOL_SUMMARIES: Record<string, string> = {
     'Add negative keywords to the LIVE ad account (blocks matching search terms)',
   'update-ad-negative-keywords':
     'Pause or re-enable negative keywords on the LIVE ad account',
+  'create-ad-campaign':
+    'CREATE a new campaign on the LIVE ad account — created PAUSED, and there ' +
+    'is no undo (archiving must be done in the Ads console)',
 };
+
+/**
+ * The tree an approval is being asked for, in one line (#146).
+ *
+ * Needed because `adsBatchCount` below would otherwise count this tool's
+ * `keywords` array and render "(12 items)" — a number that describes neither the
+ * campaign nor the SKUs, on the one card where the seller is consenting to
+ * something irreversible. What they need to see is the shape and the money.
+ */
+function campaignTreeSummary(input: unknown): string {
+  const tree = input as {
+    name?: string;
+    targetingType?: string;
+    dailyBudget?: number;
+    products?: unknown[];
+    keywords?: unknown[];
+  } | null;
+  if (!tree?.name) return '';
+
+  const skus = Array.isArray(tree.products) ? tree.products.length : 0;
+  const targets = Array.isArray(tree.keywords) ? tree.keywords.length : 0;
+  return [
+    `“${tree.name}”`,
+    tree.dailyBudget !== undefined ? `${tree.dailyBudget}/day` : '',
+    tree.targetingType ?? '',
+    `${skus} SKU${skus === 1 ? '' : 's'}`,
+    // Omitted rather than shown as zero: an AUTO campaign has no keywords by
+    // design, and "0 keywords" reads as something missing.
+    targets ? `${targets} keyword${targets === 1 ? '' : 's'}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 /** The batch a bulk ads write is asking to apply, for the approval line. */
 function adsBatchCount(input: unknown): number | undefined {
@@ -218,6 +261,15 @@ function adsBatchCount(input: unknown): number | undefined {
 
 export function approvalSummary(toolName: string, input: unknown): string {
   const base = APPROVAL_TOOL_SUMMARIES[toolName] ?? `Run ${toolName}`;
+
+  // Handled before the generic counts, not after: this tool carries a
+  // `keywords` array that `adsBatchCount` would happily count as "items",
+  // producing a number that describes neither the campaign nor its SKUs.
+  if (toolName === 'create-ad-campaign') {
+    const tree = campaignTreeSummary(input);
+    return tree ? `${base} — ${tree}` : base;
+  }
+
   const sku = (input as { sku?: string } | null)?.sku;
   const imageCount = (input as { imageAssetIds?: string[] } | null)
     ?.imageAssetIds?.length;
