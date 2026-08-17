@@ -199,6 +199,21 @@ export const OWNERSHIP: CollectionOwnership[] = [
     collection,
     ownership: { kind: 'seller-field' as const, field: 'sellerId' as const },
   })),
+
+  /**
+   * The ads report sync's run records (#145).
+   *
+   * `user-field`, NOT `seller-field` like its neighbours above — and the
+   * difference is not a preference. These documents are keyed on the ADVERTISER
+   * PROFILE (`userId::profileId::kind::from..to`) and carry no `sellerId` at
+   * all, because an ads profile and a seller account are different identifiers.
+   * Classifying it as `seller-field` would name a field that does not exist, and
+   * the export would find nothing while reporting success.
+   */
+  {
+    collection: 'sync_ads_runs',
+    ownership: { kind: 'user-field' as const, field: 'userId' as const },
+  },
 ];
 
 /** Lookup by collection name. */
