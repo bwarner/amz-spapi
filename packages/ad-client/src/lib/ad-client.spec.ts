@@ -653,266 +653,115 @@ describe('writes', () => {
 });
 
 /**
- * Creating a campaign tree (#146).
+ * Creating a campaign tree, at the transport level only (#146).
  *
- * Everything above this point can be undone by a second call. None of this can:
- * Amazon has no delete that returns a campaign to not-existing, and archiving is
- * permanent and deliberately unexposed. So the tests are about the two things
- * that keep it safe — nothing is created ENABLED, and a partial tree is reported
- * as what it is rather than as success.
+ * The orchestration and the servable/remediation decisions are
+ * `campaign-tree.spec.ts`, which needs no HTTP. What belongs HERE is what only
+ * a real request can show: the vendored media types, and that nothing is ever
+ * created ENABLED.
  */
-describe('createCampaignTree', () => {
-  /** Responses per endpoint, so each level can succeed or fail independently. */
-  function treeClient(byPath: Record<string, unknown>) {
-    const captured: Captured[] = [];
-    const client = new AmazonAdsApiClient({
-      clientId: 'amzn1.application-oa2-client.test',
-      marketplaceId: 'ATVPDKIKX0DER',
-      profileId: '967757046531288',
-      accessToken: 'token',
-    });
-    const post = async (path: string, body: unknown, config: unknown) => {
-      captured.push({
-        method: 'post',
-        path,
-        body: (body ?? {}) as Record<string, unknown>,
-        headers: ((config as { headers?: Record<string, string> })?.headers ??
-          {}) as Record<string, string>,
-      });
-      return { data: byPath[path] ?? {} };
-    };
-    (client as unknown as { httpClient: unknown }).httpClient = {
-      post: vi.fn(post),
-      put: vi.fn(post),
-      get: vi.fn(async () => ({ data: {} })),
-    };
-    return { client, captured };
-  }
-
-  const ok = {
-    '/sp/campaigns': {
-      campaigns: { success: [{ campaignId: 'C1' }], error: [] },
-    },
-    '/sp/adGroups': { adGroups: { success: [{ adGroupId: 'G1' }], error: [] } },
-    '/sp/productAds': {
-      productAds: { success: [{ adId: 'A1' }], error: [] },
-    },
-    '/sp/keywords': { keywords: { success: [{ keywordId: 'K1' }], error: [] } },
-  };
-
-  const manual = {
-    name: 'SP - Exact - French Press',
-    targetingType: 'MANUAL' as const,
-    dailyBudget: 25,
-    adGroup: { name: 'Core', defaultBid: 0.75 },
-    products: [{ sku: 'FP-24OZ' }],
-    keywords: [{ keywordText: 'french press', matchType: 'EXACT' as const }],
-  };
-
-  it('creates every level PAUSED, whatever was asked for', async () => {
-    // The property that converts an irreversible create into a reversible one:
-    // a paused tree spends nothing, so a mistake costs a cleanup and not money.
-    const { client, captured } = treeClient(ok);
-    await client.createCampaignTree(manual);
-
-    expect(captured).toHaveLength(4);
-    for (const call of captured) {
-      const collection = Object.values(call.body)[0] as Array<
-        Record<string, unknown>
-      >;
-      for (const item of collection) {
-        expect(item.state).toBe('PAUSED');
-      }
-    }
-  });
-
-  it('reports a complete tree as servable, and says it is not running', async () => {
-    const { client } = treeClient(ok);
-    const result = await client.createCampaignTree(manual);
-
-    expect(result.servable).toBe(true);
-    expect(result.campaign.campaignId).toBe('C1');
-    expect(result.adGroup.adGroupId).toBe('G1');
-    expect(result.productAds.created).toBe(1);
-    expect(result.keywords.created).toBe(1);
-    // "Created" reads as "running" and must not.
-    expect(result.remediation.join(' ')).toMatch(/PAUSED and spending nothing/);
-  });
-
-  it('stops when the campaign fails, and says nothing was created', async () => {
-    const { client, captured } = treeClient({
-      '/sp/campaigns': {
-        campaigns: {
-          success: [],
-          error: [
+describe('create requests', () => {
+  it.each([
+    ['createCampaigns', 'spCampaign.v3', '/sp/campaigns'],
+    ['createAdGroups', 'spAdGroup.v3', '/sp/adGroups'],
+    ['createProductAds', 'spProductAd.v3', '/sp/productAds'],
+    ['createKeywords', 'spKeyword.v3', '/sp/keywords'],
+  ] as const)(
+    'POSTs %s with its vendored type',
+    async (method, media, path) => {
+      const { client, captured } = clientWithCapture({});
+      const args: Record<string, unknown[]> = {
+        createCampaigns: [
+          [{ name: 'C', targetingType: 'AUTO', dailyBudget: 10 }],
+        ],
+        createAdGroups: [[{ campaignId: 'C1', name: 'G', defaultBid: 0.5 }]],
+        createProductAds: [[{ campaignId: 'C1', adGroupId: 'G1', sku: 'S' }]],
+        createKeywords: [
+          [
             {
-              index: 0,
-              errors: [
-                { errorType: 'DUPLICATE_VALUE', message: 'name exists' },
-              ],
+              campaignId: 'C1',
+              adGroupId: 'G1',
+              keywordText: 'k',
+              matchType: 'EXACT',
             },
           ],
-        },
-      },
-    });
-    const result = await client.createCampaignTree(manual);
-
-    expect(captured).toHaveLength(1);
-    expect(result.campaign.created).toBe(false);
-    expect(result.campaign.error).toContain('name exists');
-    expect(result.servable).toBe(false);
-    // The one clean failure: nothing exists, so nothing needs cleaning up.
-    expect(result.remediation.join(' ')).toMatch(/Nothing was created/);
-  });
-
-  it('keeps the campaign id when the ad group fails, because there is no rollback', async () => {
-    // Throwing here would discard the id of the thing Amazon already created,
-    // which is the only handle for finishing or archiving it.
-    const { client, captured } = treeClient({
-      ...ok,
-      '/sp/adGroups': {
-        adGroups: {
-          success: [],
-          error: [{ index: 0, errors: [{ message: 'bid too low' }] }],
-        },
-      },
-    });
-    const result = await client.createCampaignTree(manual);
-
-    expect(captured.map((c) => c.path)).toEqual([
-      '/sp/campaigns',
-      '/sp/adGroups',
-    ]);
-    expect(result.campaign.created).toBe(true);
-    expect(result.campaign.campaignId).toBe('C1');
-    expect(result.adGroup.created).toBe(false);
-    expect(result.servable).toBe(false);
-    expect(result.remediation.join(' ')).toContain('C1');
-    expect(result.remediation.join(' ')).toMatch(
-      /cannot archive|archive the campaign/
-    );
-  });
-
-  it('is NOT servable when every product ad fails, even though the campaign exists', async () => {
-    // The dangerous outcome: a campaign that looks created and can never show
-    // an impression.
-    const { client } = treeClient({
-      ...ok,
-      '/sp/productAds': {
-        productAds: {
-          success: [],
-          error: [{ index: 0, errors: [{ message: 'sku not found' }] }],
-        },
-      },
-    });
-    const result = await client.createCampaignTree(manual);
-
-    expect(result.campaign.created).toBe(true);
-    expect(result.adGroup.created).toBe(true);
-    expect(result.servable).toBe(false);
-    expect(result.remediation.join(' ')).toMatch(/No product ads/);
-  });
-
-  it('is servable when only SOME product ads fail, and says which', async () => {
-    const { client } = treeClient({
-      ...ok,
-      '/sp/productAds': {
-        productAds: {
-          success: [{ adId: 'A1' }],
-          error: [{ index: 1, errors: [{ message: 'sku not found' }] }],
-        },
-      },
-    });
-    const result = await client.createCampaignTree({
-      ...manual,
-      products: [{ sku: 'FP-24OZ' }, { sku: 'GONE-SKU' }],
-    });
-
-    expect(result.servable).toBe(true);
-    // Named by the caller's own label, not by index — "one of these failed" is
-    // not an answer a seller can act on.
-    expect(result.productAds.failures).toEqual([
-      { item: 'GONE-SKU', error: 'sku not found' },
-    ]);
-  });
-
-  it('is NOT servable when a MANUAL campaign gets no keywords', async () => {
-    const { client } = treeClient({
-      ...ok,
-      '/sp/keywords': {
-        keywords: {
-          success: [],
-          error: [{ index: 0, errors: [{ message: 'blocked term' }] }],
-        },
-      },
-    });
-    const result = await client.createCampaignTree(manual);
-
-    expect(result.servable).toBe(false);
-    expect(result.remediation.join(' ')).toMatch(/No keywords .* MANUAL/);
-  });
-
-  it('does not require keywords for an AUTO campaign', async () => {
-    const { client, captured } = treeClient(ok);
-    const result = await client.createCampaignTree({
-      name: 'Auto - Discovery',
-      targetingType: 'AUTO',
-      dailyBudget: 10,
-      adGroup: { name: 'Discovery', defaultBid: 0.5 },
-      products: [{ sku: 'FP-24OZ' }],
-    });
-
-    expect(result.servable).toBe(true);
-    expect(captured.map((c) => c.path)).not.toContain('/sp/keywords');
-  });
-
-  it('refuses combinations that could never serve, before creating anything', async () => {
-    const cases: Array<
-      [string, Parameters<AmazonAdsApiClient['createCampaignTree']>[0], RegExp]
-    > = [
-      ['no products', { ...manual, products: [] }, /can never serve/],
-      [
-        'MANUAL with no keywords',
-        { ...manual, keywords: [] },
-        /MANUAL but names no keywords/,
-      ],
-      [
-        'AUTO with keywords',
-        { ...manual, targetingType: 'AUTO' as const },
-        /AUTO, which chooses its own targets/,
-      ],
-    ];
-
-    for (const [, request, expected] of cases) {
-      const { client, captured } = treeClient(ok);
-      await expect(client.createCampaignTree(request)).rejects.toThrow(
-        expected
+        ],
+      };
+      await (client[method] as (...a: unknown[]) => Promise<unknown>)(
+        ...args[method]
       );
-      // Refused locally: Amazon was never called, so there is nothing to clean up.
-      expect(captured).toHaveLength(0);
+
+      expect(captured[0].method).toBe('post');
+      expect(captured[0].path).toBe(path);
+      expect(captured[0].headers.Accept).toBe(`application/vnd.${media}+json`);
+      expect(captured[0].headers['Content-Type']).toBe(
+        `application/vnd.${media}+json`
+      );
+    }
+  );
+
+  it('never sends ENABLED, because state is not a parameter', async () => {
+    // The property that makes an irreversible create acceptable: a paused tree
+    // spends nothing, so a mistake costs a cleanup rather than a budget.
+    const { client, captured } = clientWithCapture({});
+    await client.createCampaigns([
+      { name: 'C', targetingType: 'AUTO', dailyBudget: 10 },
+    ]);
+    await client.createAdGroups([
+      { campaignId: 'C1', name: 'G', defaultBid: 0.5 },
+    ]);
+    await client.createProductAds([
+      { campaignId: 'C1', adGroupId: 'G1', sku: 'S' },
+    ]);
+    await client.createKeywords([
+      {
+        campaignId: 'C1',
+        adGroupId: 'G1',
+        keywordText: 'k',
+        matchType: 'EXACT',
+      },
+    ]);
+
+    for (const call of captured) {
+      const items = Object.values(call.body)[0] as Array<
+        Record<string, unknown>
+      >;
+      for (const item of items) expect(item.state).toBe('PAUSED');
     }
   });
 
   it('advertises the SKU rather than the ASIN when both are given', async () => {
     // A SKU identifies the seller's own listing; an ASIN identifies a product
-    // several sellers may offer.
-    const { client, captured } = treeClient(ok);
-    await client.createCampaignTree({
-      ...manual,
-      products: [{ sku: 'FP-24OZ', asin: 'B0SOMETHING' }],
-    });
+    // several sellers may offer, so the wrong one points spend at someone
+    // else's listing.
+    const { client, captured } = clientWithCapture({});
+    await client.createProductAds([
+      { campaignId: 'C1', adGroupId: 'G1', sku: 'FP-24OZ', asin: 'B0XXXX' },
+    ]);
 
-    const call = captured.find((c) => c.path === '/sp/productAds');
-    const [ad] = call?.body['productAds'] as Array<Record<string, unknown>>;
+    const [ad] = captured[0].body['productAds'] as Array<
+      Record<string, unknown>
+    >;
     expect(ad.sku).toBe('FP-24OZ');
     expect(ad.asin).toBeUndefined();
   });
 
-  it('sends the vendored media type for product ads', async () => {
-    const { client, captured } = treeClient(ok);
-    await client.createCampaignTree(manual);
+  it('refuses a product ad naming neither sku nor asin', async () => {
+    const { client } = clientWithCapture({});
+    await expect(
+      client.createProductAds([{ campaignId: 'C1', adGroupId: 'G1' }])
+    ).rejects.toThrow(/neither sku nor asin/);
+  });
 
-    const call = captured.find((c) => c.path === '/sp/productAds');
-    expect(call?.headers.Accept).toBe('application/vnd.spProductAd.v3+json');
+  it('refuses a non-positive budget or bid locally, not at Amazon', async () => {
+    const { client } = clientWithCapture({});
+    await expect(
+      client.createCampaigns([
+        { name: 'C', targetingType: 'AUTO', dailyBudget: 0 },
+      ])
+    ).rejects.toThrow(/dailyBudget/);
+    await expect(
+      client.createAdGroups([{ campaignId: 'C1', name: 'G', defaultBid: -1 }])
+    ).rejects.toThrow(/defaultBid/);
   });
 });

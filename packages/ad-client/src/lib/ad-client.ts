@@ -6,6 +6,11 @@ import axios, {
   AxiosError,
   InternalAxiosRequestConfig,
 } from 'axios';
+import {
+  createCampaignTree,
+  type AdCampaignTreeRequest,
+  type AdCampaignTreeResult,
+} from './campaign-tree.js';
 
 export interface AmazonAdsClientConfig {
   clientId: string; // LwA Client ID
@@ -85,88 +90,6 @@ export type AdsKeywordMatchType = 'EXACT' | 'PHRASE' | 'BROAD';
  * never show an impression.
  */
 export type AdsTargetingType = 'AUTO' | 'MANUAL';
-
-/**
- * A whole Sponsored Products campaign, as one request (#146).
- *
- * One object rather than four calls the caller sequences, because the id of
- * each level is only known once the level above succeeded — and because a
- * caller free to stop halfway is a caller who can leave live-money structure
- * in a broken state.
- */
-export type AdCampaignTreeRequest = {
-  name: string;
-  targetingType: AdsTargetingType;
-  dailyBudget: number;
-  biddingStrategy?:
-    | 'LEGACY_FOR_SALES'
-    | 'AUTO_FOR_SALES'
-    | 'MANUAL'
-    | 'RULE_BASED';
-  adGroup: { name: string; defaultBid: number };
-  /**
-   * What to advertise. At least one is required and the requirement is not
-   * cosmetic: a campaign with no product ads is accepted by Amazon, costs
-   * nothing, and can never show an impression.
-   */
-  products: Array<{ sku?: string; asin?: string }>;
-  /**
-   * Targets, for MANUAL campaigns. An AUTO campaign supplies its own, so
-   * keywords here would be rejected by Amazon rather than ignored.
-   */
-  keywords?: Array<{
-    keywordText: string;
-    matchType: AdsKeywordMatchType;
-    bid?: number;
-  }>;
-};
-
-/** One level's outcome, per item, named the way a human would name it. */
-export type AdTreeLevelResult = {
-  requested: number;
-  created: number;
-  failures: Array<{ item: string; error: string }>;
-};
-
-/**
- * What was actually built — not what was asked for.
- *
- * The dangerous outcome of a four-POST create is not an error. It is a campaign
- * that exists, looks created, is missing the one level that makes it able to
- * serve, and reports success. So this type has no boolean for "did it work":
- * it has the tree that exists, and `servable`, which is computed from that tree
- * rather than from the absence of errors.
- */
-export type AdCampaignTreeResult = {
-  campaign: {
-    name: string;
-    created: boolean;
-    campaignId?: string;
-    error?: string;
-  };
-  adGroup: {
-    name: string;
-    created: boolean;
-    adGroupId?: string;
-    error?: string;
-  };
-  productAds: AdTreeLevelResult;
-  keywords: AdTreeLevelResult;
-  /**
-   * Whether what exists could show an impression once enabled.
-   *
-   * Requires the campaign, the ad group, at least one product ad, and — for a
-   * MANUAL campaign — at least one keyword. Anything less is structure that
-   * spends nothing and returns nothing.
-   */
-  servable: boolean;
-  /**
-   * What a person has to do about what exists. Never empty when `servable` is
-   * false, because there is no rollback: this client cannot archive, so a
-   * half-built tree has to be finished or cleaned up by hand in the console.
-   */
-  remediation: string[];
-};
 
 /**
  * The two halves of a v3 bulk mutation, which arrive TOGETHER in a 207.
@@ -1436,215 +1359,24 @@ export class AmazonAdsApiClient {
   }
 
   /**
-   * Amazon's per-item error, as a sentence.
+   * Build a whole campaign, PAUSED, reporting what exists (#146).
    *
-   * The 207 error entries carry an `errors` array of `{errorType, message}` and
-   * nothing human-readable at the top level, so a caller that stringifies the
-   * object gets JSON in front of a seller. Falls back to the whole object only
-   * when the shape is unfamiliar — losing the detail would be worse than
-   * printing something ugly.
-   */
-  private static describeItemError(entry: Record<string, unknown>): string {
-    const inner = entry['errors'];
-    if (Array.isArray(inner) && inner.length > 0) {
-      const messages = inner
-        .map((e) => {
-          const o = e as Record<string, unknown>;
-          return [o['errorType'], o['message']].filter(Boolean).join(': ');
-        })
-        .filter(Boolean);
-      if (messages.length) return messages.join('; ');
-    }
-    return typeof entry['message'] === 'string'
-      ? entry['message']
-      : JSON.stringify(entry);
-  }
-
-  /** Fold a 207 into per-item counts, labelling failures by the caller's own name for the item. */
-  private static levelResult(
-    result: AdsMutationResult,
-    labels: string[]
-  ): AdTreeLevelResult {
-    return {
-      requested: labels.length,
-      created: result.success.length,
-      failures: result.error.map((entry) => {
-        // `index` maps the failure back to the request item; without it a
-        // seller is told "one of these failed" and has to guess which.
-        const index = entry['index'];
-        return {
-          item:
-            typeof index === 'number' && labels[index] !== undefined
-              ? labels[index]
-              : '(unidentified item)',
-          error: AmazonAdsApiClient.describeItemError(entry),
-        };
-      }),
-    };
-  }
-
-  /**
-   * Build a whole campaign, PAUSED, reporting what exists.
-   *
-   * Descends only while the level above succeeded, because the ids come from the
-   * responses: no campaign id means no ad group is possible, and no ad group id
-   * means neither product ads nor keywords are. Product ads and keywords are
-   * siblings — one failing does not stop the other, and both are attempted so
-   * the seller learns about both problems in one pass rather than two.
-   *
-   * Never throws for a partial tree. A throw would discard the ids of what was
-   * already created, which is the one piece of information needed to finish or
-   * clean up — and Amazon has already created it either way.
+   * Delegates: the decision layer — which levels to attempt, when to stop, and
+   * whether the result can serve — lives in `campaign-tree.ts`, where it is
+   * testable without a transport. This method exists so callers holding a client
+   * do not have to assemble the writer themselves.
    */
   public async createCampaignTree(
     request: AdCampaignTreeRequest
   ): Promise<AdCampaignTreeResult> {
-    if (request.products.length === 0) {
-      throw new Error(
-        `Campaign ${request.name} names no products. A campaign with no product ` +
-          'ads can never serve, so this is refused before anything is created.'
-      );
-    }
-    const keywords = request.keywords ?? [];
-    if (request.targetingType === 'MANUAL' && keywords.length === 0) {
-      throw new Error(
-        `Campaign ${request.name} is MANUAL but names no keywords, so it could ` +
-          'never serve. Supply keywords, or use AUTO targeting.'
-      );
-    }
-    if (request.targetingType === 'AUTO' && keywords.length > 0) {
-      throw new Error(
-        `Campaign ${request.name} is AUTO, which chooses its own targets — ` +
-          'Amazon rejects keywords on an AUTO campaign rather than ignoring them.'
-      );
-    }
-
-    const empty: AdTreeLevelResult = { requested: 0, created: 0, failures: [] };
-    const productLabels = request.products.map(
-      (p) => p.sku ?? p.asin ?? '(unnamed product)'
-    );
-    const keywordLabels = keywords.map(
-      (k) => `${k.keywordText} (${k.matchType})`
-    );
-
-    const campaignResult = await this.createCampaigns([
+    return createCampaignTree(
       {
-        name: request.name,
-        targetingType: request.targetingType,
-        dailyBudget: request.dailyBudget,
-        ...(request.biddingStrategy
-          ? { biddingStrategy: request.biddingStrategy }
-          : {}),
+        createCampaigns: (c) => this.createCampaigns(c),
+        createAdGroups: (g) => this.createAdGroups(g),
+        createProductAds: (a) => this.createProductAds(a),
+        createKeywords: (k) => this.createKeywords(k),
       },
-    ]);
-    const campaignId = campaignResult.success[0]?.['campaignId'];
-    if (typeof campaignId !== 'string') {
-      const error = campaignResult.error[0]
-        ? AmazonAdsApiClient.describeItemError(campaignResult.error[0])
-        : 'Amazon returned no campaign id and no error.';
-      return {
-        campaign: { name: request.name, created: false, error },
-        adGroup: { name: request.adGroup.name, created: false },
-        productAds: { ...empty, requested: productLabels.length },
-        keywords: { ...empty, requested: keywordLabels.length },
-        servable: false,
-        // The only clean outcome on this path: nothing was created, so there is
-        // nothing to clean up.
-        remediation: ['Nothing was created. Fix the reported error and retry.'],
-      };
-    }
-
-    const adGroupResult = await this.createAdGroups([
-      {
-        campaignId,
-        name: request.adGroup.name,
-        defaultBid: request.adGroup.defaultBid,
-      },
-    ]);
-    const adGroupId = adGroupResult.success[0]?.['adGroupId'];
-    if (typeof adGroupId !== 'string') {
-      const error = adGroupResult.error[0]
-        ? AmazonAdsApiClient.describeItemError(adGroupResult.error[0])
-        : 'Amazon returned no ad group id and no error.';
-      return {
-        campaign: { name: request.name, created: true, campaignId },
-        adGroup: { name: request.adGroup.name, created: false, error },
-        productAds: { ...empty, requested: productLabels.length },
-        keywords: { ...empty, requested: keywordLabels.length },
-        servable: false,
-        remediation: [
-          `Campaign ${request.name} (${campaignId}) exists with no ad group, so ` +
-            'it can never serve. It is PAUSED and spends nothing. Either add an ' +
-            'ad group in the console, or archive the campaign there — this tool ' +
-            'cannot archive.',
-        ],
-      };
-    }
-
-    const [productAdResult, keywordResult] = await Promise.all([
-      this.createProductAds(
-        request.products.map((p) => ({ campaignId, adGroupId, ...p }))
-      ),
-      keywords.length
-        ? this.createKeywords(
-            keywords.map((k) => ({ campaignId, adGroupId, ...k }))
-          )
-        : Promise.resolve<AdsMutationResult>({ success: [], error: [] }),
-    ]);
-
-    const productAds = AmazonAdsApiClient.levelResult(
-      productAdResult,
-      productLabels
+      request
     );
-    const keywordLevel = AmazonAdsApiClient.levelResult(
-      keywordResult,
-      keywordLabels
-    );
-
-    const needsKeywords = request.targetingType === 'MANUAL';
-    const servable =
-      productAds.created > 0 && (!needsKeywords || keywordLevel.created > 0);
-
-    const remediation: string[] = [];
-    if (productAds.created === 0) {
-      remediation.push(
-        `No product ads were created, so campaign ${request.name} ` +
-          `(${campaignId}) cannot serve. Add the SKUs in the console, or archive ` +
-          'the campaign there.'
-      );
-    } else if (productAds.failures.length) {
-      remediation.push(
-        `${productAds.failures.length} of ${productAds.requested} product ads ` +
-          'failed — the campaign will serve, but not for those SKUs.'
-      );
-    }
-    if (needsKeywords && keywordLevel.created === 0) {
-      remediation.push(
-        `No keywords were created on a MANUAL campaign, so ${request.name} ` +
-          `(${campaignId}) cannot serve. Add targets in the console, or archive it.`
-      );
-    } else if (keywordLevel.failures.length) {
-      remediation.push(
-        `${keywordLevel.failures.length} of ${keywordLevel.requested} keywords ` +
-          'failed — the campaign will serve on the rest.'
-      );
-    }
-    if (servable) {
-      // Said on every successful path, because "created" reads as "running" and
-      // it is not: nothing spends until somebody enables it.
-      remediation.push(
-        `Created PAUSED and spending nothing. Enable ${request.name} ` +
-          `(${campaignId}) when the structure looks right.`
-      );
-    }
-
-    return {
-      campaign: { name: request.name, created: true, campaignId },
-      adGroup: { name: request.adGroup.name, created: true, adGroupId },
-      productAds,
-      keywords: keywordLevel,
-      servable,
-      remediation,
-    };
   }
 }
