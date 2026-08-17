@@ -94,3 +94,15 @@ tools/render-out/
 # would drift.
 .opencode/
 opencode.json
+
+# A local pnpm store, if one is configured inside the repo. Large, machine
+# specific, and reconstructible.
+.pnpm-store/
+
+# This workspace is pnpm (see `packageManager` and pnpm-lock.yaml). An npm
+# lockfile here means `npm install` was run, and the flat node_modules it
+# produces HIDES undeclared workspace dependencies — a package that forgot to
+# declare an internal dep resolves fine locally and fails in CI, which is the
+# exact failure the pnpm migration was undertaken to surface. Ignored so it
+# cannot be committed and cannot change which package manager a tool picks.
+package-lock.json
