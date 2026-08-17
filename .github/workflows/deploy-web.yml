@@ -72,9 +72,9 @@ jobs:
     # Gives the run an audit trail and somewhere to hang protection rules.
     environment: staging
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
@@ -95,11 +95,11 @@ jobs:
       # The tag, not the branch head. A release cut from an older commit must
       # deploy THAT commit — otherwise the release notes describe one thing and
       # production runs another.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
