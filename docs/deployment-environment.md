@@ -90,8 +90,13 @@ On **Vercel**: `CB_DATA_API_URL`, `CB_USERNAME`, `CB_PASSWORD`, `CB_BUCKET`,
 `CB_SCOPE`.
 
 `CB_SCOPE` is the environment, and collections are flat inside it
-([ADR-0005](adr/0005-environment-scopes.md)). **There is no `prod` scope yet** —
-whatever production points at today is not a production scope.
+([ADR-0005](adr/0005-environment-scopes.md)). Dev and staging are two scopes in
+the `sell-avant` bucket; production is the `prod` scope in a **different
+bucket**, `SellAvantProd`, on the **same cluster**.
+
+That the bucket differs is incidental — the boundary is the per-scope database
+user, not the host. All three environments dial the same hostname, and a
+misconfigured one gets `access denied` rather than another environment's data.
 
 ### On AWS, nothing about the connection is an environment variable
 
@@ -129,6 +134,7 @@ profile and account per stage (`sellavant-dev` for dev and staging,
 # already uses, so this asks for the password and nothing else.
 ./scripts/couchbase-secret.sh dev
 ./scripts/couchbase-secret.sh staging
+./scripts/couchbase-secret.sh prod
 
 # move the cluster - no code change, no deploy
 ./scripts/couchbase-secret.sh dev --url https://<new-id>.data.cloud.couchbase.com
@@ -141,9 +147,11 @@ profile and account per stage (`sellavant-dev` for dev and staging,
 ```
 
 Defaults come from what each environment already runs: dev is `SellAvant` on
-scope `dev`, staging is `sellavant-staging` on scope `staging` — separate users,
-so ADR-0005's fail-closed boundary holds. Prod has a different cluster and no
-scope yet, so it requires `--url` and is not needed at all today.
+scope `dev` in `sell-avant`, staging is `sellavant-staging` on scope `staging` in
+the same bucket, and prod is `sellavant-prod` on scope `prod` in `SellAvantProd`.
+Three separate users, so ADR-0005's fail-closed boundary holds. All three share
+one cluster, so none of them needs `--url` — that flag is for moving a cluster,
+not for reaching production.
 
 Warm Lambda containers pick up a change within `CB_SECRET_TTL_MS` (10 min
 default); cold ones immediately.
@@ -202,10 +210,10 @@ Only the `credentials` Lambda is granted read on this, together with
 `kms:Decrypt` on the credentials key — see `apps/lambdas/README.md`. Nothing
 else should hold either, and a test asserts it.
 
-**prod has no Couchbase configuration yet**, so there is nothing to create for
-it. Its bucket is a different cluster (`SellAvantProd`) and it has no scope; a
-Lambda declaring the flag against prod fails the synth rather than deploying
-broken.
+All three stages now have both secrets, so a Lambda declaring either flag
+deploys against prod rather than failing the synth. That guard is still the
+behaviour worth relying on: a stage whose secret is absent fails at synth, which
+is why a missing one is a build error and never a runtime surprise.
 
 ## What is not reproducible from this repository
 
