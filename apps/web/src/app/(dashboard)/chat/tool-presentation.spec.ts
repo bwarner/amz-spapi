@@ -128,3 +128,67 @@ describe('approvalSummary', () => {
     expect(summary).toContain('(1 item)');
   });
 });
+
+/**
+ * The approval line for creating a campaign (#146).
+ *
+ * The one card in the app where a seller consents to something with no undo, so
+ * the line has to describe what is actually being built. The specific trap:
+ * `adsBatchCount` matches on a `keywords` array, and this tool has one.
+ */
+describe('approvalSummary for create-ad-campaign', () => {
+  const tree = {
+    name: 'SP - Exact - French Press',
+    targetingType: 'MANUAL',
+    dailyBudget: 25,
+    adGroup: { name: 'Core', defaultBid: 0.75 },
+    products: [{ sku: 'FP-24OZ' }, { sku: 'FP-34OZ' }],
+    keywords: [
+      { keywordText: 'french press', matchType: 'EXACT' },
+      { keywordText: 'coffee press', matchType: 'EXACT' },
+      { keywordText: 'cafetiere', matchType: 'PHRASE' },
+    ],
+  };
+
+  it('says it is irreversible and created paused', () => {
+    const summary = approvalSummary('create-ad-campaign', tree);
+
+    expect(summary).toMatch(/no undo/i);
+    expect(summary).toMatch(/PAUSED/);
+    expect(summary).toMatch(/LIVE ad account/);
+  });
+
+  it('describes the tree rather than counting "items"', () => {
+    // Without the early return this read "(3 items)" — the keyword count,
+    // describing neither the campaign nor its SKUs.
+    const summary = approvalSummary('create-ad-campaign', tree);
+
+    expect(summary).toContain('SP - Exact - French Press');
+    expect(summary).toContain('25/day');
+    expect(summary).toContain('MANUAL');
+    expect(summary).toContain('2 SKUs');
+    expect(summary).toContain('3 keywords');
+    expect(summary).not.toMatch(/\d+ items?/);
+  });
+
+  it('omits keywords for an AUTO campaign instead of showing zero', () => {
+    // "0 keywords" reads as something missing; an AUTO campaign has none by
+    // design.
+    const summary = approvalSummary('create-ad-campaign', {
+      name: 'Auto - Discovery',
+      targetingType: 'AUTO',
+      dailyBudget: 10,
+      products: [{ sku: 'FP-24OZ' }],
+    });
+
+    expect(summary).toContain('1 SKU');
+    expect(summary).not.toMatch(/keyword/);
+  });
+
+  it('falls back to the base sentence when the input is unusable', () => {
+    // A malformed input must still name the risk rather than rendering blank.
+    const summary = approvalSummary('create-ad-campaign', null);
+
+    expect(summary).toMatch(/no undo/i);
+  });
+});
