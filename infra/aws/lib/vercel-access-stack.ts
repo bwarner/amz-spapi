@@ -48,12 +48,35 @@ export class VercelAccessStack extends Stack {
     // of the boundary on the `aud` and `sub` conditions below.
     const issuerUrl = `https://oidc.vercel.com/${vercel.teamSlug}`;
 
-    const provider = new iam.OpenIdConnectProvider(this, 'VercelOidc', {
-      url: issuerUrl,
-      // Vercel's own audience convention. Not a secret; it is what the `aud`
-      // condition is matched against.
-      clientIds: [`https://vercel.com/${vercel.teamSlug}`],
-    });
+    /**
+     * The OIDC provider is per ACCOUNT, not per stage.
+     *
+     * IAM keys it by URL, and the URL contains the team — not the stage. So the
+     * usual assumption in `stages.ts`, that dev and staging can share an account
+     * because "resource names carry the stage", does not hold here: there is no
+     * name to carry one. Dev and staging want the identical URL, and the second
+     * stack to deploy fails with `EntityAlreadyExistsException`.
+     *
+     * So exactly one stage per account creates it and the others reference it.
+     * The ARN is fully determined by the account and the URL, so referencing
+     * needs no export, no import, and no deploy ordering between the stacks —
+     * which also means destroying the owning stage's stack does not silently
+     * break the others' trust policies at synth time. It would break them at
+     * runtime, which is the honest failure: the provider really is gone.
+     */
+    const providerArn = vercel.ownsOidcProvider
+      ? new iam.OpenIdConnectProvider(this, 'VercelOidc', {
+          url: issuerUrl,
+          // Vercel's own audience convention. Not a secret; it is what the
+          // `aud` condition is matched against.
+          clientIds: [`https://vercel.com/${vercel.teamSlug}`],
+        }).openIdConnectProviderArn
+      : Stack.of(this).formatArn({
+          service: 'iam',
+          region: '',
+          resource: 'oidc-provider',
+          resourceName: `oidc.vercel.com/${vercel.teamSlug}`,
+        });
 
     // `sub` identifies exactly one project in one environment. Without it, any
     // project in the team could assume this role — including one added later
@@ -63,15 +86,12 @@ export class VercelAccessStack extends Stack {
     this.role = new iam.Role(this, 'VercelRole', {
       roleName: `${config.appName}-${config.stageName}-vercel`,
       description: `Assumed by Vercel ${vercel.environment} deployments of ${vercel.projectName}.`,
-      assumedBy: new iam.WebIdentityPrincipal(
-        provider.openIdConnectProviderArn,
-        {
-          StringEquals: {
-            [`oidc.vercel.com/${vercel.teamSlug}:aud`]: `https://vercel.com/${vercel.teamSlug}`,
-            [`oidc.vercel.com/${vercel.teamSlug}:sub`]: subject,
-          },
-        }
-      ),
+      assumedBy: new iam.WebIdentityPrincipal(providerArn, {
+        StringEquals: {
+          [`oidc.vercel.com/${vercel.teamSlug}:aud`]: `https://vercel.com/${vercel.teamSlug}`,
+          [`oidc.vercel.com/${vercel.teamSlug}:sub`]: subject,
+        },
+      }),
       // An hour is far longer than a request; the credentials are cached per
       // instance and re-obtained on expiry.
       maxSessionDuration: cdk.Duration.hours(1),
