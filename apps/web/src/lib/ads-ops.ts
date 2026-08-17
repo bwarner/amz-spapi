@@ -190,5 +190,25 @@ export function createAdsOps(params: { userId: string }): SellerAdsOps {
       const client = await resolve(profileId);
       return client.updateNegativeKeywords(negativeKeywords);
     },
+
+    /**
+     * The one write here that cannot be undone (#146).
+     *
+     * As thin as the rest, and deliberately so. Everything that makes creation
+     * safe is somewhere a bypass here could not reach: PAUSED is enforced in the
+     * ad-client (state is not a parameter on any create), the approval gate is
+     * `needsApproval` on the tool, and the servable/remediation judgement is in
+     * `campaign-tree`. Adding policy at this layer would give the same rule two
+     * homes and let them disagree.
+     *
+     * `resolve` matters more than usual on this path: it refuses to guess a
+     * profile when the user holds several. Guessing wrong on a read shows the
+     * wrong marketplace's campaigns; guessing wrong here creates a live-money
+     * object in an account nobody asked about, and there is no undo.
+     */
+    async createCampaignTree({ profileId, tree }) {
+      const client = await resolve(profileId);
+      return client.createCampaignTree(tree);
+    },
   };
 }

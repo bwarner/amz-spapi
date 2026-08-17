@@ -375,6 +375,70 @@ export type AdsMutationResult = {
 /** Writes may only set these — archiving is deliberately not exposed. */
 export type AdsWriteState = 'ENABLED' | 'PAUSED';
 
+/**
+ * A whole Sponsored Products campaign to create (#146).
+ *
+ * Declared structurally here rather than imported from `ad-client`, matching
+ * `AdsMutationResult` above: this library describes what a host must be able to
+ * do, and stays free of the transport that does it.
+ *
+ * Note what is absent: state. Everything is created PAUSED and that is not the
+ * caller's choice — see `createCampaignTree`.
+ */
+export type AdsCampaignTree = {
+  name: string;
+  targetingType: 'AUTO' | 'MANUAL';
+  dailyBudget: number;
+  biddingStrategy?:
+    | 'LEGACY_FOR_SALES'
+    | 'AUTO_FOR_SALES'
+    | 'MANUAL'
+    | 'RULE_BASED';
+  adGroup: { name: string; defaultBid: number };
+  products: Array<{ sku?: string; asin?: string }>;
+  keywords?: Array<{
+    keywordText: string;
+    matchType: 'EXACT' | 'PHRASE' | 'BROAD';
+    bid?: number;
+  }>;
+};
+
+/** One level of the created tree, per item. */
+export type AdsTreeLevel = {
+  requested: number;
+  created: number;
+  failures: Array<{ item: string; error: string }>;
+};
+
+/**
+ * What was actually built — deliberately not "did it work".
+ *
+ * A create is four independent POSTs, so a partial tree is the ordinary failure.
+ * The outcome that needs naming is not an error: it is a campaign that exists,
+ * reports created, has no product ads, and can never show an impression. That is
+ * what `servable` is for.
+ */
+export type AdsCampaignTreeResult = {
+  campaign: {
+    name: string;
+    created: boolean;
+    campaignId?: string;
+    error?: string;
+  };
+  adGroup: {
+    name: string;
+    created: boolean;
+    adGroupId?: string;
+    error?: string;
+  };
+  productAds: AdsTreeLevel;
+  keywords: AdsTreeLevel;
+  /** Whether what exists could serve once enabled. */
+  servable: boolean;
+  /** What a human must do about what exists. Never empty when not servable. */
+  remediation: string[];
+};
+
 export interface SellerAdsOps {
   listProfiles(): Promise<
     Array<{
@@ -488,6 +552,26 @@ export interface SellerAdsOps {
     profileId?: string;
     negativeKeywords: Array<{ keywordId: string; state: AdsWriteState }>;
   }): Promise<AdsMutationResult>;
+  /**
+   * Create a whole campaign — the one write here that cannot be undone (#146).
+   *
+   * Everything above can be reversed by a second call. This cannot: Amazon has
+   * no delete that returns a campaign to not-existing, and archiving is
+   * permanent and not exposed. Two things make it acceptable anyway.
+   *
+   * It is created PAUSED, always, which is why the request carries no state. A
+   * paused tree spends nothing, so the irreversible part costs a console
+   * cleanup rather than a budget, and enabling it is a separate
+   * `updateCampaigns` call that IS reversible.
+   *
+   * And the result reports the tree that exists rather than the one that was
+   * asked for. One campaign per call, deliberately: a batch would put several
+   * partial trees behind a single approval.
+   */
+  createCampaignTree(params: {
+    profileId?: string;
+    tree: AdsCampaignTree;
+  }): Promise<AdsCampaignTreeResult>;
 }
 
 /** What reading a document tells the agent, before anything is filed. */
@@ -3341,6 +3425,176 @@ function getAdsWriteTools(
         runWrite(input.negativeKeywords.length, () =>
           adsOps.updateNegativeKeywords(input)
         ),
+    },
+
+    /**
+     * The only irreversible write in this file (#146).
+     *
+     * ONE tool taking the whole tree rather than four the model sequences. Four
+     * tools would mean four approval cards, and a seller who approves three of
+     * them owns a campaign that cannot serve — a partially-approved tree is
+     * exactly the failure this shape prevents.
+     *
+     * One campaign per call, not a batch, for the same reason: several partial
+     * trees behind a single yes is not a reviewable decision.
+     *
+     * There is no `state` in the schema. Everything is created PAUSED and the
+     * model cannot ask otherwise, which is what makes an irreversible operation
+     * acceptable — nothing spends until a separate, reversible
+     * `update-ad-campaigns` enables it.
+     */
+    'create-ad-campaign': {
+      description:
+        'WRITE, NOT REVERSIBLE: create ONE Sponsored Products campaign on the ' +
+        'LIVE ad account as a whole tree — campaign, one ad group, the SKUs to ' +
+        'advertise, and (for MANUAL) its keywords. Requires explicit user ' +
+        'approval; before proposing it, show the whole tree as a table — name, ' +
+        'daily budget, targeting type, ad group default bid, every SKU, and ' +
+        'every keyword with its match type and bid. Created PAUSED and spends ' +
+        'nothing until a separate update-ad-campaigns enables it. There is NO ' +
+        'undo: this cannot archive, so a mistaken campaign must be archived in ' +
+        'the Ads console. Budgets and bids are in the profile’s own currency.',
+      inputSchema: z.object({
+        profileId,
+        name: z
+          .string()
+          .min(1)
+          .max(128)
+          .describe(
+            'Campaign name. Amazon rejects a duplicate of an existing name, ' +
+              'so include what distinguishes it (match type, product).'
+          ),
+        targetingType: z
+          .enum(['AUTO', 'MANUAL'])
+          .describe(
+            'AUTO lets Amazon choose the search terms — the usual starting ' +
+              'point, and what a harvest funnel reads from. MANUAL serves only ' +
+              'on the keywords supplied here.'
+          ),
+        dailyBudget: z
+          .number()
+          .positive()
+          .describe('Daily budget in the profile’s currency.'),
+        biddingStrategy: z
+          .enum(['LEGACY_FOR_SALES', 'AUTO_FOR_SALES', 'MANUAL', 'RULE_BASED'])
+          .optional()
+          .describe(
+            'Omit unless the user asked for one. LEGACY_FOR_SALES lowers bids ' +
+              'when a click looks unlikely to convert; AUTO_FOR_SALES may also ' +
+              'raise them, so it can spend above the bid set here.'
+          ),
+        adGroup: z.object({
+          name: z.string().min(1).max(128),
+          defaultBid: z
+            .number()
+            .positive()
+            .describe(
+              'The bid used by any keyword that does not set its own, and the ' +
+                'only bid an AUTO campaign has.'
+            ),
+        }),
+        products: z
+          .array(
+            z
+              .object({
+                sku: z
+                  .string()
+                  .min(1)
+                  .optional()
+                  .describe(
+                    'The seller’s own SKU — preferred. A SKU identifies THEIR ' +
+                      'listing; an ASIN identifies a product several sellers ' +
+                      'may offer.'
+                  ),
+                asin: z.string().min(1).optional(),
+              })
+              .refine((p) => Boolean(p.sku || p.asin), {
+                message: 'Each product needs a sku or an asin.',
+              })
+          )
+          .min(1)
+          .max(100)
+          .describe(
+            'What to advertise. Required: a campaign with no product ads is ' +
+              'accepted by Amazon and can never show an impression.'
+          ),
+        keywords: z
+          .array(
+            z.object({
+              keywordText: z.string().min(1),
+              matchType: z.enum(['EXACT', 'PHRASE', 'BROAD']),
+              bid: z
+                .number()
+                .positive()
+                .optional()
+                .describe('Omit to inherit the ad group default bid.'),
+            })
+          )
+          .max(100)
+          .optional()
+          .describe(
+            'Required for MANUAL — a MANUAL campaign with no keywords can ' +
+              'never serve. Must be omitted for AUTO, which Amazon rejects ' +
+              'rather than ignores.'
+          ),
+      }),
+      needsApproval: true,
+      execute: async (input: {
+        profileId?: string;
+        name: string;
+        targetingType: 'AUTO' | 'MANUAL';
+        dailyBudget: number;
+        biddingStrategy?:
+          | 'LEGACY_FOR_SALES'
+          | 'AUTO_FOR_SALES'
+          | 'MANUAL'
+          | 'RULE_BASED';
+        adGroup: { name: string; defaultBid: number };
+        products: Array<{ sku?: string; asin?: string }>;
+        keywords?: Array<{
+          keywordText: string;
+          matchType: 'EXACT' | 'PHRASE' | 'BROAD';
+          bid?: number;
+        }>;
+      }) => {
+        const { profileId: profile, ...tree } = input;
+        try {
+          const result = await adsOps.createCampaignTree({
+            ...(profile ? { profileId: profile } : {}),
+            tree,
+          });
+
+          /**
+           * `success` is about the CALL, `servable` is about the campaign, and
+           * they are different questions. Naming both stops the model reporting
+           * a tree that can never serve as a created campaign — which is what
+           * "success: true" alone would invite.
+           */
+          return {
+            success: true as const,
+            servable: result.servable,
+            tree: result,
+            note: result.servable
+              ? 'Created PAUSED — it is NOT running and spends nothing yet. ' +
+                'Tell the user what was built, then that enabling it is a ' +
+                'separate approval (update-ad-campaigns). Report any ' +
+                'per-item failures; do not round them up.'
+              : 'INCOMPLETE TREE — this campaign CANNOT serve. Do NOT describe ' +
+                'it as created. Say exactly which levels exist, name every ' +
+                'failure with its reason, and give the user the remediation ' +
+                'steps verbatim: there is no undo and this tool cannot archive.',
+          };
+        } catch (error) {
+          // Reached only by the refusals that happen BEFORE any call — no
+          // products, MANUAL without keywords, AUTO with keywords. Nothing was
+          // created, so nothing needs cleaning up, and the message says why.
+          return {
+            success: false as const,
+            error: describeHttpError(error, 'Campaign creation failed.'),
+            note: 'Nothing was created.',
+          };
+        }
+      },
     },
   };
 }

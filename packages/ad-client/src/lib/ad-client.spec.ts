@@ -651,3 +651,117 @@ describe('writes', () => {
     expect(captured).toHaveLength(0);
   });
 });
+
+/**
+ * Creating a campaign tree, at the transport level only (#146).
+ *
+ * The orchestration and the servable/remediation decisions are
+ * `campaign-tree.spec.ts`, which needs no HTTP. What belongs HERE is what only
+ * a real request can show: the vendored media types, and that nothing is ever
+ * created ENABLED.
+ */
+describe('create requests', () => {
+  it.each([
+    ['createCampaigns', 'spCampaign.v3', '/sp/campaigns'],
+    ['createAdGroups', 'spAdGroup.v3', '/sp/adGroups'],
+    ['createProductAds', 'spProductAd.v3', '/sp/productAds'],
+    ['createKeywords', 'spKeyword.v3', '/sp/keywords'],
+  ] as const)(
+    'POSTs %s with its vendored type',
+    async (method, media, path) => {
+      const { client, captured } = clientWithCapture({});
+      const args: Record<string, unknown[]> = {
+        createCampaigns: [
+          [{ name: 'C', targetingType: 'AUTO', dailyBudget: 10 }],
+        ],
+        createAdGroups: [[{ campaignId: 'C1', name: 'G', defaultBid: 0.5 }]],
+        createProductAds: [[{ campaignId: 'C1', adGroupId: 'G1', sku: 'S' }]],
+        createKeywords: [
+          [
+            {
+              campaignId: 'C1',
+              adGroupId: 'G1',
+              keywordText: 'k',
+              matchType: 'EXACT',
+            },
+          ],
+        ],
+      };
+      await (client[method] as (...a: unknown[]) => Promise<unknown>)(
+        ...args[method]
+      );
+
+      expect(captured[0].method).toBe('post');
+      expect(captured[0].path).toBe(path);
+      expect(captured[0].headers.Accept).toBe(`application/vnd.${media}+json`);
+      expect(captured[0].headers['Content-Type']).toBe(
+        `application/vnd.${media}+json`
+      );
+    }
+  );
+
+  it('never sends ENABLED, because state is not a parameter', async () => {
+    // The property that makes an irreversible create acceptable: a paused tree
+    // spends nothing, so a mistake costs a cleanup rather than a budget.
+    const { client, captured } = clientWithCapture({});
+    await client.createCampaigns([
+      { name: 'C', targetingType: 'AUTO', dailyBudget: 10 },
+    ]);
+    await client.createAdGroups([
+      { campaignId: 'C1', name: 'G', defaultBid: 0.5 },
+    ]);
+    await client.createProductAds([
+      { campaignId: 'C1', adGroupId: 'G1', sku: 'S' },
+    ]);
+    await client.createKeywords([
+      {
+        campaignId: 'C1',
+        adGroupId: 'G1',
+        keywordText: 'k',
+        matchType: 'EXACT',
+      },
+    ]);
+
+    for (const call of captured) {
+      const items = Object.values(call.body)[0] as Array<
+        Record<string, unknown>
+      >;
+      for (const item of items) expect(item.state).toBe('PAUSED');
+    }
+  });
+
+  it('advertises the SKU rather than the ASIN when both are given', async () => {
+    // A SKU identifies the seller's own listing; an ASIN identifies a product
+    // several sellers may offer, so the wrong one points spend at someone
+    // else's listing.
+    const { client, captured } = clientWithCapture({});
+    await client.createProductAds([
+      { campaignId: 'C1', adGroupId: 'G1', sku: 'FP-24OZ', asin: 'B0XXXX' },
+    ]);
+
+    const [ad] = captured[0].body['productAds'] as Array<
+      Record<string, unknown>
+    >;
+    expect(ad.sku).toBe('FP-24OZ');
+    expect(ad.asin).toBeUndefined();
+  });
+
+  it('refuses a product ad naming neither sku nor asin', async () => {
+    const { client } = clientWithCapture({});
+    await expect(
+      client.createProductAds([{ campaignId: 'C1', adGroupId: 'G1' }])
+    ).rejects.toThrow(/neither sku nor asin/);
+  });
+
+  it('refuses a non-positive budget or bid locally, not at Amazon', async () => {
+    const { client } = clientWithCapture({});
+    await expect(
+      client.createCampaigns([
+        { name: 'C', targetingType: 'AUTO', dailyBudget: 0 },
+      ])
+    ).rejects.toThrow(/dailyBudget/);
+    await expect(
+      client.createAdGroups([{ campaignId: 'C1', name: 'G', defaultBid: -1 }])
+    ).rejects.toThrow(/defaultBid/);
+  });
+});
