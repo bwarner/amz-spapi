@@ -55,6 +55,15 @@ concurrency:
 env:
   VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
   VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+  # Pinned, and in one place. A bare `npx vercel` resolves to whatever is
+  # latest at run time, so an unrelated CLI release can change how a PRODUCTION
+  # deploy behaves between two runs of the same commit — the one thing a
+  # release gate exists to prevent. Bump this line deliberately.
+  #
+  # `npx --yes` because without it npx can stop to ask before installing a
+  # package that is not present, and a prompt in CI is a hung job rather than
+  # an error.
+  VERCEL_CLI: vercel@59.1.3
 
 jobs:
   staging:
@@ -63,9 +72,9 @@ jobs:
     # Gives the run an audit trail and somewhere to hang protection rules.
     environment: staging
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
@@ -74,9 +83,9 @@ jobs:
       # The custom environment's own variables — staging's Auth0 tenant, its
       # Couchbase scope, and the Stripe TEST key. `staging.sellavant.com` is
       # attached to this environment in Vercel, so no aliasing step is needed.
-      - run: npx vercel pull --yes --environment=staging --token=${{ secrets.VERCEL_TOKEN }}
-      - run: npx vercel build --target=staging --token=${{ secrets.VERCEL_TOKEN }}
-      - run: npx vercel deploy --prebuilt --target=staging --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx --yes $VERCEL_CLI pull --yes --environment=staging --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx --yes $VERCEL_CLI build --target=staging --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx --yes $VERCEL_CLI deploy --prebuilt --target=staging --token=${{ secrets.VERCEL_TOKEN }}
 
   production:
     if: github.event_name == 'release'
@@ -86,19 +95,19 @@ jobs:
       # The tag, not the branch head. A release cut from an older commit must
       # deploy THAT commit — otherwise the release notes describe one thing and
       # production runs another.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
 
-      - run: npx vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-      - run: npx vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-      - run: npx vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx --yes $VERCEL_CLI pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx --yes $VERCEL_CLI build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - run: npx --yes $VERCEL_CLI deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       # Recorded because `vercel rollback` is the fix for a bad production
       # deploy and it needs the previous deployment's identity. Finding that

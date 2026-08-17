@@ -14,28 +14,46 @@ jobs:
   main:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      # This enables task distribution via Nx Cloud
-      # Run this command as early as possible, before dependencies are installed
-      # Learn more at https://nx.dev/ci/reference/nx-cloud-cli#npx-nxcloud-startcirun
-      # Uncomment this line to enable task distribution
-      # - run: npx nx-cloud start-ci-run --distribute-on="3 linux-medium-js" --stop-agents-after="build"
+      - uses: pnpm/action-setup@v6
 
-      - uses: pnpm/action-setup@v4
-
-      # Cache the pnpm store
-      - uses: actions/setup-node@v4
+      # Node 24, matching `engines` in package.json and the nodejs24.x the
+      # Lambdas run on. Keeping the three in step means a syntax or API
+      # difference cannot pass CI and then fail in a deployed function.
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'pnpm'
 
-      - run: pnpm install --frozen-lockfile
-      - uses: nrwl/nx-set-shas@v4
+      # Nx's local computation cache, so a task this repo has already run on
+      # this input does not run again. This is what replaces the Nx Cloud
+      # remote cache, which was disconnected when the account went over quota.
+      #
+      # Safe to restore an outdated entry, and that is not a small point. Nx
+      # keys every entry by a hash of the task's own inputs, so a stale cache
+      # cannot produce a wrong result the way a restored BUILD OUTPUT could —
+      # a miss is the worst outcome. That is what makes the loose
+      # `restore-keys` prefix below acceptable.
+      #
+      # The sha in the key means each run writes its own entry and the prefix
+      # picks the most recent one; GitHub evicts least-recently-used over the
+      # 10GB repo limit. If the pnpm cache above starts missing, this is what
+      # crowded it out, and the fix is to save only on main rather than on
+      # every branch.
+      - uses: actions/cache@v6
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-node24-${{ github.sha }}
+          restore-keys: |
+            nx-${{ runner.os }}-node24-
 
-      # Prepend any command with "nx-cloud record --" to record its logs to Nx Cloud
-      # - run: npx nx-cloud record -- echo Hello World
-      # Nx Affected runs only tasks affected by the changes in this PR/commit. Learn more: https://nx.dev/ci/features/affected
+      - run: pnpm install --frozen-lockfile
+
+      # Works out what changed since the last successful run on this branch, so
+      # `affected` has a base to compare against.
+      - uses: nrwl/nx-set-shas@v5
+
       - run: pnpm exec nx affected -t lint typecheck test build
