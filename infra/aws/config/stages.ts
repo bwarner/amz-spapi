@@ -319,7 +319,12 @@ export const STAGES: Record<StageName, StageConfig> = {
     },
     auth0Domain: envAuth0('prod', 'DOMAIN') || 'sellvant.us.auth0.com',
     auth0Audience: envAuth0('prod', 'AUDIENCE') || 'https://www.sellavant.com',
-    servicePrincipals: envServicePrincipals('prod'),
+    // "Sellavant Sync Worker (prod)" in the sellvant.us.auth0.com tenant — a
+    // DIFFERENT tenant from dev's, which is the whole reason this is per stage.
+    // Dev's principal is not trusted here and must never be.
+    servicePrincipals: envServicePrincipals('prod') ?? [
+      'pjg8KI78fcqp9tPQdEqpcO6dcL5B5K1s@clients',
+    ],
     alarmEmail: process.env.SELLAVANT_PROD_ALARM_EMAIL,
     // Every precondition for deploying prod is now met, in this order:
     //
