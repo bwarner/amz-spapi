@@ -59,3 +59,40 @@ describe('stage accounts', () => {
     }
   });
 });
+
+/**
+ * Service principals (#152).
+ *
+ * These are the identities allowed to mint an Amazon access token on behalf of
+ * ANY connected seller in their stage. The failure worth guarding is not a
+ * missing one — that refuses every mint, loudly. It is a SHARED one, which
+ * would let a token minted for dev act on production accounts.
+ */
+describe('service principals', () => {
+  const principalsOf = (stage: 'dev' | 'staging' | 'prod') =>
+    STAGES[stage].servicePrincipals ?? [];
+
+  it('never shares a principal between stages', () => {
+    // Each stage is a different Auth0 tenant, so a value appearing twice means
+    // a copy-paste rather than a legitimate arrangement.
+    const all = (['dev', 'staging', 'prod'] as const).flatMap(principalsOf);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('does not trust dev principals in production', () => {
+    for (const principal of principalsOf('dev')) {
+      expect(principalsOf('prod')).not.toContain(principal);
+    }
+  });
+
+  it('shapes every principal as a machine subject', () => {
+    // A client-credentials `sub` is `<client_id>@clients`. A bare client id
+    // here would never match, and the mint would be refused with a message
+    // about the allow-list rather than about the shape.
+    for (const stage of ['dev', 'staging', 'prod'] as const) {
+      for (const principal of principalsOf(stage)) {
+        expect(principal).toMatch(/^[A-Za-z0-9]{20,}@clients$/);
+      }
+    }
+  });
+});
