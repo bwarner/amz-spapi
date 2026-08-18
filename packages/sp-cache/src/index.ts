@@ -18,6 +18,8 @@ export {
   detectReportKind,
   readReportNumber,
   remapStoredRow,
+  toIsoDate,
+  readDateSpan,
 } from './lib/report-ingest.js';
 export type { ReportRow, ParseResult } from './lib/report-ingest.js';
 export {

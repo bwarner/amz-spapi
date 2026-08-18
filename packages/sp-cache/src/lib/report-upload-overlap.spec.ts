@@ -12,15 +12,17 @@ import { reportStorage } from './report-store.js';
  * never collide. Dedup does not fire, the rows both land, and the seller reads
  * double the spend off two figures that each look entirely plausible.
  *
- * Nothing downstream can tell them apart, so every case here is about catching
- * it before the rows exist — or, where the window cannot be known, saying so.
+ * Dates here are written the way the ADS CONSOLE writes them — "Jun 03, 2026",
+ * and a span for the campaign export. Using ISO would be testing the API's
+ * spelling against a guard whose whole job is the console's, and would pass
+ * while every real upload went unchecked.
  */
 
 const USER = 'auth0|seller';
 const SELLER = 'A2HXBWIE3KMLKV';
 const PROFILE = '967757046531288';
 
-/** A console search-term export — the spelling a seller downloads. */
+/** Header shape of the console's search-term export. */
 const SEARCH_TERM_HEADER =
   '"Start Date","End Date","Portfolio name","Campaign Name","Ad Group Name",' +
   '"Targeting","Match Type","Customer Search Term","Impressions","Clicks",' +
@@ -36,16 +38,20 @@ function searchTermCsv(dates: string[]): Buffer {
 }
 
 /**
- * The campaign export, which dates rows with a SPAN rather than a day — the
- * case the guard cannot resolve to a window.
+ * The campaign export. Header verbatim from a live file, BOM included; every
+ * row is an aggregate dated with the SPAN the whole file covers.
  */
-function campaignCsv(): Buffer {
+function campaignCsv(dateCell: string): Buffer {
   const header =
-    '"Start Date","End Date","Campaign Name","Ad Group Name","Portfolio name",' +
-    '"Budget Currency","Clicks","Total Cost","Sales","Units Sold"';
+    '﻿Date range,Portfolio name,Portfolio ID,Campaign ID,Campaign name,' +
+    'Ad group name,Ad group ID,Budget currency,Clicks,CTR,CPC,' +
+    'Main IMDb ad clicks,Viewable CPM (vCPM),Total cost,Sales,Units sold,' +
+    'ROAS,ROAS (reconciled),Detail page views';
   const row =
-    '"Jul 13, 2026 - Aug 01, 2026","Jul 13, 2026 - Aug 01, 2026",' +
-    '"SP - Broad","Ad Group 1","Coffee","USD","12","6.60","55.00","1"';
+    `"${dateCell}",Ceramic Mug - B0DBH8H7DT,209213625716665,` +
+    '"=""555251554086397""","Auto (All Targets)",Catch All,' +
+    '"=""551059057840989""",USD,1050,1.2546%,0.26500,0,,278.25,341.69,17,' +
+    '1.22800,,';
   return Buffer.from([header, row].join('\n'), 'utf8');
 }
 
@@ -92,7 +98,7 @@ describe('ads upload overlap', () => {
     const result = await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: searchTermCsv(['2026-07-20', '2026-07-21']),
+      buffer: searchTermCsv(['Jul 20, 2026', 'Jul 21, 2026']),
       source: 'upload',
     });
 
@@ -117,7 +123,7 @@ describe('ads upload overlap', () => {
       sellerId: SELLER,
       userId: USER,
       // Starts before the synced window and runs one day into it.
-      buffer: searchTermCsv(['2026-06-20', '2026-07-09']),
+      buffer: searchTermCsv(['Jun 20, 2026', 'Jul 09, 2026']),
       source: 'upload',
     });
 
@@ -131,7 +137,7 @@ describe('ads upload overlap', () => {
     const result = await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: searchTermCsv(['2026-06-01', '2026-06-02']),
+      buffer: searchTermCsv(['Jun 01, 2026', 'Jun 02, 2026']),
       source: 'upload',
     });
 
@@ -152,7 +158,7 @@ describe('ads upload overlap', () => {
     const result = await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: searchTermCsv(['2026-07-20']),
+      buffer: searchTermCsv(['Jul 20, 2026']),
       source: 'upload',
     });
 
@@ -167,7 +173,7 @@ describe('ads upload overlap', () => {
     await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: searchTermCsv(['2026-07-20']),
+      buffer: searchTermCsv(['Jul 20, 2026']),
       source: 'upload',
     });
 
@@ -178,22 +184,60 @@ describe('ads upload overlap', () => {
     expect(options.parameters['kind']).toBe('search-term');
   });
 
-  it('warns rather than passing quietly when the window cannot be read', async () => {
-    // The campaign export dates its rows with a span. Unknown must not read as
-    // clear: the rows land, and the response says the check did not run.
+  it('reads the campaign export SPAN as the window it is', async () => {
+    // Every row of this export is an aggregate over "Jul 13, 2026 - Aug 01,
+    // 2026". That cannot be reduced to one day — a twenty-day total is not a
+    // Jul 13 row — but it is EXACTLY a coverage window, which is the only
+    // question asked here. Treating "not a day" as "not knowable" left this
+    // export, the one most able to overstate a total, unchecked.
     ingestedRuns = [ingestedRun({ kind: 'campaign-performance' })];
 
     const result = await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: campaignCsv(),
+      buffer: campaignCsv('Jul 13, 2026 - Aug 01, 2026'),
+      source: 'upload',
+    });
+
+    expect(isIngestError(result)).toBe(true);
+    expect(storedRows).toBe(0);
+  });
+
+  it('lets a campaign span outside the synced window through, unwarned', async () => {
+    ingestedRuns = [ingestedRun({ kind: 'campaign-performance' })];
+
+    const result = await ingestReportBuffer({
+      sellerId: SELLER,
+      userId: USER,
+      buffer: campaignCsv('Apr 01, 2026 - Apr 30, 2026'),
+      source: 'upload',
+    });
+
+    expect(isIngestError(result)).toBe(false);
+    if (isIngestError(result)) return;
+    // A span the guard could read needs no warning about not having read it.
+    expect(result.warnings).toBeUndefined();
+    expect(storedRows).toBeGreaterThan(0);
+  });
+
+  it('warns when the date is neither a day nor a span', async () => {
+    // Unknown must not read as clear. The rows land, and the response says the
+    // check could not run rather than staying silent about it.
+    ingestedRuns = [ingestedRun({ kind: 'campaign-performance' })];
+
+    const result = await ingestReportBuffer({
+      sellerId: SELLER,
+      userId: USER,
+      buffer: campaignCsv('Lifetime'),
       source: 'upload',
     });
 
     expect(isIngestError(result)).toBe(false);
     if (isIngestError(result)) return;
     expect(result.kind).toBe('campaign-performance');
-    expect(result.warnings?.join(' ')).toMatch(/window it covers is unknown/);
+    expect(result.warnings?.join(' ')).toMatch(
+      /window this file covers is unknown/
+    );
     expect(storedRows).toBeGreaterThan(0);
   });
 
@@ -206,7 +250,7 @@ describe('ads upload overlap', () => {
     const result = await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: searchTermCsv(['2026-07-20']),
+      buffer: searchTermCsv(['Jul 20, 2026']),
       source: 'upload',
       allowOverlap: true,
     });
@@ -226,7 +270,7 @@ describe('ads upload overlap', () => {
     const result = await ingestReportBuffer({
       sellerId: SELLER,
       userId: USER,
-      buffer: searchTermCsv(['2026-07-20']),
+      buffer: searchTermCsv(['Jul 20, 2026']),
       source: 'api',
     });
 
@@ -263,7 +307,7 @@ describe('ads upload overlap', () => {
 
     const result = await ingestReportBuffer({
       sellerId: SELLER,
-      buffer: searchTermCsv(['2026-07-20']),
+      buffer: searchTermCsv(['Jul 20, 2026']),
       source: 'upload',
     });
 

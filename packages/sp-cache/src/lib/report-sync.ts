@@ -90,8 +90,10 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
  * exist.
  *
  * Returns a REASON when the check could not run rather than passing quietly.
- * The campaign export dates a span ("Jul 13, 2026 - Aug 01, 2026") that the
- * normaliser cannot reduce to days, so its window is unknown and unknown must
+ * Both ads console exports are readable now — `toIsoDate` handles their
+ * "Jun 03, 2026" days and `readDateSpan` handles the campaign export's
+ * "Jul 13, 2026 - Aug 01, 2026" range — but a file whose date column holds
+ * something neither recognises still has an unknown window, and unknown must
  * not read as clear.
  */
 async function adsUploadOverlap(params: {
@@ -116,11 +118,14 @@ async function adsUploadOverlap(params: {
   if (!from || !to || !ISO_DAY.test(from) || !ISO_DAY.test(to)) {
     return {
       unchecked:
-        'Could not check this against the scheduled ads sync: the file dates ' +
-        `its rows as ${from ? `"${from}"` : 'nothing readable'} rather than ` +
-        'single days, so the window it covers is unknown. If the sync already ' +
-        'holds these days, they are now stored twice — the two sources spell ' +
-        'their columns differently, so duplicate detection cannot merge them.',
+        'Could not check this against the scheduled ads sync: its date column ' +
+        `holds ${
+          from ? `"${from}"` : 'nothing readable'
+        }, which is neither a ` +
+        'day nor a range, so the window this file covers is unknown. If the ' +
+        'sync already holds these days they are now stored twice — the two ' +
+        'sources spell their columns differently, so duplicate detection ' +
+        'cannot merge them.',
     };
   }
 
