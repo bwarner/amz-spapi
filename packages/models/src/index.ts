@@ -19,3 +19,4 @@ export * from './lib/title-compliance.js';
 export * from './lib/billing.js';
 export * from './lib/identity.js';
 export * from './lib/chart-spec.js';
+export * from './lib/ads-funnel.js';

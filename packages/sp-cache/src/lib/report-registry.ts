@@ -37,6 +37,17 @@ export type ReportFieldName =
   /* Sponsored Products search-term columns. */
   | 'campaignName'
   | 'adGroupName'
+  /**
+   * Ids, where the source carried them.
+   *
+   * Mapped as first-class fields rather than left in `raw` because the harvest
+   * funnel (#147) joins evidence to ad groups BY ID — it stores campaign ids
+   * precisely so a console rename cannot re-wire a funnel. Only the API path
+   * supplies them; a console export has no id column at all, which is why the
+   * name fields above stay and the funnel keeps both.
+   */
+  | 'campaignId'
+  | 'adGroupId'
   | 'portfolioName'
   | 'targeting'
   | 'matchType'
@@ -478,6 +489,9 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       portfolioName: ['portfolioname'],
       campaignName: ['campaignname'],
       adGroupName: ['adgroupname'],
+      // Present only on API-fetched rows; a console export has no id column.
+      campaignId: ['campaignid'],
+      adGroupId: ['adgroupid'],
       currency: ['budgetcurrency', 'currency'],
       clicks: ['clicks'],
       // The console labels ad spend "Total cost" on this export.
@@ -494,8 +508,11 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
       date: ['startdate', 'date'],
       campaignName: ['campaignname'],
       adGroupName: ['adgroupname'],
+      // Present only on API-fetched rows; a console export has no id column.
+      campaignId: ['campaignid'],
+      adGroupId: ['adgroupid'],
       portfolioName: ['portfolioname'],
-      targeting: ['targeting'],
+      targeting: ['targeting', 'keyword'],
       matchType: ['matchtype'],
       searchTerm: ['customersearchterm', 'searchterm'],
       currency: ['currency'],
