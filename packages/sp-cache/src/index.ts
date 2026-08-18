@@ -256,3 +256,14 @@ export type {
   NegativeDecision,
   ScheduledNegative,
 } from './lib/harvest-apply.js';
+
+export { inferFunnelTopology } from './lib/funnel-adoption.js';
+export type {
+  AdoptionCampaign,
+  AdoptionAdGroup,
+  AdoptionKeyword,
+  AdoptionProductAd,
+  AdoptionProposal,
+  AdoptionSkip,
+  InferFunnelParams,
+} from './lib/funnel-adoption.js';
