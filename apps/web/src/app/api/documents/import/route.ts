@@ -196,6 +196,7 @@ export async function POST(request: Request) {
         observedFrom?: string;
         observedTo?: string;
         unmappedHeaders?: string[];
+        warnings?: string[];
       }
     | undefined;
   let reportError: string | undefined;
@@ -238,6 +239,11 @@ export async function POST(request: Request) {
               source: 'upload',
               kind: identified,
               fileName: file.name,
+              // This path AUTO-imports on a decisive detection, so the ads
+              // overlap guard matters here more than on the explicit upload:
+              // nobody chose to load this file, and a doubled July would
+              // arrive from dropping a folder on the page.
+              userId: session.user.sub,
             })
           : undefined;
         if (outcome && isIngestError(outcome)) {
@@ -257,6 +263,7 @@ export async function POST(request: Request) {
             unmappedHeaders: outcome.unmappedHeaders.length
               ? outcome.unmappedHeaders
               : undefined,
+            warnings: outcome.warnings,
           };
           log.info(
             `imported ${outcome.kind} from attachment for ${sellerId}: ` +

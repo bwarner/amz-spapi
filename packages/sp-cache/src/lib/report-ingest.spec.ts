@@ -7,7 +7,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { detectReportKind, parseReport, toIsoDate } from './report-ingest.js';
+import {
+  detectReportKind,
+  parseReport,
+  readDateSpan,
+  toIsoDate,
+} from './report-ingest.js';
 
 /** Inventory Ledger, DETAIL view. One row per event. */
 const DETAIL_HEADER =
@@ -212,6 +217,39 @@ describe('detectReportKind', () => {
     expect(detectReportKind(detailFile([detailRow()])).kind).toBe(
       'ledger-detail'
     );
+  });
+
+  it('reads the ads console date, which sorted against ISO as nonsense', () => {
+    // Every ads console export writes this form. Left unparsed it compared to
+    // ISO by its first character: `date >= '2026-06-01'` PASSED because 'J' >
+    // '2', while `date <= '2026-06-30'` failed — so console-uploaded ad rows
+    // fell out of every date-bounded query while sitting visibly in the store.
+    expect(toIsoDate('Jun 03, 2026')).toBe('2026-06-03');
+    expect(toIsoDate('Jul 13, 2026')).toBe('2026-07-13');
+    expect(toIsoDate('December 7, 2026')).toBe('2026-12-07');
+    // Month first, so there is no US/European ambiguity to resolve here.
+    expect(toIsoDate('Mar 04, 2026')).toBe('2026-03-04');
+  });
+
+  it('still leaves a date it cannot read alone rather than guessing', () => {
+    expect(toIsoDate('Lifetime')).toBe('Lifetime');
+    expect(toIsoDate('Foo 03, 2026')).toBe('Foo 03, 2026');
+    // No comma is not this format; guessing would invent a date from a label.
+    expect(toIsoDate('Jun 03 2026')).toBe('Jun 03 2026');
+  });
+
+  it('reads a date SPAN as the window it covers', () => {
+    expect(readDateSpan('Jul 13, 2026 - Aug 01, 2026')).toEqual({
+      from: '2026-07-13',
+      to: '2026-08-01',
+    });
+    // An unspaced hyphen is an ISO date, not a span — splitting on it would
+    // turn "2026-07-09" into a range of two unreadable halves.
+    expect(readDateSpan('2026-07-09')).toBeUndefined();
+    // Half a span is a WRONG window, which is worse than an absent one.
+    expect(readDateSpan('Jul 13, 2026 - Lifetime')).toBeUndefined();
+    // Backwards is not a window either.
+    expect(readDateSpan('Aug 01, 2026 - Jul 13, 2026')).toBeUndefined();
   });
 
   it('refuses to guess when nothing matches', () => {

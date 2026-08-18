@@ -91,6 +91,11 @@ export async function POST(request: Request) {
       source: 'upload',
       kind,
       fileName: file.name,
+      // The ads overlap guard's only input: what the scheduled sync has
+      // already ingested is recorded per USER, because an advertiser profile
+      // belongs to a person's connection rather than to the seller account.
+      userId: session.user.sub,
+      allowOverlap: form.get('allowOverlap') === 'true',
     });
   } catch (error) {
     log.error(

@@ -18,3 +18,10 @@ export {
   AUTH0_SERVICE_PRINCIPAL_SECRET_ENV,
 } from './auth0-service-principal.js';
 export type { Auth0ServicePrincipal } from './auth0-service-principal.js';
+
+export {
+  mintSellerAccessToken,
+  clearMachineToken,
+  ServiceTokenError,
+} from './service-mint.js';
+export type { SellerTokenRequest } from './service-mint.js';

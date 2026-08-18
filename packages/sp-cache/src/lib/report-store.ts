@@ -10,7 +10,11 @@ import {
   type ReportFieldName,
 } from './report-registry.js';
 import type { ReportKind } from './report-registry.js';
-import { remapStoredRow, type ReportRow } from './report-ingest.js';
+import {
+  readDateSpan,
+  remapStoredRow,
+  type ReportRow,
+} from './report-ingest.js';
 
 /**
  * Storage for ingested report rows, plus the import ledger that records what
@@ -180,16 +184,31 @@ function absoluteExpiry(seconds: number): number {
     : seconds;
 }
 
-function observedRange(rows: ReportRow[]): {
+/**
+ * The window a parsed file actually covers, from its rows.
+ *
+ * Exported because the upload path needs it BEFORE storing: the overlap guard
+ * has to know which days a file holds while refusing it is still possible.
+ * Returns whatever the date column held — a value the normaliser could not
+ * reduce to a day (the campaign export's "Jul 13, 2026 - Aug 01, 2026") comes
+ * back raw, so callers that compare dates must check the shape first.
+ */
+export function observedRange(rows: ReportRow[]): {
   from?: string;
   to?: string;
 } {
   const dates = rows
-    .map(
-      (row) =>
-        row.fields.date ?? row.fields.shipmentDate ?? row.fields.requestDate
-    )
-    .filter((value): value is string => Boolean(value))
+    .flatMap((row) => {
+      const value =
+        row.fields.date ?? row.fields.shipmentDate ?? row.fields.requestDate;
+      if (!value) return [];
+      // A row dated with a SPAN covers both its ends and everything between,
+      // so the window is the ends — not the raw string, which sorts against
+      // ISO dates as nonsense and reported a coverage window of "Jul 13, 2026
+      // - Aug 01, 2026" to both ends of the range.
+      const span = readDateSpan(value);
+      return span ? [span.from, span.to] : [value];
+    })
     .sort();
   return { from: dates[0], to: dates[dates.length - 1] };
 }

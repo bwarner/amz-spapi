@@ -17,6 +17,7 @@ import {
 import { discoverLambdaApps, type LambdaApp } from './lambda-apps.js';
 import { LambdaHttpApi } from './lambda-http-api.js';
 import { SyncWiring } from './sync-wiring.js';
+import { AdsSyncWiring } from './ads-sync-wiring.js';
 import { ApiMonitoring } from './monitoring.js';
 
 export type LambdasStackProps = cdk.StackProps & {
@@ -207,6 +208,21 @@ export class LambdasStack extends Stack {
         config: props.config,
         dispatcher,
         worker,
+        alarmTopic: this.monitoring.topic,
+      });
+    }
+
+    // The ads sync, wired the same way and for the same cycle reason — but as a
+    // state machine rather than a queue, because the workload is waiting rather
+    // than rate-limited calls. ADR-0012 records which shape gets which.
+    //
+    // Conditional for the same reason as above: a stage without the app gets no
+    // schedule rather than one firing at a function that is not there.
+    const adsWorker = this.functions.get('ads-sync-worker');
+    if (adsWorker) {
+      new AdsSyncWiring(this, 'AdsSync', {
+        config: props.config,
+        worker: adsWorker,
         alarmTopic: this.monitoring.topic,
       });
     }
