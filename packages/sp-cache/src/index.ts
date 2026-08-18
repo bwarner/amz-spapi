@@ -229,3 +229,21 @@ export type {
   ExistingKeyword,
   PlanHarvestParams,
 } from './lib/keyword-harvest.js';
+
+export {
+  applyGraduation,
+  applyBackwardNegative,
+  dueNegativeDecisions,
+  HarvestApplyError,
+} from './lib/harvest-apply.js';
+export type {
+  ApplyGraduationParams,
+  ApplyGraduationResult,
+  ApplyNegativeParams,
+  ApplyNegativeResult,
+  DeliveryEvidence,
+  DueNegativeParams,
+  HarvestWriteClient,
+  NegativeDecision,
+  ScheduledNegative,
+} from './lib/harvest-apply.js';
