@@ -197,3 +197,53 @@ export {
   bucketFor,
 } from './lib/payout-breakdown.js';
 export type { Payout, PayoutBucket } from './lib/payout-breakdown.js';
+
+export {
+  storeFunnel,
+  getFunnel,
+  listFunnels,
+  recordGraduation,
+  getGraduation,
+  settleGraduation,
+  listGraduations,
+  listDueNegatives,
+  funnelStorage,
+  FunnelStoreError,
+} from './lib/funnel-store.js';
+export type {
+  StoredFunnel,
+  StoredGraduation,
+  ListGraduationsFilters,
+} from './lib/funnel-store.js';
+
+export { planHarvest, addDays } from './lib/keyword-harvest.js';
+export type {
+  HarvestRow,
+  HarvestPlan,
+  HarvestRefusal,
+  HarvestOutcome,
+  HarvestSkip,
+  GraduationProposal,
+  NegativeProposal,
+  BudgetSignal,
+  ExistingKeyword,
+  PlanHarvestParams,
+} from './lib/keyword-harvest.js';
+
+export {
+  applyGraduation,
+  applyBackwardNegative,
+  dueNegativeDecisions,
+  HarvestApplyError,
+} from './lib/harvest-apply.js';
+export type {
+  ApplyGraduationParams,
+  ApplyGraduationResult,
+  ApplyNegativeParams,
+  ApplyNegativeResult,
+  DeliveryEvidence,
+  DueNegativeParams,
+  HarvestWriteClient,
+  NegativeDecision,
+  ScheduledNegative,
+} from './lib/harvest-apply.js';

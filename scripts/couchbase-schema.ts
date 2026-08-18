@@ -114,6 +114,16 @@ export const SOURCES: Source[] = [
   // sync owns so a manual upload of the same window is refused rather than
   // silently doubling every row.
   { domain: 'sync', collection: 'ads_runs' },
+  // Keyword harvest funnels (#147). Amazon has no concept of one campaign
+  // feeding another, so the relationship is ours to store.
+  //
+  // Graduations are their own collection rather than a list inside the funnel:
+  // they accrue for as long as the funnel runs, and each one is written twice
+  // days apart — once when the keyword is created, once when the backward
+  // negative comes due — so an embedded list would grow without bound and let
+  // the second writer drop the first writer's `keywordId`.
+  { domain: 'ads', collection: 'funnels' },
+  { domain: 'ads', collection: 'graduations' },
 ];
 
 export type IndexSpec = {
@@ -207,6 +217,16 @@ export const INDEXES: IndexSpec[] = [
     collection: 'reports_imports',
     name: 'idx_report_imports_seller_kind',
     keys: ['`sellerId`', '`kind`', '`observedFrom`'],
+  },
+  // Both graduation queries start from the owner: the funnel's own history, and
+  // the due-negatives sweep that is the self-competition detector. The sweep
+  // runs on a schedule against a collection that only ever grows, so without
+  // this it gets slower every week it finds nothing — the worst shape for a
+  // check whose whole job is to be boring.
+  {
+    collection: 'ads_graduations',
+    name: 'idx_graduations_user_state',
+    keys: ['`userId`', '(`graduation`.`state`)', '(`graduation`.`funnelId`)'],
   },
   {
     collection: 'reports_box_labels',
