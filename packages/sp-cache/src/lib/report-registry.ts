@@ -482,9 +482,11 @@ export const REPORTS: Record<ReportKind, ReportDefinition> = {
     reportType: 'SP_CAMPAIGN_PERFORMANCE_REPORT',
     label: 'Sponsored Products campaign performance',
     fields: {
-      // "Date range" holds a SPAN ("Jul 13, 2026 - Aug 01, 2026"), which the
-      // date normaliser cannot reduce to one day — the raw value is kept and
-      // the coverage window stays honest about not knowing.
+      // "Date range" holds a SPAN ("Jul 13, 2026 - Aug 01, 2026"). It stays
+      // raw in the row, deliberately: each row is a total over those days, and
+      // pinning it to one of them would let it be summed alongside daily rows
+      // as though it were one. The WINDOW is still knowable — `readDateSpan`
+      // reads it for the coverage record and the upload overlap guard.
       date: ['daterange', 'startdate', 'date'],
       portfolioName: ['portfolioname'],
       campaignName: ['campaignname'],

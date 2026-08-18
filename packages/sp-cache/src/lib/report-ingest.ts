@@ -46,17 +46,82 @@ const DATE_FIELDS = new Set<ReportFieldName>([
  * the first of that month. Left as-is it is a PREFIX of every day in it, so
  * `date >= '2026-06-01'` excludes the month it names and any range query over a
  * month-granular report silently returns nothing.
+ *
+ * The ADS CONSOLE writes a third form — "Jun 03, 2026" — on every export it
+ * produces. Left unparsed it sorted against ISO by its first character, so
+ * `date >= '2026-06-01'` PASSED ('J' > '2') while `date <= '2026-06-30'`
+ * failed, and every console-uploaded ad row fell out of every date-bounded
+ * query while still being visibly stored. Amazon writes the month first here,
+ * so there is no US/European ambiguity to resolve.
  */
+const MONTHS = [
+  'jan',
+  'feb',
+  'mar',
+  'apr',
+  'may',
+  'jun',
+  'jul',
+  'aug',
+  'sep',
+  'oct',
+  'nov',
+  'dec',
+];
+
 export function toIsoDate(value: string): string {
-  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const trimmed = value.trim();
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const month = value.match(/^(\d{4})-(\d{2})$/);
+  const month = trimmed.match(/^(\d{4})-(\d{2})$/);
   if (month) return `${month[1]}-${month[2]}-01`;
-  const us = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  const us = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (us) {
     return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
   }
+  // "Jun 03, 2026" and "June 3, 2026" — the comma is required, so this cannot
+  // swallow a value that merely starts with three letters.
+  const named = trimmed.match(/^([A-Za-z]{3})[a-z]*\.? (\d{1,2}), (\d{4})$/);
+  if (named) {
+    const index = MONTHS.indexOf(named[1].toLowerCase());
+    if (index >= 0) {
+      return `${named[3]}-${String(index + 1).padStart(
+        2,
+        '0'
+      )}-${named[2].padStart(2, '0')}`;
+    }
+  }
   return value;
+}
+
+/**
+ * Read a date SPAN — "Jul 13, 2026 - Aug 01, 2026" — as the window it covers.
+ *
+ * The ads console's campaign export dates every row with the range the whole
+ * file covers, because each row is an aggregate over that range rather than a
+ * day. `toIsoDate` cannot help: a twenty-day aggregate is genuinely not a
+ * Jul 13 row, and forcing it to one would let it be summed alongside daily
+ * rows as though it were.
+ *
+ * But a span is EXACTLY a coverage window, which is the one question the
+ * upload's overlap guard asks. Treating "cannot be reduced to a day" as
+ * "cannot be known at all" is what left that guard unable to check the very
+ * export it was written for.
+ *
+ * Returns nothing unless BOTH ends resolve to real dates in order — a half-read
+ * span is a wrong window, which is worse than an absent one.
+ */
+export function readDateSpan(
+  value: string
+): { from: string; to: string } | undefined {
+  // An en/em dash or a hyphen, spaced. Unspaced would split "2026-07-09".
+  const halves = value.split(/\s+[-–—]\s+/);
+  if (halves.length !== 2) return undefined;
+  const from = toIsoDate(halves[0]);
+  const to = toIsoDate(halves[1]);
+  const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if (!isDay(from) || !isDay(to) || from > to) return undefined;
+  return { from, to };
 }
 
 /**

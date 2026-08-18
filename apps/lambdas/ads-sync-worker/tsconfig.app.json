@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../../dist/out-tsc/apps/lambdas/ads-sync-worker",
+    "declaration": true,
+    "composite": false,
+    "types": ["node"],
+    "noEmit": false,
+    "rootDir": "../../../"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"],
+  "references": [
+    {
+      "path": "../../../packages/ad-client/tsconfig.lib.json"
+    },
+    {
+      "path": "../../../packages/sp-cache/tsconfig.lib.json"
+    },
+    {
+      "path": "../../../libs/couchbase-utils/tsconfig.lib.json"
+    },
+    {
+      "path": "../../../libs/aws-secrets/tsconfig.lib.json"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "name": "lambda-ads-sync-worker",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "apps/lambdas/ads-sync-worker/src",
+  "projectType": "application",
+  "tags": ["scope:lambda", "type:app"],
+  "metadata": {
+    "lambda": {
+      "packaging": "zip",
+      "handler": "main.handler",
+      "description": "One step of the Amazon Ads report sync: plan, request, or collect. Driven by a Step Functions state machine, not a queue.",
+      "timeoutSeconds": 60,
+      "memoryMb": 512,
+      "couchbase": true,
+      "callsCredentialService": true
+    }
+  },
+  "targets": {
+    "build": {
+      "executor": "@nx/esbuild:esbuild",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/lambdas/ads-sync-worker",
+        "main": "apps/lambdas/ads-sync-worker/src/main.ts",
+        "tsConfig": "apps/lambdas/ads-sync-worker/tsconfig.app.json",
+        "platform": "node",
+        "format": ["esm"],
+        "bundle": true,
+        "thirdParty": true,
+        "minify": false,
+        "sourcemap": true,
+        "generatePackageJson": false,
+        "esbuildOptions": {
+          "outExtension": {
+            ".js": ".js"
+          },
+          "banner": {
+            "js": "import { createRequire as __nodeCreateRequire } from 'node:module';const require = __nodeCreateRequire(import.meta.url);"
+          }
+        }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "test": {
+      "executor": "@nx/vite:test",
+      "outputs": ["{options.reportsDirectory}"],
+      "options": {
+        "reportsDirectory": "../../../coverage/apps/lambdas/ads-sync-worker"
+      }
+    }
+  }
+}

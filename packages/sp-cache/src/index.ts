@@ -18,6 +18,8 @@ export {
   detectReportKind,
   readReportNumber,
   remapStoredRow,
+  toIsoDate,
+  readDateSpan,
 } from './lib/report-ingest.js';
 export type { ReportRow, ParseResult } from './lib/report-ingest.js';
 export {
@@ -179,9 +181,16 @@ export {
   adsSyncStorage,
   ingestedAdsWindows,
   overlapsIngestedWindow,
+  isAdsReportKind,
+  ADS_REPORT_KINDS,
   AdsSyncStoreError,
 } from './lib/ads-sync-store.js';
-export type { AdsSyncRun, AdsSyncStatus } from './lib/ads-sync-store.js';
+export type {
+  AdsSyncRun,
+  AdsSyncStatus,
+  AdsReportKind,
+  AdsWindow,
+} from './lib/ads-sync-store.js';
 export type {
   DocumentSearchFilters,
   DocumentSearchHit,

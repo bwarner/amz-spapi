@@ -7,8 +7,10 @@ import {
 import type { ReportKind } from './report-registry.js';
 import {
   adsRunId,
+  isAdsReportKind,
   readAdsRun,
   writeAdsRun,
+  type AdsReportKind,
   type AdsSyncRun,
 } from './ads-sync-store.js';
 
@@ -42,9 +44,16 @@ export type AdsReportClient = {
   >;
 };
 
-/** Which report level backs each stored kind. */
-const LEVEL_FOR_KIND: Partial<
-  Record<ReportKind, 'campaign' | 'keyword' | 'searchTerm'>
+/**
+ * Which report level backs each stored kind.
+ *
+ * Keyed on `AdsReportKind` rather than a partial `ReportKind`, so adding a kind
+ * to `ADS_REPORT_KINDS` — which is what makes the upload path guard it — fails
+ * to compile until the level it fetches at is stated here too.
+ */
+const LEVEL_FOR_KIND: Record<
+  AdsReportKind,
+  'campaign' | 'keyword' | 'searchTerm'
 > = {
   'search-term': 'searchTerm',
   'campaign-performance': 'campaign',
@@ -76,7 +85,9 @@ export async function requestAdsReport(
   | { started: true; run: AdsSyncRun }
   | { started: false; reason: string; run?: AdsSyncRun }
 > {
-  const level = LEVEL_FOR_KIND[params.kind];
+  const level = isAdsReportKind(params.kind)
+    ? LEVEL_FOR_KIND[params.kind]
+    : undefined;
   if (!level) {
     throw new AdsReportSyncError(
       `${params.kind} is not an Ads report kind — nothing to request.`

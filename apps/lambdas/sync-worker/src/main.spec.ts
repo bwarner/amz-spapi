@@ -34,7 +34,8 @@ vi.mock('@farvisionllc/sp-client', () => ({
 }));
 
 const mintSellerAccessToken = vi.fn();
-vi.mock('./seller-token.js', () => ({
+vi.mock('@amz-spapi/aws-secrets', () => ({
+  useSecretsManagerConnection: () => undefined,
   mintSellerAccessToken: (...args: unknown[]) => mintSellerAccessToken(...args),
 }));
 
