@@ -16,6 +16,7 @@ import {
   type PlanId,
 } from '@farvisionllc/models';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
+import { PRODUCT_TAG } from './product-tag.js';
 
 /**
  * The Stripe price catalogue: which price id is plan X at interval Y.
@@ -52,9 +53,6 @@ import { stripeClient, BillingNotConfiguredError } from './customers.js';
 
 const DOMAIN = 'billing';
 const PRICES = 'prices';
-
-/** Marks everything this application owns in a shared Stripe account. */
-const PRODUCT_TAG = 'sellavant';
 
 const INTERVALS: BillingInterval[] = ['month', 'year'];
 

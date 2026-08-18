@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { PRODUCT_TAG, PRODUCT_TAG_KEY } from './product-tag.js';
 
 /**
  * Stripe customers, and the client that makes them.
@@ -95,7 +96,7 @@ export async function createBillingCustomer(
       // This Stripe account is shared with another product, so every record we
       // create says so. Without it, reconciling a customer list means guessing
       // from the name.
-      product: 'sellavant',
+      [PRODUCT_TAG_KEY]: PRODUCT_TAG,
     },
   });
 

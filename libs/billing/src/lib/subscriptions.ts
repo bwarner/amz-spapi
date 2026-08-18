@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
+import { PRODUCT_TAG, PRODUCT_TAG_KEY } from './product-tag.js';
 
 /**
  * Buying a plan, managing it, and reading back what Stripe decided.
@@ -128,7 +129,10 @@ export async function createCheckoutSession(params: {
       // Stamped on the SUBSCRIPTION, not just the session. The webhook receives
       // subscription events long after the session is gone, and this is what
       // lets it find the workspace without a reverse lookup.
-      metadata: { workspaceId: params.workspaceId, product: 'sellavant' },
+      metadata: {
+        workspaceId: params.workspaceId,
+        [PRODUCT_TAG_KEY]: PRODUCT_TAG,
+      },
       ...(trialDays ? { trial_period_days: trialDays } : {}),
     },
     // A card is taken even for a trial. The FREE tier is the no-card on-ramp,
@@ -327,6 +331,46 @@ export type SubscriptionSnapshot = {
   /** The `planId` recorded on the price, when the price carries one. */
   planId?: string;
 };
+
+/**
+ * Does this subscription belong to THIS application?
+ *
+ * The Stripe account is shared, so a `customer.subscription.*` event may be
+ * about ScanSafeguard or My Awesome Resume. Nothing in the event says so
+ * directly: the type is the same, the shape is the same, and Stripe offers no
+ * per-application filter on a webhook endpoint. Without this check a neighbour's
+ * cancellation reaches the subscription branch, where `findWorkspaceByCustomer`
+ * is happy to resolve it — the same person may hold one Stripe customer across
+ * all three products — and the workspace's status is then overwritten by a
+ * subscription that was never for Sellavant. A `deleted` event does the real
+ * damage: it revokes a paying customer's allowance, and nothing in any log
+ * connects the two.
+ *
+ * Two independent signals, because each covers the other's blind spot:
+ *
+ * - **The subscription's own metadata**, stamped by `createCheckoutSession`.
+ *   Present on everything bought through the product, and absent on anything
+ *   created by hand in the Stripe dashboard.
+ * - **The price's metadata**, stamped by `provision`. This is the one that
+ *   catches a subscription nobody told us about, because it rides on the price
+ *   object inside the event payload rather than on anything checkout wrote.
+ *
+ * Either is sufficient; a neighbouring application's subscription carries
+ * neither. Accepting both widens what is correctly recognised without widening
+ * what gets through — the tag is the boundary, not where it happens to sit.
+ *
+ * Absent metadata is NOT ours. An untagged price on a genuinely Sellavant
+ * subscription would be ignored here, which is why `verifyConfiguredPrices`
+ * asserts the tag on every configured price — the gate is only as trustworthy
+ * as the provisioning that feeds it.
+ */
+export function isOurSubscription(subscription: Stripe.Subscription): boolean {
+  if (subscription.metadata?.[PRODUCT_TAG_KEY] === PRODUCT_TAG) return true;
+  const items = subscription.items?.data ?? [];
+  return items.some(
+    (item) => item.price?.metadata?.[PRODUCT_TAG_KEY] === PRODUCT_TAG
+  );
+}
 
 /**
  * Flatten a Stripe subscription into the few fields a workspace stores.

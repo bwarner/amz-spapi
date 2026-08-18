@@ -2,6 +2,7 @@ import type Stripe from 'stripe';
 import {
   applyCatalogEvent,
   isCatalogEvent,
+  isOurSubscription,
   readSubscription,
   verifyWebhook,
 } from '@amz-spapi/billing';
@@ -109,7 +110,23 @@ export async function POST(request: Request) {
     return Response.json({ received: true });
   }
 
-  const snapshot = readSubscription(event.data.object as Stripe.Subscription);
+  const subscription = event.data.object as Stripe.Subscription;
+
+  // Somebody else's subscription. The Stripe account is shared, and an endpoint
+  // cannot be filtered by application — only by event type, which all three
+  // products here emit identically.
+  //
+  // This has to come BEFORE attribution, not after. `findWorkspaceByCustomer`
+  // resolves by customer id, and one person holding all three products has one
+  // Stripe customer across them, so a neighbour's event would find a real
+  // Sellavant workspace and overwrite its status. The `deleted` case is the
+  // damaging one: it revokes a paying customer's allowance, with nothing in any
+  // log tying the revocation to another product's cancellation.
+  if (!isOurSubscription(subscription)) {
+    return Response.json({ received: true, matched: false });
+  }
+
+  const snapshot = readSubscription(subscription);
 
   try {
     // `workspaceId` comes from subscription metadata set at checkout. The
