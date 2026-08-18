@@ -180,7 +180,16 @@ function absoluteExpiry(seconds: number): number {
     : seconds;
 }
 
-function observedRange(rows: ReportRow[]): {
+/**
+ * The window a parsed file actually covers, from its rows.
+ *
+ * Exported because the upload path needs it BEFORE storing: the overlap guard
+ * has to know which days a file holds while refusing it is still possible.
+ * Returns whatever the date column held — a value the normaliser could not
+ * reduce to a day (the campaign export's "Jul 13, 2026 - Aug 01, 2026") comes
+ * back raw, so callers that compare dates must check the shape first.
+ */
+export function observedRange(rows: ReportRow[]): {
   from?: string;
   to?: string;
 } {

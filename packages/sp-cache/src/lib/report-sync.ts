@@ -8,11 +8,18 @@ import {
 } from './report-ingest.js';
 import { REPORTS, type ReportKind } from './report-registry.js';
 import {
+  observedRange,
   recordImport,
   storeReportRows,
   type ReportImport,
   type ReportSource,
 } from './report-store.js';
+import {
+  ingestedAdsWindows,
+  isAdsReportKind,
+  overlapsIngestedWindow,
+  type AdsWindow,
+} from './ads-sync-store.js';
 
 /**
  * The single path every report takes once its bytes exist, whoever produced
@@ -45,13 +52,81 @@ export type IngestOutcome = {
   /** Set when the caller let us identify the report from its headers. */
   detectedKind?: ReportKind;
   detectionConfidence?: number;
+  /**
+   * Things the caller should be told about a load that nonetheless succeeded.
+   *
+   * A check that could not run is not the same as a check that passed, and the
+   * difference has to reach the seller — silently skipping the overlap guard is
+   * the failure it exists to remove.
+   */
+  warnings?: string[];
 };
 
 export type IngestError = {
   error: string;
   /** What detection thought, so the caller can offer a manual choice. */
   candidates?: Array<{ kind: ReportKind; matched: number; possible: number }>;
+  /**
+   * The synced window this upload collided with, when that is why it was
+   * refused. Present so a caller can offer `allowOverlap` deliberately rather
+   * than having to parse the sentence.
+   */
+  overlap?: { kind: ReportKind; from: string; to: string; profileId: string };
 };
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Whether an ads upload would double-count a window the scheduled sync holds.
+ *
+ * Row identity is built from the RAW header names and cell values (`rowIdFor`),
+ * deliberately — it means a change to our own normalisation cannot re-import
+ * history. The consequence is that the SAME data from two sources does not
+ * collide: the console writes `customersearchterm` and `$278.25` where the API
+ * writes `searchTerm` and `278.25`, so dedup never fires and every row lands
+ * twice. A seller who uploads July while the sync also holds July sees double
+ * the spend, with both figures looking entirely plausible. Nothing downstream
+ * can detect it afterwards, which is why it is caught here, before the rows
+ * exist.
+ *
+ * Returns a REASON when the check could not run rather than passing quietly.
+ * The campaign export dates a span ("Jul 13, 2026 - Aug 01, 2026") that the
+ * normaliser cannot reduce to days, so its window is unknown and unknown must
+ * not read as clear.
+ */
+async function adsUploadOverlap(params: {
+  userId: string;
+  kind: ReportKind;
+  rows: ReportRow[];
+}): Promise<
+  { collision: AdsWindow } | { unchecked: string } | Record<string, never>
+> {
+  // Every profile of this user, not one: a console export carries no profile
+  // column, so which of the seller's ads accounts produced the file is not
+  // knowable from it. Checking against all of them is the conservative reading
+  // — it can refuse an upload for a profile the sync has not covered, and
+  // `allowOverlap` is the deliberate way past that.
+  const held = await ingestedAdsWindows({
+    userId: params.userId,
+    kind: params.kind,
+  });
+  if (!held.length) return {};
+
+  const { from, to } = observedRange(params.rows);
+  if (!from || !to || !ISO_DAY.test(from) || !ISO_DAY.test(to)) {
+    return {
+      unchecked:
+        'Could not check this against the scheduled ads sync: the file dates ' +
+        `its rows as ${from ? `"${from}"` : 'nothing readable'} rather than ` +
+        'single days, so the window it covers is unknown. If the sync already ' +
+        'holds these days, they are now stored twice — the two sources spell ' +
+        'their columns differently, so duplicate detection cannot merge them.',
+    };
+  }
+
+  const collision = overlapsIngestedWindow(held, { from, to });
+  return collision ? { collision } : {};
+}
 
 /**
  * Ingest report bytes. `kind` may be omitted for uploads — headers identify the
@@ -67,6 +142,14 @@ export async function ingestReportBuffer(params: {
   requestedTo?: string;
   options?: Record<string, string>;
   snapshotDate?: string;
+  /**
+   * Who is uploading. Only used to look up what the ads sync already holds for
+   * them, and only on the upload path — the sync's own ingest passes
+   * `source: 'api'` and must never be refused by its own run record.
+   */
+  userId?: string;
+  /** Store an ads window the sync already holds anyway, having been told. */
+  allowOverlap?: boolean;
 }): Promise<IngestOutcome | IngestError> {
   const text = decodeReportBuffer(params.buffer);
   if (!text.trim()) return { error: 'The file is empty.' };
@@ -107,6 +190,38 @@ export async function ingestReportBuffer(params: {
     };
   }
 
+  const warnings: string[] = [];
+  if (params.source === 'upload' && params.userId && isAdsReportKind(kind)) {
+    const overlap = await adsUploadOverlap({
+      userId: params.userId,
+      kind,
+      rows: parsed.rows,
+    });
+    if ('collision' in overlap) {
+      const { from, to, profileId } = overlap.collision;
+      if (!params.allowOverlap) {
+        return {
+          error:
+            `The scheduled ads sync already holds ${definition.label} for ` +
+            `${from}..${to} (advertiser profile ${profileId}), and this file ` +
+            'covers days inside that window. Loading it would store those days ' +
+            'twice: a console export and an API pull spell their columns ' +
+            'differently, so duplicate detection cannot merge them. Narrow the ' +
+            "export's date range, or import it anyway if this is a different " +
+            'advertiser profile.',
+          overlap: { kind, from, to, profileId },
+        };
+      }
+      warnings.push(
+        `Imported over a window the ads sync already holds (${from}..${to}, ` +
+          `profile ${profileId}). Totals for those days will be overstated if ` +
+          'this export covers the same advertiser profile.'
+      );
+    } else if ('unchecked' in overlap) {
+      warnings.push(overlap.unchecked);
+    }
+  }
+
   // Minted here so the rows and the audit record share it: coverage groups on
   // the rows' copy, so it must exist before they are written.
   const importId = crypto.randomUUID();
@@ -143,6 +258,7 @@ export async function ingestReportBuffer(params: {
     importId: record.importId,
     detectedKind: detection.kind ?? undefined,
     detectionConfidence: detection.confidence,
+    warnings: warnings.length ? warnings : undefined,
   };
 }
 

@@ -79,6 +79,25 @@ export type AdsSyncRun = {
   updatedAt: string;
 };
 
+/**
+ * The kinds this sync fetches — the ads half of `ReportKind`.
+ *
+ * Declared here rather than in the registry because it is what the UPLOAD path
+ * needs: "is this file one the ads sync might already hold?" is the question
+ * that gates the overlap check, and the registry has no ads/SP distinction to
+ * answer it with.
+ */
+export const ADS_REPORT_KINDS = [
+  'search-term',
+  'campaign-performance',
+] as const;
+
+export type AdsReportKind = (typeof ADS_REPORT_KINDS)[number];
+
+export function isAdsReportKind(kind: ReportKind): kind is AdsReportKind {
+  return (ADS_REPORT_KINDS as readonly ReportKind[]).includes(kind);
+}
+
 export class AdsSyncStoreError extends Error {}
 
 export function adsRunId(params: {
@@ -125,9 +144,10 @@ export async function writeAdsRun(
 /**
  * Runs for a profile, newest first — the staleness answer.
  *
- * Backed by `idx_ads_runs_profile_updated`; there is no primary index on this
- * cluster (ADR-0004), so the leading `profileId` is required, not merely
- * faster.
+ * Backed by `idx_ads_runs_user_updated`; there is no primary index on this
+ * cluster (ADR-0004), so the leading `userId` is required, not merely faster.
+ * `profileId` narrows within it and is optional — the upload path has no
+ * profile to narrow by, because a console export carries no profile column.
  */
 export async function listAdsRuns(params: {
   userId: string;
@@ -163,6 +183,9 @@ export async function listAdsRuns(params: {
   return rows;
 }
 
+/** An ingested window, and which advertiser profile's sync holds it. */
+export type AdsWindow = { from: string; to: string; profileId: string };
+
 /**
  * Windows this sync has successfully ingested for a profile and kind.
  *
@@ -173,13 +196,13 @@ export async function listAdsRuns(params: {
  */
 export async function ingestedAdsWindows(params: {
   userId: string;
-  profileId: string;
+  profileId?: string;
   kind: ReportKind;
-}): Promise<Array<{ from: string; to: string }>> {
+}): Promise<AdsWindow[]> {
   const runs = await listAdsRuns({ ...params, limit: 200 });
   return runs
     .filter((run) => run.status === 'ingested')
-    .map((run) => ({ from: run.from, to: run.to }));
+    .map((run) => ({ from: run.from, to: run.to, profileId: run.profileId }));
 }
 
 /**
@@ -188,10 +211,10 @@ export async function ingestedAdsWindows(params: {
  * Any overlap at all, not containment: half a synced window re-imported is
  * half the rows doubled, which is no better for being partial.
  */
-export function overlapsIngestedWindow(
-  windows: Array<{ from: string; to: string }>,
+export function overlapsIngestedWindow<W extends { from: string; to: string }>(
+  windows: W[],
   candidate: { from: string; to: string }
-): { from: string; to: string } | undefined {
+): W | undefined {
   return windows.find(
     (window) => window.from <= candidate.to && candidate.from <= window.to
   );
