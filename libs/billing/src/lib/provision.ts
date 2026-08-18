@@ -9,6 +9,7 @@ import {
   type PlanId,
 } from '@farvisionllc/models';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
+import { PRODUCT_TAG } from './product-tag.js';
 import { syncPriceCatalog, type PriceSyncOutcome } from './catalog.js';
 
 /**
@@ -43,9 +44,6 @@ import { syncPriceCatalog, type PriceSyncOutcome } from './catalog.js';
  * while looking like it did something. A mismatch is reported instead, and
  * re-pricing stays a deliberate commercial act performed in the dashboard.
  */
-
-/** Marks everything this application owns in a shared Stripe account. */
-const PRODUCT_TAG = 'sellavant';
 
 /**
  * What `POST /api/billing/webhook` must be sent.

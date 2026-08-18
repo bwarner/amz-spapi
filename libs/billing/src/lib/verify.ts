@@ -6,6 +6,7 @@ import {
   type PlanId,
 } from '@farvisionllc/models';
 import { stripeClient, BillingNotConfiguredError } from './customers.js';
+import { PRODUCT_TAG } from './product-tag.js';
 import { readPriceCatalog } from './catalog.js';
 
 /**
@@ -64,7 +65,6 @@ export type VerifyResult = {
   ok: boolean;
 };
 
-const PRODUCT_TAG = 'sellavant';
 const INTERVALS: BillingInterval[] = ['month', 'year'];
 
 function money(cents: number): string {
@@ -176,6 +176,21 @@ export async function verifyConfiguredPrices(): Promise<VerifyResult> {
           problems.push(
             `carries planId "${price.metadata?.['planId'] ?? 'none'}" — the ` +
               `webhook would grant the wrong plan`
+          );
+        }
+        if (price.metadata?.['product'] !== PRODUCT_TAG) {
+          // The ownership tag is what tells a subscription event apart from a
+          // neighbouring application's in this shared account. An untagged
+          // price does not grant the wrong plan — it grants nothing at all,
+          // because `isOurSubscription` refuses the event and the route
+          // acknowledges it as somebody else's. A paying customer stays on the
+          // trial allowance and no error is raised anywhere.
+          problems.push(
+            `carries product "${
+              price.metadata?.['product'] ?? 'none'
+            }" rather than "${PRODUCT_TAG}" — the webhook will IGNORE ` +
+              `subscriptions on this price as another application's. Run ` +
+              '`admincli billing provision --apply`'
           );
         }
         const productId =
