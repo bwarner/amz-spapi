@@ -200,6 +200,19 @@ export const OWNERSHIP: CollectionOwnership[] = [
     ownership: { kind: 'seller-field' as const, field: 'sellerId' as const },
   })),
 
+  // ── Ads (harvest funnels) ─────────────────────────────────────────────────
+  /**
+   * Keyword harvest funnels and their graduations (#147).
+   *
+   * Both key on `${userId}::…` AND carry `userId` as a field, so the field is
+   * what a purge acts on — the key form is an implementation detail that a
+   * query cannot filter by. They describe how a seller's own campaigns feed
+   * each other, which exists nowhere in Amazon and cannot be reconstructed
+   * from it, so an export that omits them hands back an incomplete record.
+   */
+  { collection: 'ads_funnels', ownership: userField() },
+  { collection: 'ads_graduations', ownership: userField() },
+
   /**
    * The ads report sync's run records (#145).
    *

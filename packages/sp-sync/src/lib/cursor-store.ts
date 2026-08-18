@@ -1,4 +1,5 @@
 import { getDocument, upsertDocument } from '@amz-spapi/couchbase-utils';
+import { retentionSeconds } from '@amz-spapi/data-rights';
 
 /**
  * High-water marks per user × domain (#34).
@@ -109,7 +110,11 @@ export async function advanceCursor(params: {
     SCOPE,
     COLLECTION,
     cursorKey(params.userId, params.sellerId, params.domain),
-    cursor
+    cursor,
+    // Rewritten on every run, so the expiry only lands on a seller who has
+    // stopped syncing entirely — and re-baselining from scratch is the right
+    // answer for a cursor 18 months stale anyway.
+    retentionSeconds()
   );
   return cursor;
 }
@@ -149,7 +154,11 @@ export async function recordFailure(params: {
     SCOPE,
     COLLECTION,
     cursorKey(params.userId, params.sellerId, params.domain),
-    cursor
+    cursor,
+    // Rewritten on every run, so the expiry only lands on a seller who has
+    // stopped syncing entirely — and re-baselining from scratch is the right
+    // answer for a cursor 18 months stale anyway.
+    retentionSeconds()
   );
   return cursor;
 }

@@ -680,6 +680,9 @@ importers:
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:../../libs/couchbase-utils
+      '@amz-spapi/data-rights':
+        specifier: 0.0.1
+        version: link:../../libs/data-rights
       '@farvisionllc/models':
         specifier: 0.0.1
         version: link:../models
@@ -704,6 +707,9 @@ importers:
       '@amz-spapi/couchbase-utils':
         specifier: 0.0.1
         version: link:../../libs/couchbase-utils
+      '@amz-spapi/data-rights':
+        specifier: 0.0.1
+        version: link:../../libs/data-rights
       '@amz-spapi/sp-cache':
         specifier: 0.0.1
         version: link:../sp-cache

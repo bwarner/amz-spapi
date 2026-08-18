@@ -152,7 +152,11 @@ describe('LambdasStack packaging', () => {
     template.resourceCountIs('AWS::ECR::Repository', 0);
   });
 
-  it('gives every function its own retained-by-stage log group', () => {
+  it('gives every function its own log group, kept the twelve months the DPP asks for', () => {
+    // 365, not 30. These groups hold the credential service's audit line — who
+    // minted a token, on whose behalf, for which API — and the SP-API Data
+    // Protection Policy asks that security logs survive twelve months. A month
+    // of them answers nothing about a breach discovered in March.
     const template = synth(
       workspace({ a: { packaging: 'image' }, b: { packaging: 'zip' } })
     );
@@ -160,7 +164,7 @@ describe('LambdasStack packaging', () => {
     template.resourceCountIs('AWS::Logs::LogGroup', 2);
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/aws/lambda/sellavant-dev-a',
-      RetentionInDays: 30,
+      RetentionInDays: 365,
     });
   });
 });

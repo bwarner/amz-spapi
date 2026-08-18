@@ -16,6 +16,7 @@ const nextConfig = {
     '@amz-spapi/sp-cache',
     '@amz-spapi/billing',
     '@amz-spapi/couchbase-utils',
+    '@amz-spapi/data-rights',
     '@amz-spapi/identity',
     '@farvisionllc/sp-client',
     '@farvisionllc/credential-store',

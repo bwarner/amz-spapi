@@ -1,5 +1,6 @@
 import type { SpApiClient } from '@farvisionllc/sp-client';
 import { upsertDocument } from '@amz-spapi/couchbase-utils';
+import { retentionSeconds } from '@amz-spapi/data-rights';
 import {
   advanceCursor,
   readCursor,
@@ -162,7 +163,9 @@ export async function syncFinancialEvents(
             windowTo: window.to,
             events,
             fetchedAt: context.now.toISOString(),
-          }
+          },
+          // Amazon Information — the 18-month Data Protection Policy ceiling.
+          retentionSeconds()
         );
         written += 1;
         nextToken = page?.payload?.NextToken;
@@ -211,7 +214,9 @@ export async function syncSettlementGroups(
               userId: context.userId,
               group,
               fetchedAt: context.now.toISOString(),
-            }
+            },
+            // Amazon Information — the 18-month Data Protection Policy ceiling.
+            retentionSeconds()
           );
         }
       } while (nextToken);
@@ -268,7 +273,9 @@ export async function syncInboundShipments(
               userId: context.userId,
               shipment,
               fetchedAt: context.now.toISOString(),
-            }
+            },
+            // Amazon Information — the 18-month Data Protection Policy ceiling.
+            retentionSeconds()
           );
         }
       } while (nextToken);
@@ -329,7 +336,9 @@ export async function snapshotInventory(
         day,
         summaries: rows,
         capturedAt: context.now.toISOString(),
-      }
+      },
+      // Amazon Information — the 18-month Data Protection Policy ceiling.
+      retentionSeconds()
     );
 
     await advanceCursor({
