@@ -93,7 +93,11 @@ function event(
           data: [
             {
               current_period_end: PERIOD_END_SECONDS,
-              price: { metadata: { planId: 'pilot' } },
+              // `product` is the ownership tag. Every fixture here is one of
+              // OUR subscriptions, so it carries the tag exactly as a
+              // provisioned price does; the shared-account cases below strip
+              // it deliberately.
+              price: { metadata: { planId: 'pilot', product: 'sellavant' } },
             },
           ],
         },
@@ -376,7 +380,7 @@ describe('granting and revoking an allowance', () => {
   it('leaves the plan undefined when the price carries no planId', async () => {
     verifyWebhook.mockReturnValue(
       event('customer.subscription.updated', {
-        items: { data: [{ price: { metadata: {} } }] },
+        items: { data: [{ price: { metadata: { product: 'sellavant' } } }] },
       })
     );
 
@@ -392,7 +396,15 @@ describe('granting and revoking an allowance', () => {
     // workspace, where it would fail validation on the next read.
     verifyWebhook.mockReturnValue(
       event('customer.subscription.updated', {
-        items: { data: [{ price: { metadata: { planId: 'enterprise' } } }] },
+        items: {
+          data: [
+            {
+              price: {
+                metadata: { planId: 'enterprise', product: 'sellavant' },
+              },
+            },
+          ],
+        },
       })
     );
 
@@ -426,5 +438,98 @@ describe('write failures', () => {
     const response = await POST(post('{}'));
 
     expect(response.status).toBe(500);
+  });
+});
+
+/**
+ * The Stripe account is SHARED with other applications.
+ *
+ * Every endpoint on a Stripe account receives every event on that account, and
+ * an endpoint can only be filtered by event TYPE — which is useless here,
+ * because all three products emit `customer.subscription.*` identically. So the
+ * boundary is metadata, and these are the cases that prove it holds.
+ *
+ * The ordering matters more than it looks. `findWorkspaceByCustomer` resolves
+ * by CUSTOMER id, and one person who bought two of the products has one Stripe
+ * customer across both — so a neighbour's event WILL find a real Sellavant
+ * workspace if it is allowed to get that far.
+ */
+describe('a shared Stripe account', () => {
+  /** Another product's subscription: no tag on the subscription or the price. */
+  function neighbour(type: string) {
+    return event(type, {
+      metadata: {},
+      items: {
+        data: [{ price: { metadata: { planId: 'resume-pro' } } }],
+      },
+    });
+  }
+
+  it('does not let another product’s cancellation revoke an allowance', async () => {
+    // The damaging case, and the reason the check precedes attribution: the
+    // customer lookup succeeds, so without the gate this writes an undefined
+    // status onto a paying workspace and drops it to the trial allowance.
+    findWorkspaceByCustomer.mockResolvedValue({ workspaceId: WORKSPACE });
+    verifyWebhook.mockReturnValue(neighbour('customer.subscription.deleted'));
+
+    const response = await POST(post('{}'));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ received: true, matched: false });
+    expect(updateWorkspaceSubscription).not.toHaveBeenCalled();
+  });
+
+  it('does not grant an allowance from another product’s subscription', async () => {
+    findWorkspaceByCustomer.mockResolvedValue({ workspaceId: WORKSPACE });
+    verifyWebhook.mockReturnValue(neighbour('customer.subscription.created'));
+
+    await POST(post('{}'));
+
+    expect(updateWorkspaceSubscription).not.toHaveBeenCalled();
+  });
+
+  it('never even looks the workspace up for somebody else’s event', async () => {
+    // Cheaper, and it keeps the refusal independent of what the lookup returns.
+    verifyWebhook.mockReturnValue(neighbour('customer.subscription.updated'));
+
+    await POST(post('{}'));
+
+    expect(findWorkspaceByCustomer).not.toHaveBeenCalled();
+  });
+
+  it('accepts one tagged on the PRICE, as `provision` stamps it', async () => {
+    // The signal that survives a subscription created by hand in the dashboard,
+    // which carries none of our own metadata. That is how the live
+    // subscriptions on this account came about.
+    verifyWebhook.mockReturnValue(
+      event('customer.subscription.updated', {
+        metadata: {},
+        items: {
+          data: [
+            { price: { metadata: { planId: 'pilot', product: 'sellavant' } } },
+          ],
+        },
+      })
+    );
+    findWorkspaceByCustomer.mockResolvedValue({ workspaceId: WORKSPACE });
+
+    await POST(post('{}'));
+
+    expect(updateWorkspaceSubscription).toHaveBeenCalled();
+  });
+
+  it('accepts one tagged on the SUBSCRIPTION, as checkout stamps it', async () => {
+    // The other half: bought through our checkout, but on a price whose
+    // metadata has been edited away in the dashboard.
+    verifyWebhook.mockReturnValue(
+      event('customer.subscription.updated', {
+        metadata: { workspaceId: WORKSPACE, product: 'sellavant' },
+        items: { data: [{ price: { metadata: {} } }] },
+      })
+    );
+
+    await POST(post('{}'));
+
+    expect(updateWorkspaceSubscription).toHaveBeenCalled();
   });
 });

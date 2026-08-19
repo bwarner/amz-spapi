@@ -75,7 +75,10 @@ function good(
     product: `prod_${planId}`,
     unit_amount: interval === 'year' ? plan.yearlyCents : plan.monthlyCents,
     recurring: { interval },
-    metadata: { planId },
+    // Both keys, exactly as `provision` stamps them. `product` is the ownership
+    // tag the webhook reads to tell this account's applications apart, so a
+    // price missing it is a misconfiguration rather than a healthy default.
+    metadata: { planId, product: 'sellavant' },
   } as unknown as Partial<Stripe.Price>;
 }
 
@@ -264,6 +267,25 @@ describe('verifyConfiguredPrices', () => {
     expect(
       (await verifyConfiguredPrices()).findings[0]?.problems.join(' ')
     ).toContain('carries planId "scale"');
+  });
+
+  it('catches a price missing the OWNERSHIP tag the webhook reads', async () => {
+    // The quietest failure of the lot. An untagged price does not grant the
+    // wrong plan — `isOurSubscription` refuses the event outright, the route
+    // acknowledges it as another application's, and a paying customer sits on
+    // the trial allowance with no error anywhere. Only this check finds it.
+    const prices = allGoodPrices();
+    prices['price_pilot_month'] = {
+      ...good('pilot', 'month'),
+      metadata: { planId: 'pilot' },
+    } as Partial<Stripe.Price>;
+    await withStripe(fakeStripe(prices));
+
+    const result = await verifyConfiguredPrices();
+    expect(result.findings[0]?.problems.join(' ')).toContain(
+      'the webhook will IGNORE subscriptions on this price'
+    );
+    expect(result.ok).toBe(false);
   });
 
   it('catches a price belonging to another product in the shared account', async () => {

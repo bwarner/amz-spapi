@@ -7,6 +7,7 @@ import {
 } from './customers.js';
 import {
   createPlanChangeSession,
+  isOurSubscription,
   readSubscription,
   verifyWebhook,
 } from './subscriptions.js';
@@ -391,5 +392,89 @@ describe('createPlanChangeSession', () => {
     };
     expect(body.flow_data.type).toBe('subscription_update');
     expect(body.flow_data.subscription_update.subscription).toBe('sub_1');
+  });
+});
+
+/**
+ * The application boundary inside a SHARED Stripe account.
+ *
+ * There is no Stripe-side way to draw this line: a webhook endpoint receives
+ * every event on the account and filters only by event type, which cannot
+ * separate three products that all emit `customer.subscription.*`. The tag in
+ * metadata IS the boundary, so what counts as tagged is a correctness question
+ * rather than a convenience.
+ */
+describe('isOurSubscription', () => {
+  it('accepts a subscription whose PRICE carries the tag', () => {
+    // What `provision` stamps, and the only signal present on a subscription
+    // created by hand in the Stripe dashboard.
+    expect(
+      isOurSubscription(
+        subscription({
+          metadata: {},
+          items: {
+            data: [
+              {
+                price: { metadata: { planId: 'pilot', product: 'sellavant' } },
+              },
+            ],
+          },
+        })
+      )
+    ).toBe(true);
+  });
+
+  it('accepts a subscription carrying the tag itself', () => {
+    // What `createCheckoutSession` stamps, for a price whose metadata has since
+    // been edited away in the dashboard.
+    expect(
+      isOurSubscription(subscription({ metadata: { product: 'sellavant' } }))
+    ).toBe(true);
+  });
+
+  it('REFUSES another application’s subscription', () => {
+    expect(
+      isOurSubscription(
+        subscription({
+          metadata: { workspaceId: 'ws_other' },
+          items: { data: [{ price: { metadata: { planId: 'resume-pro' } } }] },
+        })
+      )
+    ).toBe(false);
+  });
+
+  it('treats absent metadata as NOT ours', () => {
+    // The default has to fall this way. An unrecognised subscription that were
+    // treated as ours would write a neighbouring product's status onto a real
+    // workspace; treated as theirs, the worst case is a Sellavant subscription
+    // ignored — which `verifyConfiguredPrices` reports and a human can fix.
+    expect(
+      isOurSubscription(subscription({ metadata: {}, items: undefined }))
+    ).toBe(false);
+    expect(
+      isOurSubscription(
+        subscription({ metadata: {}, items: { data: [{ price: {} }] } })
+      )
+    ).toBe(false);
+  });
+
+  it('accepts when only ONE item of several is ours', () => {
+    // A metered overage item joins the subscription later and carries no tag of
+    // its own; requiring every item to be tagged would drop those events.
+    expect(
+      isOurSubscription(
+        subscription({
+          metadata: {},
+          items: {
+            data: [
+              { price: { metadata: { usage: 'overage' } } },
+              {
+                price: { metadata: { planId: 'pilot', product: 'sellavant' } },
+              },
+            ],
+          },
+        })
+      )
+    ).toBe(true);
   });
 });
