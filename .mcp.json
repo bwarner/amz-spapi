@@ -2,10 +2,7 @@
   "mcpServers": {
     "auth0": {
       "command": "npx",
-      "args": ["@auth0/auth0-mcp-server", "run"],
-      "env": {
-        "AUTH0_DOMAIN": "sellavant-dev.us.auth0.com"
-      }
+      "args": ["@auth0/auth0-mcp-server", "run"]
     },
     "couchbase": {
       "command": "sh",
@@ -15,14 +12,6 @@
       ],
       "env": {
         "CB_MCP_READ_ONLY_MODE": "true"
-      }
-    },
-    "playwright": {
-      "command": "/Users/bwarner/.volta/bin/npx",
-      "args": ["-y", "@playwright/mcp@latest"],
-      "env": {
-        "VOLTA_HOME": "/Users/bwarner/.volta",
-        "PATH": "/Users/bwarner/.volta/bin:/usr/local/bin:/usr/bin:/bin"
       }
     },
     "github": {
