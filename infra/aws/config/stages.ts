@@ -48,6 +48,33 @@ export type StageConfig = {
     ownsOidcProvider?: boolean;
   };
   /**
+   * Which GitHub Actions job may deploy this stage's infrastructure.
+   *
+   * The same trade as `vercel` above, pointed at a different issuer: present
+   * means the stage grants a CI role, absent means CI cannot deploy it at all
+   * and a workstation remains the only path. Absent is the right default —
+   * a stage nobody releases from should not carry a standing doorway.
+   *
+   * `environment` must match the `environment:` declared by the workflow job,
+   * because it lands in the role's trust policy verbatim as the last segment
+   * of `sub`. That is what ties the AWS boundary to GitHub's own approval
+   * rules rather than leaving the two to disagree.
+   */
+  github?: {
+    owner: string;
+    repo: string;
+    environment: string;
+    /**
+     * Whether this stage's stack CREATES the account-level OIDC provider.
+     *
+     * Same constraint as Vercel's, and stricter: GitHub's issuer URL is one
+     * global endpoint, so it carries neither stage nor organisation. Exactly
+     * one stage per ACCOUNT sets this; the rest reference the ARN, which the
+     * account and URL fully determine.
+     */
+    ownsOidcProvider?: boolean;
+  };
+  /**
    * The Auth0 tenant that issues the access tokens the API accepts, and the
    * API identifier those tokens must be addressed to (#54).
    *
@@ -307,6 +334,25 @@ export const STAGES: Record<StageName, StageConfig> = {
       projectName: 'sellavant',
       environment: 'staging',
     },
+    // Deploys from the `staging` job in deploy-web.yml, on every push to main.
+    // Infrastructure and the web app move together here, which is the point:
+    // a stack that only ever deploys at release time is a stack whose first
+    // real exercise is the release.
+    github: {
+      owner: 'bwarner',
+      repo: 'amz-spapi',
+      environment: 'staging',
+      /**
+       * TRUE, despite `vercel` above leaving it unset in this same account.
+       *
+       * Not a contradiction: IAM keys an OIDC provider by URL, dev owns the
+       * *Vercel* provider here, and GitHub's issuer is a different URL. No
+       * GitHub provider exists in the dev/staging account at all, so the first
+       * stage here to adopt CI deploys has to create it. If dev ever takes CI
+       * deploys too, this flag moves to dev and staging references it.
+       */
+      ownsOidcProvider: true,
+    },
     auth0Domain:
       envAuth0('staging', 'DOMAIN') || 'genai-18232523504408604.us.auth0.com',
     auth0Audience:
@@ -331,6 +377,17 @@ export const STAGES: Record<StageName, StageConfig> = {
     vercel: {
       teamSlug: 'bfwarnergmailcoms-projects',
       projectName: 'sellavant',
+      environment: 'production',
+      // Its own account, where it is the only stage.
+      ownsOidcProvider: true,
+    },
+    // Deploys from the `production` job in deploy-web.yml, which a published
+    // GitHub Release triggers. Staging carries the same block and deploys on
+    // every push to main, so these stacks are exercised long before a release
+    // reaches them.
+    github: {
+      owner: 'bwarner',
+      repo: 'amz-spapi',
       environment: 'production',
       // Its own account, where it is the only stage.
       ownsOidcProvider: true,

@@ -1,0 +1,58 @@
+name: Deploy infrastructure
+description: >
+  Deploys the CDK stacks for one stage, assuming AWS access from the job's
+  GitHub OIDC token. Extracted so a second stage costs a config block and a
+  `uses:` line rather than a copied block of steps — the sibling scansafeguard
+  repo shows where the copy-paste route ends up (640 lines, three near-identical
+  jobs, account ids inline).
+
+inputs:
+  stage:
+    description: The CDK stage to deploy — must match a key in infra/aws/config/stages.ts.
+    required: true
+  role-arn:
+    description: >
+      Role to assume, from the `GitHubDeployRoleArn` output of
+      <app>-<stage>-github-access. Its trust policy pins one repository and one
+      GitHub environment, so the calling job must declare the matching
+      `environment:` or STS refuses the token.
+    required: true
+  aws-region:
+    description: Region to deploy into. Defaults to us-east-1.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Synth reads the built artefacts off disk and refuses without them, naming
+    # the missing file — so this is a precondition of `cdk deploy`, not part of
+    # the application build.
+    - name: Build Lambda artefacts
+      shell: bash
+      run: pnpm exec nx run-many -t build --projects='lambda-*'
+
+    # No stored key. The token is minted per job and its subject carries the
+    # environment, which is what ties this to GitHub's own approval rules.
+    - name: Assume the deploy role
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        # `|| ` rather than the input default: a caller passing an unset
+        # variable sends an empty string, which counts as "provided" and would
+        # otherwise beat the default.
+        aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+        role-session-name: gha-${{ inputs.stage }}-${{ github.run_id }}
+
+    # `--require-approval never` because every run of these stacks touches IAM,
+    # and the prompt that guards that interactively is a hung job on a runner.
+    #
+    # `--all` includes the github-access stack, which is the doorway this job
+    # arrived through. Deliberate: excluding it is how it silently drifts. The
+    # risk is honest — a change breaking its own trust policy locks CI out — and
+    # the workstation recovery is in infra/aws/README.md.
+    - name: Deploy CDK stacks
+      shell: bash
+      run: |
+        npx cdk --app "node --loader ts-node/esm infra/aws/bin/app.ts" \
+          deploy --all -c stage=${{ inputs.stage }} --require-approval never

@@ -34,6 +34,47 @@ Vercel **OIDC Federation must be enabled** on the project. Without it no
 `VERCEL_OIDC_TOKEN` is issued and every AWS call fails with no credential found.
 Check by pulling the environment and looking for `VERCEL_OIDC_TOKEN`.
 
+## GitHub Actions access to AWS
+
+Separate from the runtime access above, and for a different actor: the release
+workflow deploys the CDK stacks, so the **runner** needs AWS credentials too. It
+holds none. GitHub signs an OIDC token per job and STS exchanges it, exactly as
+Vercel does at runtime (`infra/aws/lib/github-access-stack.ts`).
+
+These are GitHub **environment variables**, set on each environment separately —
+not Vercel variables, and not secrets. A role ARN is an identifier; the trust
+policy is what protects it.
+
+| Environment  | `AWS_DEPLOY_ROLE_ARN`                                            | Deploys on           |
+| ------------ | ---------------------------------------------------------------- | -------------------- |
+| `production` | `arn:aws:iam::108248327073:role/sellavant-prod-github-deploy`    | a published Release  |
+| `staging`    | `arn:aws:iam::853583158600:role/sellavant-staging-github-deploy` | every push to `main` |
+
+Both come from the `GitHubDeployRoleArn` output of
+`<app>-<stage>-github-access`. `AWS_REGION` is optional on either; the composite
+action falls back to `us-east-1`.
+
+Each role trusts exactly one subject — `repo:bwarner/amz-spapi:environment:production`
+and `…:environment:staging` respectively. That is why each job declares its
+`environment:`: the token's subject is built from it, and STS refuses anything
+else. Renaming a GitHub environment breaks that deploy until the stage config
+matches again.
+
+Because the subject is the whole boundary, the GitHub environment's
+**deployment branch and tag rules matter as much as the trust policy**. Any
+branch permitted to deploy to an environment can mint that environment's token.
+Production runs only from a published Release, where the ref is the tag, so
+restricting it to a `v*` tag rule costs nothing and closes the gap.
+
+The role can do one thing: assume this account's `cdk-hnb659fds-*` bootstrap
+roles. It is not an administrator. Everything that actually changes
+infrastructure runs as `cdk-…-cfn-exec-role`, which CloudFormation assumes and
+the bootstrap stack bounds.
+
+**The first deploy of this stack cannot come from CI**, because it is the
+doorway CI arrives through. Deploy it once from a workstation, then read the
+output — see `infra/aws/README.md`.
+
 ## Stored credential encryption (#11)
 
 | Variable                | Production                         | Source                                                          |

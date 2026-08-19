@@ -71,6 +71,12 @@ jobs:
     runs-on: ubuntu-latest
     # Gives the run an audit trail and somewhere to hang protection rules.
     environment: staging
+    # `id-token: write` mints the OIDC token the AWS role trusts. Naming any
+    # permission resets the rest to none, so `contents: read` must come back or
+    # the checkout loses its own access.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -79,6 +85,21 @@ jobs:
           node-version: 24
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+
+      # AWS before Vercel, for the same reason as production below: the web app
+      # is the half that calls the other, so deploying it first can put code in
+      # front of a state machine or a route that does not exist yet.
+      #
+      # Running here and not only at release time is what makes the release
+      # boring. These stacks deploy on every push to main, so a broken template,
+      # a missing artefact or a permissions gap fails on the merge that caused
+      # it — rather than for the first time during a production release, which
+      # is the worst moment to discover a stack has never actually deployed.
+      - uses: ./.github/actions/deploy-infra
+        with:
+          stage: staging
+          role-arn: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       # The custom environment's own variables — staging's Auth0 tenant, its
       # Couchbase scope, and the Stripe TEST key. `staging.sellavant.com` is
@@ -91,6 +112,12 @@ jobs:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: production
+    # `id-token: write` is what lets the runner mint the OIDC token AWS trusts.
+    # Naming any permission resets every other one to none, so `contents: read`
+    # has to be restated or the checkout loses its own access.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       # The tag, not the branch head. A release cut from an older commit must
       # deploy THAT commit — otherwise the release notes describe one thing and
@@ -104,6 +131,26 @@ jobs:
           node-version: 24
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+
+      # AWS BEFORE VERCEL, AND WHY THE ORDER IS NOT A PREFERENCE
+      # -------------------------------------------------------
+      # The web app is the half that calls the other. Shipping it first puts
+      # code in front of customers that can reference a queue, a state machine
+      # or a route that does not exist yet, and the failure surfaces as customer
+      # error rather than as a red build. Deploying AWS first inverts that: if
+      # infrastructure cannot deploy, the job fails here and production keeps
+      # serving the previous release, untouched.
+      #
+      # This is also the step whose absence let prod drift twenty-two resources
+      # behind `main` while the web half shipped twenty-one pull requests.
+      #
+      # The steps live in a composite action so that giving another stage the
+      # same treatment does not mean copying them.
+      - uses: ./.github/actions/deploy-infra
+        with:
+          stage: prod
+          role-arn: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - run: npx --yes $VERCEL_CLI pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
       - run: npx --yes $VERCEL_CLI build --prod --token=${{ secrets.VERCEL_TOKEN }}
