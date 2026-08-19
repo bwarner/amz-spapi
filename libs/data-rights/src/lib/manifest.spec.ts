@@ -24,6 +24,21 @@ import { OWNERSHIP, ownershipOf } from './manifest.js';
  * is the source of truth for what exists — the DDL tool converges the cluster
  * onto it — so comparing against it is comparing against reality rather than
  * against a second list somebody also has to remember to update.
+ *
+ * ## Why the schema is in `sharedGlobals`
+ *
+ * That import is a PATH, not a project dependency, so the Nx graph does not
+ * follow it. Adding a collection therefore marked ZERO projects affected — this
+ * file was never scheduled, and the guard that exists to catch an unclassified
+ * collection could not fire on the commit that added one. It is not a
+ * hypothetical: `ads_funnels` and `ads_graduations` were added in #147 and sat
+ * unclassified on main, outside every export and every deletion, through two
+ * green CI runs.
+ *
+ * `nx.json` now lists the schema under `namedInputs.sharedGlobals`, which marks
+ * every project affected when it changes. That is deliberately blunt. Schema
+ * edits are rare, a collection change genuinely can reach anywhere, and a full
+ * CI run is a cheaper thing to spend than the silence this replaces.
  */
 
 const declared = new Set(SOURCES.map(flatName));
