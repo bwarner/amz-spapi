@@ -345,7 +345,10 @@ function uniqueNodeId(
   adGroup: AdoptionAdGroup,
   used: Set<string>
 ): string {
-  let candidate = role;
+  // Annotated, not inferred: `role` narrows `candidate` to `FunnelRole`, and
+  // the suffixed forms below are template literal types that will not assign
+  // back into it. The id is a string that STARTS as the role, not a role.
+  let candidate: string = role;
   let n = 1;
   while (used.has(candidate)) {
     n += 1;
