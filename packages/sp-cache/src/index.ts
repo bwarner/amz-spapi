@@ -30,6 +30,7 @@ export {
   queryReceiptAggregates,
   queryReimbursements,
   queryReportAggregate,
+  queryHarvestRows,
   migrateReportRows,
   deleteReportRows,
   deleteReportImports,
@@ -48,6 +49,7 @@ export type {
   ReimbursementRow,
   ReportAggregate,
   ReportAggregateGroup,
+  HarvestSourceRow,
 } from './lib/report-store.js';
 export {
   ingestReportBuffer,

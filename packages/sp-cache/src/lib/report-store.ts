@@ -756,6 +756,94 @@ export async function queryReceiptAggregates(params: {
   return rows;
 }
 
+/**
+ * Stored search-term rows, aggregated the way a harvest reads them (#147).
+ *
+ * One query rather than five `queryReportAggregate` calls, because the harvest
+ * needs all five measures for the SAME grouping and five separate calls could
+ * disagree — a row that expires between the clicks query and the orders query
+ * yields a term with clicks and no orders, which is precisely the shape the
+ * waste rule proposes a negative for.
+ *
+ * Numbers come from `numbers`, not `fields`: `numbers` is the parsed copy made
+ * once at ingest, and summing the string column is how "0.011" totals as 11.
+ *
+ * Grouped by term AND placement, because the same term in two ad groups is two
+ * pieces of evidence about two bids, not one. Collapsing them would average a
+ * winning ad group with a losing one and graduate neither honestly.
+ *
+ * Rows whose search term is missing are dropped rather than grouped under an
+ * empty key: an API pull and a console export disagree about which columns
+ * exist, and a NULL group would present itself as a term to graduate.
+ */
+export type HarvestSourceRow = {
+  campaignId?: string;
+  adGroupId?: string;
+  campaignName?: string;
+  adGroupName?: string;
+  searchTerm: string;
+  matchType?: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+};
+
+export async function queryHarvestRows(params: {
+  sellerId: string;
+  from: string;
+  to: string;
+  /** Restrict to one campaign's evidence, when the funnel names one. */
+  campaignIds?: string[];
+}): Promise<HarvestSourceRow[]> {
+  const conditions = [
+    'd.sellerId = $sellerId',
+    "d.reportKind = 'search-term'",
+    'd.fields.`searchTerm` IS NOT MISSING',
+    "d.fields.`searchTerm` != ''",
+    'd.fields.`date` >= $from',
+    'd.fields.`date` <= $to',
+  ];
+  const parameters: Record<string, unknown> = {
+    sellerId: params.sellerId,
+    from: params.from,
+    to: params.to,
+  };
+  if (params.campaignIds?.length) {
+    conditions.push('d.fields.`campaignId` IN $campaignIds');
+    parameters['campaignIds'] = params.campaignIds;
+  }
+
+  // COALESCE to zero per row: a missing column is an absent measurement, and
+  // SUM over a NULL would return NULL for the whole group — one row lacking a
+  // sales column would erase the group's sales entirely.
+  const sum = (field: string) =>
+    `SUM(COALESCE(TONUMBER(d.numbers.\`${field}\`), 0))`;
+
+  const { rows } = await reportStorage.executeQuery<HarvestSourceRow>(
+    SCOPE,
+    `SELECT d.fields.\`searchTerm\` AS searchTerm,
+            MIN(d.fields.\`campaignId\`) AS campaignId,
+            MIN(d.fields.\`adGroupId\`) AS adGroupId,
+            MIN(d.fields.\`campaignName\`) AS campaignName,
+            MIN(d.fields.\`adGroupName\`) AS adGroupName,
+            MIN(d.fields.\`matchType\`) AS matchType,
+            ${sum('impressions')} AS impressions,
+            ${sum('clicks')} AS clicks,
+            ${sum('spend')} AS spend,
+            ${sum('sales')} AS sales,
+            ${sum('orders')} AS orders
+       FROM ${ROWS} AS d
+       WHERE ${conditions.join(' AND ')}
+       GROUP BY d.fields.\`searchTerm\`, d.fields.\`campaignId\`,
+                d.fields.\`adGroupId\`, d.fields.\`matchType\`
+       ORDER BY ${sum('clicks')} DESC`,
+    { parameters, readonly: true }
+  );
+  return rows;
+}
+
 /** One reimbursement (or reversal) row, as Amazon reported it. */
 export type ReimbursementRow = {
   date?: string;
