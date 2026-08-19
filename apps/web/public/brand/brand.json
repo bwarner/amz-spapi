@@ -1,23 +1,62 @@
 {
   "name": "Sellavant",
-  "homepage": "https://sellavant.com",
-  "brand_assets_base_url": "https://sellavant.com/brand/",
+  "homepage": "https://www.sellavant.com",
+  "operatedBy": "Farvision LLC",
+  "baseUrl": "https://www.sellavant.com/brand/",
+  "canonicalHostNote": "Always use the www host. https://sellavant.com/brand/* answers 308 to www, and partner/OAuth consoles frequently do not follow redirects when fetching a logo.",
   "colors": {
     "navy": "#152A4A",
     "gold": "#D9A441",
     "cream": "#F3E4C0"
   },
   "logos": {
-    "horizontal": "/brand/sellavant-logo-horizontal.svg",
-    "small": "/brand/sellavant-logo-small.svg",
-    "icon": "/brand/sellavant-icon.svg",
-    "iconInverse": "/brand/sellavant-icon-inverse.svg",
-    "mark": "/brand/sellavant-mark.svg",
-    "favicon": "/brand/sellavant-favicon.svg"
+    "horizontal": {
+      "svg": "https://www.sellavant.com/brand/sellavant-logo-horizontal.svg",
+      "png": {
+        "300": "https://www.sellavant.com/brand/sellavant-logo-horizontal-300.png",
+        "600": "https://www.sellavant.com/brand/sellavant-logo-horizontal-600.png",
+        "900": "https://www.sellavant.com/brand/sellavant-logo-horizontal-900.png"
+      },
+      "aspectRatio": "300:72"
+    },
+    "horizontalOnDark": {
+      "svg": "https://www.sellavant.com/brand/sellavant-logo-horizontal-on-dark.svg",
+      "png": {
+        "300": "https://www.sellavant.com/brand/sellavant-logo-horizontal-on-dark-300.png",
+        "600": "https://www.sellavant.com/brand/sellavant-logo-horizontal-on-dark-600.png",
+        "900": "https://www.sellavant.com/brand/sellavant-logo-horizontal-on-dark-900.png"
+      },
+      "aspectRatio": "300:72"
+    },
+    "small": {
+      "svg": "https://www.sellavant.com/brand/sellavant-logo-small.svg",
+      "onDark": "https://www.sellavant.com/brand/sellavant-logo-small-on-dark.svg",
+      "aspectRatio": "283:72"
+    },
+    "icon": {
+      "svg": "https://www.sellavant.com/brand/sellavant-icon.svg",
+      "onDark": "https://www.sellavant.com/brand/sellavant-icon-inverse.svg",
+      "png": {
+        "512": "https://www.sellavant.com/brand/sellavant-icon-512.png",
+        "256": "https://www.sellavant.com/brand/sellavant-icon-256.png",
+        "150": "https://www.sellavant.com/brand/sellavant-icon-150.png"
+      },
+      "aspectRatio": "1:1"
+    },
+    "mark": "https://www.sellavant.com/brand/sellavant-mark.svg",
+    "favicon": "https://www.sellavant.com/brand/sellavant-favicon.svg"
   },
   "usage": {
-    "preferred": "horizontal logo for headers and partner pages; icon for app tiles and compact UI; favicon variant (no trend line) at 16-32px",
-    "clearSpace": "Keep at least 0.5x logo height of clear space around the logo",
-    "backgrounds": "Icon tile is self-contained navy; use inverse icon (subtle cream keyline) on dark backgrounds"
+    "preferred": "Horizontal lockup for headers, email and partner pages; square icon for app tiles, OAuth consoles and compact UI; favicon variant (no trend line) at 16-32px.",
+    "small": "The small lockup is the compact cut: Inter's text optical size and a trimmed box, for rendering around 100px wide. Use the horizontal lockup above that size.",
+    "clearSpace": "Keep at least 0.5x the lockup height of clear space on all sides.",
+    "backgrounds": "The icon tile is self-contained navy and sits on any background. On dark backgrounds use the -on-dark lockups (cream wordmark) and the inverse icon.",
+    "email": "Email clients do not render SVG — always use PNG. Set an explicit width and height on the img, serve the 600px asset displayed at 300px for retina, and prefer the -on-dark PNG in any template that renders on a dark card.",
+    "oauthConsoles": "Use the square icon PNG: 512 for the Amazon SP-API and Ads app listings, 150 for Auth0 Universal Login. Point consoles at the www URL, never the apex.",
+    "wordmark": "The wordmark is Inter ExtraBold, converted to outlined paths. Do not re-typeset it with live text — Inter is not installed on the machines that render these assets."
+  },
+  "typography": {
+    "wordmark": "Inter ExtraBold (800), outlined",
+    "license": "Inter is licensed under the SIL Open Font License 1.1"
   }
 }

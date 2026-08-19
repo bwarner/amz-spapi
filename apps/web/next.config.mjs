@@ -42,6 +42,29 @@ const nextConfig = {
     // the package dir at runtime — load from node_modules, don't bundle.
     '@react-pdf/renderer',
   ],
+  // Brand assets are handed to third parties — partner/OAuth consoles and email
+  // clients — that fetch them from outside our origin and cache them hard.
+  // Next serves public/ with `max-age=0, must-revalidate` by default, which
+  // makes every Gmail image-proxy fetch a fresh origin hit, and sends no CORS
+  // header, which blocks any cross-origin fetch()/canvas read of the logo.
+  // Deliberately not `immutable`: these URLs are stable but their bytes are
+  // replaceable, so a day of browser cache is the most we want to commit to.
+  async headers() {
+    return [
+      {
+        source: '/brand/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value:
+              'public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000',
+          },
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+        ],
+      },
+    ];
+  },
+
   webpack: (config) => {
     config.resolve.extensionAlias = {
       ...config.resolve.extensionAlias,
