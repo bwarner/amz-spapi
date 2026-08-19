@@ -9,6 +9,7 @@ export type {
   SellerComplianceOps,
   SellerReportOps,
   SellerAdsOps,
+  SellerHarvestOps,
   AdsMutationResult,
   AdsWriteState,
   SellerDocumentOps,

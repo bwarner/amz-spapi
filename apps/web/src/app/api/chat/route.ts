@@ -32,6 +32,9 @@ import { createDocumentOps } from '../../../lib/document-ops';
 import { createProcurementOps } from '../../../lib/procurement-ops';
 import { createComplianceOps } from '../../../lib/compliance-ops';
 import { createReportOps } from '../../../lib/report-ops';
+import { createHarvestOps } from '../../../lib/harvest-ops';
+import { adsClientFor } from '../../../lib/amazon-clients';
+import { listAmazonConnections } from '../../../lib/amazon-connections';
 import { createAdsOps } from '../../../lib/ads-ops';
 import { costOfUsage, recordModelUsage } from '../../../lib/model-usage';
 import {
@@ -247,6 +250,60 @@ export async function POST(request: Request) {
   // connections per call, so constructing it is free.
   const adsOps = createAdsOps({ userId: session.user.sub });
 
+  /**
+   * Keyword harvest funnels (#147).
+   *
+   * Needs BOTH halves of the account: the funnel and its campaigns belong to
+   * the advertiser profile, but the search-term evidence is stored against the
+   * SELLER — so unlike the ads tools above this is gated on a resolved
+   * `sellerId`. Without one there are no rows to harvest from, and every plan
+   * would refuse on coverage while looking like a configuration problem.
+   */
+  const harvestOps = sellerId
+    ? createHarvestOps({
+        userId: session.user.sub,
+        sellerId,
+        async resolveAds(profileId) {
+          const available = (
+            await listAmazonConnections({
+              apiType: 'ADS_API',
+              userId: session.user.sub,
+            })
+          ).filter((c) => c.profile.advertiser_profile_id);
+          if (available.length === 0) {
+            throw new Error(
+              'No Amazon Ads account is connected, or the connected one has ' +
+                'no advertiser profile. Connect one from Settings.'
+            );
+          }
+          // Refuses to guess between several, for the same reason `createAdsOps`
+          // does: a funnel keyed to a marketplace the user did not choose is an
+          // answer that looks complete and is not.
+          const match = profileId
+            ? available.find(
+                (c) => c.profile.advertiser_profile_id === profileId
+              )
+            : available.length === 1
+            ? available[0]
+            : undefined;
+          if (!match) {
+            throw new Error(
+              profileId
+                ? `No connected Ads profile with id ${profileId}. Call ` +
+                  'list-ad-profiles to see the available ones.'
+                : 'This account has several advertiser profiles and none was ' +
+                  'named. Call list-ad-profiles and ask which marketplace ' +
+                  'they mean.'
+            );
+          }
+          return {
+            client: await adsClientFor(match),
+            profileId: match.profile.advertiser_profile_id as string,
+          };
+        },
+      })
+    : undefined;
+
   if (spConnection) {
     // Mints through the credentials API and re-mints on a 401. This runtime
     // never holds the refresh token or the client secret that would let it
@@ -427,6 +484,7 @@ export async function POST(request: Request) {
     procurementOps: createProcurementOps({ userId: chatUserId }),
     reportOps,
     adsOps,
+    harvestOps,
     listingWrites,
     marketplaceId: userMarketplaceId,
     additionalInstructions,
