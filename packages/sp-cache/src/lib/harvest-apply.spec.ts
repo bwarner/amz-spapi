@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   applyBackwardNegative,
   applyGraduation,
+  deliveryFromRows,
   dueNegativeDecisions,
   type DeliveryEvidence,
   type HarvestWriteClient,
@@ -420,5 +421,145 @@ describe('applyBackwardNegative', () => {
 
     expect(result.applied).toBe(false);
     expect(c.createNegativeKeywords).not.toHaveBeenCalled();
+  });
+});
+
+describe('deliveryFromRows', () => {
+  const GRADUATION = {
+    term: 'french press',
+    keywordId: 'K-dest',
+    toCampaignId: 'C-exact',
+    toAdGroupId: 'AG-exact',
+  };
+
+  const ROW = (over: Record<string, unknown> = {}) => ({
+    campaignId: 'C-exact',
+    adGroupId: 'AG-exact',
+    searchTerm: 'french press',
+    impressions: 100,
+    clicks: 5,
+    ...over,
+  });
+
+  it('does NOT credit the source campaign for the destination', () => {
+    // The bug this function exists to prevent. During the overlap the SOURCE is
+    // still serving this term — that is the whole point of the overlap — so a
+    // term-only match finds rows and reports the destination as delivering.
+    // The negative then cuts a live source in favour of a keyword that has
+    // never served: the exact outcome the gate is supposed to hold back, waved
+    // through BY the gate.
+    const delivery = deliveryFromRows({
+      rows: [ROW({ campaignId: 'C-auto', adGroupId: 'AG-auto' })],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.has('K-dest')).toBe(false);
+  });
+
+  it('counts the destination campaign, and sums it', () => {
+    const delivery = deliveryFromRows({
+      rows: [ROW(), ROW({ impressions: 40, clicks: 2 })],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.get('K-dest')).toMatchObject({
+      impressions: 140,
+      clicks: 7,
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+  });
+
+  it('keeps source and destination rows apart when both are present', () => {
+    // The realistic shape mid-overlap: both campaigns serving the same term.
+    // Only the destination's 40 impressions may reach the gate.
+    const delivery = deliveryFromRows({
+      rows: [
+        ROW({ campaignId: 'C-auto', adGroupId: 'AG-auto', impressions: 900 }),
+        ROW({ impressions: 40 }),
+      ],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.get('K-dest')?.impressions).toBe(40);
+  });
+
+  it('drops a row that cannot be attributed to a campaign', () => {
+    // Console-CSV uploads carry no ids. Unattributable is not "the destination"
+    // — it leaves the map empty, and the decision layer refuses with a remedy
+    // rather than cutting on evidence that was never about this campaign.
+    const delivery = deliveryFromRows({
+      rows: [ROW({ campaignId: undefined, adGroupId: undefined })],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.has('K-dest')).toBe(false);
+  });
+
+  it('rejects the right campaign but the wrong ad group', () => {
+    const delivery = deliveryFromRows({
+      rows: [ROW({ adGroupId: 'AG-other' })],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.has('K-dest')).toBe(false);
+  });
+
+  it('accepts a destination row that carries no ad group', () => {
+    // Weaker evidence than a matching ad group, but still this campaign's.
+    // Dropping it would refuse a gate that stored data can actually answer.
+    const delivery = deliveryFromRows({
+      rows: [ROW({ adGroupId: undefined })],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.get('K-dest')?.impressions).toBe(100);
+  });
+
+  it('leaves a keyword with no rows ABSENT, never zero', () => {
+    // "Not measured" and "measured and dead" lead to different decisions, and
+    // only one of them is safe to act on.
+    const delivery = deliveryFromRows({
+      rows: [],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.has('K-dest')).toBe(false);
+  });
+
+  it('skips a graduation that never created a keyword', () => {
+    const delivery = deliveryFromRows({
+      rows: [ROW()],
+      graduations: [{ ...GRADUATION, keywordId: null } as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.size).toBe(0);
+  });
+
+  it('matches the term case-insensitively', () => {
+    const delivery = deliveryFromRows({
+      rows: [ROW({ searchTerm: 'French Press' })],
+      graduations: [GRADUATION as never],
+      from: '2026-08-01',
+      to: '2026-08-14',
+    });
+
+    expect(delivery.get('K-dest')?.impressions).toBe(100);
   });
 });

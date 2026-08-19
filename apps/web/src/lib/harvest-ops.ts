@@ -2,6 +2,7 @@ import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
 import {
   applyBackwardNegative,
   applyGraduation,
+  deliveryFromRows,
   dueNegativeDecisions,
   getCoverage,
   getFunnel,
@@ -11,7 +12,6 @@ import {
   planHarvest,
   queryHarvestRows,
   storeFunnel,
-  type DeliveryEvidence,
 } from '@amz-spapi/sp-cache';
 import type { SellerHarvestOps } from '@amz-spapi/seller-agent';
 import { loggerFor } from './logger';
@@ -274,40 +274,34 @@ export function createHarvestOps(params: {
       const today = isoDay(new Date(now()));
       const from = shiftDays(today, -DELIVERY_WINDOW_DAYS);
 
-      // Delivery is read from the DESTINATION's own rows. A keyword that was
-      // created but never served has no rows at all, and absent must reach the
-      // gate as absent — filling the map with zeros would be indistinguishable
-      // from a keyword measured and found dead.
-      const rows = await queryHarvestRows({
-        sellerId: params.sellerId,
-        from,
-        to: today,
-        campaignIds: [
-          ...new Set(stored.funnel.nodes.map((node) => node.campaignId)),
-        ],
-      });
-
-      const delivery = new Map<string, DeliveryEvidence>();
       const graduations = await listGraduations({
         userId: params.userId,
         funnelId,
       });
-      for (const entry of graduations) {
-        const keywordId = entry.graduation.keywordId;
-        if (!keywordId) continue;
-        const matching = rows.filter(
-          (row) =>
-            row.searchTerm.toLowerCase() === entry.graduation.term.toLowerCase()
-        );
-        if (!matching.length) continue;
-        delivery.set(keywordId, {
-          keywordId,
-          impressions: matching.reduce((sum, row) => sum + row.impressions, 0),
-          clicks: matching.reduce((sum, row) => sum + row.clicks, 0),
-          from,
-          to: today,
-        });
-      }
+
+      // Delivery is read from the DESTINATION's own rows, and the query is
+      // narrowed to destination campaigns for the same reason `deliveryFromRows`
+      // filters by them: during the overlap the source is still serving this
+      // term, so a term-only match would credit the source's impressions to the
+      // destination and wave through the negative this gate exists to hold.
+      const destinations = [
+        ...new Set(graduations.map((entry) => entry.graduation.toCampaignId)),
+      ];
+      const rows = destinations.length
+        ? await queryHarvestRows({
+            sellerId: params.sellerId,
+            from,
+            to: today,
+            campaignIds: destinations,
+          })
+        : [];
+
+      const delivery = deliveryFromRows({
+        rows,
+        graduations: graduations.map((entry) => entry.graduation),
+        from,
+        to: today,
+      });
 
       const decisions = await dueNegativeDecisions({
         userId: params.userId,

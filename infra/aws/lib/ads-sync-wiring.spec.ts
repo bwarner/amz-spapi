@@ -115,6 +115,10 @@ describe('the machine', () => {
   it('lets one profile fail without taking the run with it', () => {
     // A revoked token on the CA profile says nothing about the US one, so a
     // whole-run failure would discard good work to report a handled problem.
+    //
+    // The catch lands on the negative sweep rather than ending the run: due
+    // negatives are on a clock, not on whether a report ingested, and a sweep
+    // over stale rows refuses safely rather than acting on them.
     const states = definition(synth()).States as Record<
       string,
       { Type: string; Catch?: Array<{ ErrorEquals: string[]; Next: string }> }
@@ -123,7 +127,29 @@ describe('the machine', () => {
 
     const caught = map?.Catch?.[0];
     expect(caught?.ErrorEquals).toEqual(['States.ALL']);
-    expect(states[caught?.Next ?? ''].Type).toBe('Succeed');
+    expect(caught?.Next).toBe('ReconcileNegatives');
+    // Still not a run failure, which is what this test is really about.
+    expect(states['ReconcileNegatives'].Type).toBe('Task');
+  });
+
+  it('sweeps for due negatives AFTER the reports are in', () => {
+    // Order is the point. The gate decides whether a destination keyword is
+    // serving by reading the rows this run just ingested; sweeping first would
+    // judge today's obligations on yesterday's evidence.
+    const states = definition(synth()).States as Record<
+      string,
+      {
+        Type: string;
+        Next?: string;
+        Parameters?: { Payload?: { step?: string } };
+      }
+    >;
+    const map = Object.entries(states).find(([, s]) => s.Type === 'Map');
+
+    expect(map?.[1].Next).toBe('ReconcileNegatives');
+    expect(states['ReconcileNegatives'].Parameters?.Payload?.step).toBe(
+      'reconcile'
+    );
   });
 
   it('bounds concurrency, so four profiles do not become four times the rate', () => {

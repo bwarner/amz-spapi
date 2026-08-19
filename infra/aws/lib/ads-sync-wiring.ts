@@ -163,12 +163,37 @@ export class AdsSyncWiring extends Construct {
       resultPath: sfn.JsonPath.DISCARD,
       maxConcurrency: 4,
     });
-    eachProfile.itemProcessor(request);
-    eachProfile.addCatch(new sfn.Succeed(this, 'MapFinishedWithFailures'), {
+    /**
+     * The backward negatives that came due while nobody was looking (#147).
+     *
+     * After the Map, because it decides whether each destination keyword is
+     * serving by reading the rows the reports just ingested — running it first
+     * would judge today's obligations on yesterday's evidence.
+     *
+     * It proposes and records; it never applies. A negative switches off a
+     * source that is by definition converting, so a human approves it — the
+     * same premise as the cost ledger.
+     */
+    const reconcile = new tasks.LambdaInvoke(this, 'ReconcileNegatives', {
+      lambdaFunction: worker,
+      payload: sfn.TaskInput.fromObject({ step: 'reconcile' }),
       resultPath: sfn.JsonPath.DISCARD,
-    });
+    }).addRetry(amazonRetry);
+
+    eachProfile.itemProcessor(request);
+
+    /**
+     * A failed Map still reaches the sweep, rather than ending the run.
+     *
+     * The two are independent: negatives come due on a clock, not on whether a
+     * report ingested. And a sweep running on stale rows is safe by
+     * construction — the delivery gate reports "cannot tell" and refuses, which
+     * is the same answer it gives when the rows simply are not there.
+     */
+    eachProfile.addCatch(reconcile, { resultPath: sfn.JsonPath.DISCARD });
 
     plan.next(eachProfile);
+    eachProfile.next(reconcile);
 
     this.stateMachine = new sfn.StateMachine(this, 'AdsSyncStateMachine', {
       stateMachineName: `${prefix}`,
