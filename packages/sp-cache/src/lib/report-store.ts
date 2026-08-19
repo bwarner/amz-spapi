@@ -9,6 +9,7 @@ import {
   REPORTS,
   type ReportFieldName,
 } from './report-registry.js';
+import { retentionSecondsFromEnv } from '@amz-spapi/data-rights';
 import type { ReportKind } from './report-registry.js';
 import {
   readDateSpan,
@@ -44,10 +45,25 @@ const IMPORTS = `\`${collectionName(SCOPE, 'imports')}\``;
 /** Unquoted form: upsertDocument escapes the identifier itself. */
 const IMPORTS_RAW = 'imports';
 
-/** Rows are evidence for claims, and Amazon's filing windows are long. */
+/**
+ * How long report data is kept.
+ *
+ * This was 730 days, for a good reason: rows are evidence for reimbursement
+ * claims and Amazon's filing windows are long. The reason did not survive the
+ * SP-API Data Protection Policy, which caps non-PII Amazon Information at 18
+ * months — so the ceiling wins and claims older than that have to be filed from
+ * the seller's own records rather than ours.
+ *
+ * `REPORT_ROW_TTL_DAYS` still shortens it per environment. It can no longer
+ * lengthen it: `retentionSeconds` clamps, so the variable cannot lift a
+ * compliance ceiling by being set wrong.
+ *
+ * Not retroactive. Couchbase stamps an absolute expiry at write time, so rows
+ * already stored keep the 730-day expiry they were written with until they are
+ * re-imported.
+ */
 function rowTtlSeconds(): number {
-  const days = Number(process.env['REPORT_ROW_TTL_DAYS']);
-  return (Number.isFinite(days) && days > 0 ? days : 730) * 24 * 60 * 60;
+  return retentionSecondsFromEnv('REPORT_ROW_TTL_DAYS');
 }
 
 /** Data API round-trips are per statement, so write in batches. */
@@ -260,7 +276,10 @@ export async function recordImport(params: {
       SCOPE,
       IMPORTS_RAW,
       `import::${record.importId}`,
-      record
+      record,
+      // Same ceiling as the rows it describes. An audit record that outlives
+      // its rows documents coverage that no longer exists.
+      rowTtlSeconds()
     );
   } catch (error) {
     console.error(

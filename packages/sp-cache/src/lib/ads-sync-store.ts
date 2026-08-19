@@ -4,6 +4,7 @@ import {
   getDocument,
   upsertDocument,
 } from '@amz-spapi/couchbase-utils';
+import { retentionSeconds } from '@amz-spapi/data-rights';
 import type { ReportKind } from './report-registry.js';
 
 /**
@@ -137,7 +138,15 @@ export async function writeAdsRun(
     requestedAt: existing?.requestedAt ?? run.requestedAt ?? now,
     updatedAt: now,
   };
-  await adsSyncStorage.upsertDocument(SCOPE, COLLECTION, runId, record);
+  await adsSyncStorage.upsertDocument(
+    SCOPE,
+    COLLECTION,
+    runId,
+    record,
+    // Amazon Information — the 18-month ceiling. Longer than the windows any
+    // run describes, so window ownership is never lost while its rows live.
+    retentionSeconds()
+  );
   return record;
 }
 

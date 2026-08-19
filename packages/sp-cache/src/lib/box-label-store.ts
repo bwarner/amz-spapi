@@ -20,6 +20,7 @@ import {
   upsertDocument,
   collectionName,
 } from '@amz-spapi/couchbase-utils';
+import { retentionSeconds } from '@amz-spapi/data-rights';
 
 /** Seam for tests: ESM exports are read-only and cannot be monkey-patched. */
 export const boxLabelStorage = { executeQuery, upsertDocument };
@@ -117,7 +118,10 @@ export async function storeBoxLabel(params: {
     SCOPE,
     COLLECTION,
     `boxlabel::${record.labelId}`,
-    record
+    record,
+    // Amazon Information, so the same 18-month ceiling as the report rows
+    // these labels are reconciled against.
+    retentionSeconds()
   );
   return record;
 }

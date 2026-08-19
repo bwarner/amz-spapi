@@ -404,7 +404,14 @@ export class LambdasStack extends Stack {
       // Lambda writes here by convention. Deterministic because functionName is
       // explicit above — an auto-generated name would make this a cycle.
       logGroupName: `/aws/lambda/${functionName}`,
-      retention: logs.RetentionDays.ONE_MONTH,
+      /**
+       * Twelve months, because the SP-API Data Protection Policy asks for it:
+       * "retain security logs for at least 12 months". These groups hold the
+       * credential service's audit line — who minted a token, on whose behalf,
+       * for which API — which is the record an incident is reconstructed from,
+       * and a month of it answers nothing about a breach found in March.
+       */
+      retention: logs.RetentionDays.ONE_YEAR,
       // CDK now owns the group, so tearing down a stage would take the logs of
       // whatever failed with it. Follows the same flag as the ECR repositories.
       removalPolicy: config.retainAssets
