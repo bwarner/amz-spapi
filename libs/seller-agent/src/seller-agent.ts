@@ -236,6 +236,81 @@ export type ReportCoverage = {
  * Host-provided FBA report ingestion. Two paths: pull from SP-API (needs the
  * report's role) or use rows the seller already uploaded from Seller Central.
  */
+/**
+ * Host access to keyword harvest funnels (#147).
+ *
+ * Its own port rather than more methods on `SellerAdsOps`, because a harvest
+ * spans three things the ads port does not have: stored search-term rows, the
+ * funnel and graduation records, and the seller the rows belong to. The host is
+ * the only place all three are in scope.
+ *
+ * ## Why the reads and the writes are separate calls
+ *
+ * `planHarvest` proposes and stores nothing that spends. Applying is a second,
+ * approved call naming ONE proposal. That split is the whole safety property:
+ * the model can plan freely, and every keyword created is a human saying yes to
+ * a specific term with its evidence attached.
+ */
+export interface SellerHarvestOps {
+  /** Funnels already stored for this advertiser. */
+  listFunnels(): Promise<
+    Array<{
+      funnelId: string;
+      profileId: string;
+      name?: string;
+      nodes: Array<{ campaignId: string; adGroupId: string; role: string }>;
+      edges: Array<{ from: string; to: string }>;
+    }>
+  >;
+  /**
+   * Read the account's live structure and propose a funnel for it.
+   *
+   * Proposes; it does not save. Which campaign feeds which is exactly what
+   * varies between sellers, so the topology is shown for correction before it
+   * becomes the thing every later harvest reads.
+   */
+  proposeFunnel(params: { profileId?: string }): Promise<{
+    proposal?: unknown;
+    skipped: unknown[];
+    reason?: string;
+  }>;
+  /** Save a proposed (or corrected) funnel. */
+  saveFunnel(params: {
+    profileId?: string;
+    funnel: unknown;
+  }): Promise<{ funnelId: string }>;
+  /**
+   * Compute graduation and waste proposals from stored evidence.
+   *
+   * Refuses rather than guesses: an immature window or missing coverage comes
+   * back as a stated refusal, because a harvest over rows that do not exist
+   * proposes negatives for terms that merely were not measured.
+   */
+  planHarvest(params: {
+    funnelId: string;
+    from?: string;
+    to?: string;
+  }): Promise<unknown>;
+  /** Create ONE approved keyword downstream and record the graduation. */
+  applyGraduation(params: {
+    funnelId: string;
+    graduationId: string;
+  }): Promise<unknown>;
+  /**
+   * Backward negatives whose overlap window has closed, each with a decision.
+   *
+   * Never a bare list: the point of #147's delivery gate is that a negative is
+   * only safe once the destination is actually serving, so each entry carries
+   * whether it should be applied and why not when it should not.
+   */
+  dueNegatives(params: { funnelId: string }): Promise<unknown>;
+  /** Apply ONE approved backward negative upstream. */
+  applyNegative(params: {
+    funnelId: string;
+    graduationId: string;
+  }): Promise<unknown>;
+}
+
 export interface SellerReportOps {
   syncReport(params: {
     kind: string;
@@ -958,6 +1033,7 @@ export interface SellerAgentConfig {
   complianceOps?: SellerComplianceOps;
   reportOps?: SellerReportOps;
   adsOps?: SellerAdsOps;
+  harvestOps?: SellerHarvestOps;
   documentOps?: SellerDocumentOps;
   procurementOps?: SellerProcurementOps;
   listingWrites?: SellerListingWrites;
@@ -2853,6 +2929,184 @@ function getChartTools() {
           },
         ],
       }),
+    },
+  };
+}
+
+/**
+ * Keyword harvest funnel tools (#147).
+ *
+ * A "waterfall" account runs discovery campaigns whose converting search terms
+ * graduate into phrase, and phrase's winners into exact, with negatives flowing
+ * backward so the tiers stop bidding against each other. Amazon has no concept
+ * of one campaign feeding another, so the relationship is ours to hold.
+ *
+ * ## The shape of these tools is the safety argument
+ *
+ * Planning is free and creates nothing. Applying names ONE proposal and carries
+ * `needsApproval`, so every keyword that starts costing money is a human saying
+ * yes to a specific term with its evidence attached. Nothing here applies a
+ * batch, and that is deliberate: a batch approval is a human saying yes to a
+ * number, not to a decision.
+ *
+ * ## Why graduation and negative are two tools, not one
+ *
+ * They are the same obligation separated in TIME. Creating the keyword and
+ * negating the term upstream in one breath switches off a proven traffic source
+ * in favour of an unproven one, and traffic gaps rather than transfers. The
+ * negative comes due after an overlap window, and only once the destination is
+ * actually serving — which is why `harvest-due-negatives` returns decisions
+ * rather than a list, and why applying one is its own approved act days later.
+ */
+function getHarvestTools(harvestOps: SellerHarvestOps) {
+  async function run<T>(work: () => Promise<T>) {
+    try {
+      return { success: true as const, ...(await work()) };
+    } catch (error) {
+      return {
+        success: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  const funnelId = z
+    .string()
+    .describe('Funnel to act on. Call list-harvest-funnels first.');
+
+  return {
+    'list-harvest-funnels': {
+      description:
+        'Keyword harvest funnels already configured for this advertiser — ' +
+        'which campaigns feed which. Start here: every other harvest tool ' +
+        'needs a funnelId, and an account with no funnel needs ' +
+        'propose-harvest-funnel first.',
+      inputSchema: z.object({}),
+      execute: async () =>
+        run(async () => ({ funnels: await harvestOps.listFunnels() })),
+    },
+
+    'propose-harvest-funnel': {
+      description:
+        "Read the account's live campaign structure and propose a funnel: " +
+        'which campaigns are discovery (auto, broad), which are destinations ' +
+        '(phrase, exact), and which feeds which. PROPOSES ONLY — nothing is ' +
+        'saved. Show the topology and the skipped campaigns to the user and ' +
+        'ask them to confirm or correct it before calling save-harvest-funnel. ' +
+        'Which campaign feeds which is the part that varies most between ' +
+        'sellers, so do not save it unreviewed.',
+      inputSchema: z.object({
+        profileId: z
+          .string()
+          .optional()
+          .describe(
+            'Advertiser profile. Required when the account has more than one.'
+          ),
+      }),
+      execute: async (input: { profileId?: string }) =>
+        run(() => harvestOps.proposeFunnel(input)),
+    },
+
+    'save-harvest-funnel': {
+      description:
+        'Save a funnel topology the user has confirmed. Pass back the proposal ' +
+        'from propose-harvest-funnel, with any corrections they asked for. ' +
+        'Creates no keywords and spends nothing — it records which campaign ' +
+        'feeds which.',
+      inputSchema: z.object({
+        profileId: z.string().optional(),
+        funnel: z
+          .unknown()
+          .describe('The confirmed topology, in the shape propose returned.'),
+      }),
+      execute: async (input: { profileId?: string; funnel: unknown }) =>
+        run(() => harvestOps.saveFunnel(input)),
+    },
+
+    'plan-harvest': {
+      description:
+        'Compute graduation and waste proposals from stored search-term rows. ' +
+        'Reads only — creates nothing and spends nothing. Returns proposals ' +
+        'with the evidence behind each (clicks, orders, spend, ACOS and the ' +
+        'window used). ' +
+        'It REFUSES rather than guessing when the evidence is not sound: a ' +
+        'window whose attribution is still filling in, or one the stored rows ' +
+        'do not cover. Report a refusal as a refusal — it means the numbers ' +
+        'would have been wrong, not that there is nothing to harvest. ' +
+        'Present the proposals and ask which to apply; never assume all.',
+      inputSchema: z.object({
+        funnelId,
+        from: z
+          .string()
+          .optional()
+          .describe('YYYY-MM-DD. Defaults to a sensible recent window.'),
+        to: z
+          .string()
+          .optional()
+          .describe(
+            'YYYY-MM-DD. Must end BEFORE the attribution window closes, or ' +
+              'the plan is refused — recent days under-report orders and would ' +
+              'make winners look like waste.'
+          ),
+      }),
+      execute: async (input: {
+        funnelId: string;
+        from?: string;
+        to?: string;
+      }) => run(() => harvestOps.planHarvest(input) as Promise<object>),
+    },
+
+    'apply-graduation': {
+      description:
+        'Create ONE approved keyword in the destination campaign and record ' +
+        'the graduation. Spends money: the keyword begins bidding immediately. ' +
+        'Takes a single graduationId from plan-harvest — apply them one at a ' +
+        'time so each is approved on its own evidence. ' +
+        'This does NOT add the backward negative; that comes due after the ' +
+        'overlap window and is applied separately, once the new keyword is ' +
+        'actually serving.',
+      inputSchema: z.object({
+        funnelId,
+        graduationId: z.string().describe('One proposal id from plan-harvest.'),
+      }),
+      needsApproval: true,
+      execute: async (input: { funnelId: string; graduationId: string }) =>
+        run(() => harvestOps.applyGraduation(input) as Promise<object>),
+    },
+
+    'harvest-due-negatives': {
+      description:
+        'Backward negatives whose overlap window has closed, each with a ' +
+        'decision about whether it is safe to apply. Reads only. ' +
+        'A negative is only safe once the destination keyword is actually ' +
+        'serving — if it is not (bid too low, budget capped), applying it cuts ' +
+        'a proven traffic source while the replacement is dead, which is the ' +
+        'one outcome that turns a graduation into lost sales. When an entry ' +
+        'says not to apply, relay the reason and the remedy rather than ' +
+        'applying anyway.',
+      inputSchema: z.object({ funnelId }),
+      execute: async (input: { funnelId: string }) =>
+        run(() => harvestOps.dueNegatives(input) as Promise<object>),
+    },
+
+    'apply-backward-negative': {
+      description:
+        'Add ONE approved negative exact upstream, so the source campaign ' +
+        'stops competing with the keyword that graduated out of it. Changes ' +
+        'where money goes. ' +
+        'Only for entries harvest-due-negatives said were safe to apply. ' +
+        'If the graduation succeeded and this fails, the seller is bidding ' +
+        'against themselves and cannot see it — say so plainly rather than ' +
+        'reporting the graduation as complete.',
+      inputSchema: z.object({
+        funnelId,
+        graduationId: z
+          .string()
+          .describe('The graduation whose backward negative is due.'),
+      }),
+      needsApproval: true,
+      execute: async (input: { funnelId: string; graduationId: string }) =>
+        run(() => harvestOps.applyNegative(input) as Promise<object>),
     },
   };
 }
@@ -5093,6 +5347,7 @@ export function createSellerAgent({
   adsOps,
   documentOps,
   procurementOps,
+  harvestOps,
   listingWrites,
   modelTier,
   marketplaceId,
@@ -5118,6 +5373,7 @@ export function createSellerAgent({
     : {};
   const reportTools = reportOps ? getReportTools(reportOps) : {};
   const adsTools = adsOps ? getAdsTools(adsOps) : {};
+  const harvestTools = harvestOps ? getHarvestTools(harvestOps) : {};
   // Unconditional, unlike every other group here. Charting reaches nothing, so
   // there is no capability to gate it on — and the obvious gate is wrong:
   // `hasAmazonConnection` is `!!spCache`, but Ads is a separate application an
@@ -5166,6 +5422,7 @@ export function createSellerAgent({
     ...complianceTools,
     ...reportTools,
     ...adsTools,
+    ...harvestTools,
     ...chartTools,
     ...documentTools,
     ...procurementTools,
