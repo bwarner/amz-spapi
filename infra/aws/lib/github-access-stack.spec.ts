@@ -43,7 +43,13 @@ describe('the trust policy', () => {
   it('pins the repository and the GitHub environment, not a branch', () => {
     // `repo:owner/name:ref:refs/heads/main` would be satisfied by any workflow
     // running on a branch, and branches are cheap to create. The environment
-    // segment is what forces the job through GitHub's approval rules.
+    // segment is what forces the job through GitHub's deployment rules.
+    //
+    // The subject is matched case-insensitively and the audience exactly: the
+    // environment segment is a name someone typed into repository settings
+    // (`Production` here, `production` in the workflow), and GitHub does not
+    // document which casing reaches the token. `sts.amazonaws.com` has no such
+    // ambiguity.
     synth(STAGES.prod).hasResourceProperties('AWS::IAM::Role', {
       AssumeRolePolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -52,6 +58,8 @@ describe('the trust policy', () => {
             Condition: {
               StringEquals: {
                 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+              },
+              StringEqualsIgnoreCase: {
                 'token.actions.githubusercontent.com:sub':
                   'repo:bwarner/amz-spapi:environment:production',
               },
@@ -62,12 +70,22 @@ describe('the trust policy', () => {
     });
   });
 
-  it('matches the subject exactly, never by prefix', () => {
-    // StringLike with a trailing wildcard is the classic mistake here:
-    // `repo:bwarner/amz-spapi:*` accepts every workflow in the repository,
-    // including one added on a fork's pull request.
+  it('matches the whole subject, never a prefix', () => {
+    // Case-insensitive is not the same as loose. A trailing wildcard is the
+    // classic mistake here: `repo:bwarner/amz-spapi:*` accepts every workflow
+    // in the repository, on any branch, with no environment in the path at all.
     const json = JSON.stringify(synth(STAGES.prod).toJSON());
     expect(json).not.toContain('StringLike');
+    expect(json).toContain('repo:bwarner/amz-spapi:environment:production');
+    expect(json).not.toContain('repo:bwarner/amz-spapi:*');
+  });
+
+  it('scopes staging to its own environment, not production’s', () => {
+    // Both stages now deploy from CI, and they live in different AWS accounts.
+    // A subject shared between them would let a push to main reach prod.
+    const json = JSON.stringify(synth(STAGES.staging).toJSON());
+    expect(json).toContain('repo:bwarner/amz-spapi:environment:staging');
+    expect(json).not.toContain('environment:production');
   });
 });
 

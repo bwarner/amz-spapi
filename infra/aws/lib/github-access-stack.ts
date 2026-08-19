@@ -105,9 +105,35 @@ export class GitHubAccessStack extends Stack {
     this.role = new iam.Role(this, 'GitHubDeployRole', {
       roleName: `${config.appName}-${config.stageName}-github-deploy`,
       description: `Assumed by GitHub Actions ${github.environment} deploys of ${github.owner}/${github.repo}.`,
+      /**
+       * Two operators, and the split is deliberate.
+       *
+       * `aud` is matched exactly: `sts.amazonaws.com` is a fixed literal with
+       * no casing to disagree about.
+       *
+       * `sub` is matched case-INSENSITIVELY, because the environment segment is
+       * a name a human typed into repository settings and IAM's StringEquals is
+       * case-sensitive. This repository's environments are `Staging` and
+       * `Production`; the workflow jobs and this config say `staging` and
+       * `production`, which GitHub resolves case-insensitively on its side.
+       * Whether the casing GitHub then puts in the token is the environment's
+       * or the job's is not documented — the OIDC reference only ever shows an
+       * all-lowercase example — and guessing decides whether every deploy in
+       * this repository works.
+       *
+       * IgnoreCase costs almost nothing: the subject still pins one repository
+       * and one environment, and the only additional principals it admits are
+       * spellings of that same environment name, which GitHub will not let you
+       * create twice anyway. The alternative is renaming both environments to
+       * lowercase so all three layers agree — a better fix at the source, and
+       * still worth doing, but it is a setting rather than something this stack
+       * can guarantee.
+       */
       assumedBy: new iam.WebIdentityPrincipal(providerArn, {
         StringEquals: {
           [`${issuerHost}:aud`]: 'sts.amazonaws.com',
+        },
+        StringEqualsIgnoreCase: {
           [`${issuerHost}:sub`]: subject,
         },
       }),
