@@ -311,7 +311,12 @@ export const STAGES: Record<StageName, StageConfig> = {
       envAuth0('staging', 'DOMAIN') || 'genai-18232523504408604.us.auth0.com',
     auth0Audience:
       envAuth0('staging', 'AUDIENCE') || 'https://staging.sellavant.com',
-    servicePrincipals: envServicePrincipals('staging'),
+    // "Sellavant Sync Worker (staging)" in the genai-18232523504408604 tenant
+    // — its own tenant and its own M2M application, so neither dev's principal
+    // nor production's is trusted here.
+    servicePrincipals: envServicePrincipals('staging') ?? [
+      'lT3P57b0CdKAoxC0tpSwD1IFhHGgIMBP@clients',
+    ],
     alarmEmail: process.env.SELLAVANT_STAGING_ALARM_EMAIL,
     couchbase: { secretName: 'sellavant-staging-couchbase' },
     amazonOauth: { secretName: 'sellavant-staging-amazon-oauth' },
