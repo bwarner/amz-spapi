@@ -7,6 +7,7 @@ import { MediaAssetsStack } from '../lib/media-assets-stack.js';
 import { LambdasStack } from '../lib/lambdas-stack.js';
 import { CredentialsKeyStack } from '../lib/credentials-key-stack.js';
 import { VercelAccessStack } from '../lib/vercel-access-stack.js';
+import { GitHubAccessStack } from '../lib/github-access-stack.js';
 
 const app = new cdk.App();
 const stage = getStageConfig(app.node.tryGetContext('stage'));
@@ -87,6 +88,29 @@ const vercelAccessStack = stage.vercel
     )
   : undefined;
 
+// Only for a stage that CI is allowed to deploy. Absent means the workstation
+// path stays the only one, which is the right default for a stage nobody cuts
+// a release from.
+//
+// Deliberately depends on nothing and is depended on by nothing: it grants the
+// doorway the other stacks are deployed THROUGH, so it must already exist
+// before CI runs and cannot be part of the run it enables. The first deploy is
+// therefore a workstation deploy — see infra/aws/README.md.
+const githubAccessStack = stage.github
+  ? new GitHubAccessStack(
+      app,
+      `${stage.appName}-${stage.stageName}-github-access`,
+      {
+        env: {
+          account: stage.account,
+          region: stage.region,
+        },
+        config: stage,
+        description: `SellAvant GitHub Actions OIDC deploy access for ${stage.stageName}.`,
+      }
+    )
+  : undefined;
+
 // The credentials function imports the key's ARN by export name to grant itself
 // decrypt (#55). `Fn.importValue` is an opaque token, so CDK cannot infer the
 // ordering from it — without this, `cdk deploy --all` on a fresh account can
@@ -110,4 +134,5 @@ for (const [key, value] of Object.entries(tags)) {
   cdk.Tags.of(lambdasStack).add(key, value);
   cdk.Tags.of(credentialsKeyStack).add(key, value);
   if (vercelAccessStack) cdk.Tags.of(vercelAccessStack).add(key, value);
+  if (githubAccessStack) cdk.Tags.of(githubAccessStack).add(key, value);
 }

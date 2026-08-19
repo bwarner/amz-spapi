@@ -141,5 +141,57 @@ MEDIA_ASSETS_BUCKET=<MediaAssetsBucketName output>
 Also attach `MediaAssetsRuntimePolicyArn` to whichever IAM principal runs the
 web app server-side code that creates presigned URLs.
 
+### Staging and prod deploy from CI, not from here
+
+For `staging` and `prod`, the commands above are the fallback, not the routine.
+`.github/workflows/deploy-web.yml` deploys the CDK stacks and then the web app —
+AWS first, so the web half never goes live referencing infrastructure that does
+not exist.
+
+- **staging** deploys on every push to `main`. That frequency is the point: a
+  broken template or a missing artefact fails on the merge that caused it,
+  rather than for the first time during a release.
+- **prod** deploys when a GitHub Release is published.
+
+Note the `--require-approval never` the workflow passes. Every run of these
+stacks touches IAM, and the prompt that guards that interactively is a hung job
+on a runner.
+
+### Bootstrapping the CI role, once
+
+`sellavant-<stage>-github-access` grants the role CI assumes, which means CI
+cannot create it: the first deploy has to come from a workstation.
+
+```sh
+# prod, into 108248327073
+AWS_PROFILE=sellavant-prod npx cdk deploy \
+  --app "node --loader ts-node/esm infra/aws/bin/app.ts" \
+  -c stage=prod sellavant-prod-github-access
+
+# staging, into the dev/staging account 853583158600
+AWS_PROFILE=sellavant-dev npx cdk deploy \
+  --app "node --loader ts-node/esm infra/aws/bin/app.ts" \
+  -c stage=staging sellavant-staging-github-access
+```
+
+Then set each stack's `GitHubDeployRoleArn` output as `AWS_DEPLOY_ROLE_ARN` — a
+**variable**, not a secret — on the matching GitHub environment (`production`
+and `staging`). After that, CI deploys these stacks along with everything else.
+
+Staging creates the account-level GitHub OIDC provider, because dev owns only
+the _Vercel_ one and IAM keys providers by URL. If dev ever adopts CI deploys,
+`ownsOidcProvider` moves to dev and staging references it.
+
+If a later change breaks the role's own trust policy, CI locks itself out. The
+recovery is this same command, which is why the workstation path has to keep
+working.
+
+Synth reads Lambda build output off disk and refuses without it, so build the
+artefacts before any diff or deploy:
+
+```sh
+pnpm exec nx run-many -t build --projects='lambda-*'
+```
+
 Models are served through the Vercel AI Gateway, so no AWS AI permissions are
 required here. See `A-PLUS.md`.
