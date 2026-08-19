@@ -17,7 +17,14 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico, sitemap.xml, robots.txt (metadata files)
+     * - brand/ (public brand assets)
+     *
+     * brand/ is excluded for the same reason favicon.ico is: it is public by
+     * definition and fetched by machines outside our control — partner OAuth
+     * consoles and email image proxies. Running it through auth turns every
+     * logo fetch into a function invocation instead of a cached static hit,
+     * and couples the logo's availability to Auth0 being reachable.
      */
-    '/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)',
+    '/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|brand/).*)',
   ],
 };
