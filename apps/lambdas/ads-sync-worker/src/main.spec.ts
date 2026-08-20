@@ -16,9 +16,13 @@ vi.mock('@amz-spapi/couchbase-utils', () => ({
 
 const requestAdsReport = vi.fn();
 const collectAdsReport = vi.fn();
+const reconcileDueNegatives = vi.fn();
+const queryHarvestRows = vi.fn();
 vi.mock('@amz-spapi/sp-cache', () => ({
   requestAdsReport: (...a: unknown[]) => requestAdsReport(...a),
   collectAdsReport: (...a: unknown[]) => collectAdsReport(...a),
+  reconcileDueNegatives: (...a: unknown[]) => reconcileDueNegatives(...a),
+  queryHarvestRows: (...a: unknown[]) => queryHarvestRows(...a),
 }));
 
 const mintSellerAccessToken = vi.fn();
@@ -92,6 +96,10 @@ beforeEach(() => {
   requestAdsReport.mockReset();
   collectAdsReport.mockReset();
   mintSellerAccessToken.mockReset().mockResolvedValue('Atza|ADS');
+  reconcileDueNegatives
+    .mockReset()
+    .mockResolvedValue({ due: 0, ready: 0, blocked: 0, blockedDetail: [] });
+  queryHarvestRows.mockReset().mockResolvedValue([]);
 });
 
 describe('plan', () => {
@@ -291,5 +299,117 @@ describe('credentials', () => {
         sellerId: ITEM.sellerId,
       })
     );
+  });
+});
+
+describe('reconcile', () => {
+  it('sweeps every eligible profile for due negatives', async () => {
+    executeQuery.mockResolvedValue({
+      rows: [PROFILE, { ...PROFILE, advertiser_profile_id: 'P2' }],
+    });
+
+    await handler({ step: 'reconcile' } as never);
+
+    expect(reconcileDueNegatives).toHaveBeenCalledTimes(2);
+    const [first] = reconcileDueNegatives.mock.calls[0] as [
+      { userId: string; profileId: string }
+    ];
+    expect(first.userId).toBe('auth0|1');
+    expect(first.profileId).toBe('967757046531288');
+  });
+
+  it('skips a profile with no seller rather than reading another account', async () => {
+    // The funnel belongs to a user, the rows to a seller. A profile with no
+    // seller has no rows of its own, and substituting any other seller's would
+    // decide one account's negatives from another's numbers.
+    executeQuery.mockResolvedValue({
+      rows: [{ ...PROFILE, seller_id: undefined }],
+    });
+
+    await handler({ step: 'reconcile' } as never);
+
+    expect(reconcileDueNegatives).not.toHaveBeenCalled();
+  });
+
+  it('reads rows for the profile OWN seller', async () => {
+    await handler({ step: 'reconcile' } as never);
+
+    const [call] = reconcileDueNegatives.mock.calls[0] as [
+      {
+        readRows: (q: {
+          campaignIds: string[];
+          from: string;
+          to: string;
+        }) => Promise<unknown>;
+      }
+    ];
+    await call.readRows({
+      campaignIds: ['C-exact'],
+      from: '2026-08-05',
+      to: '2026-08-19',
+    });
+
+    expect(queryHarvestRows).toHaveBeenCalledWith({
+      sellerId: 'A2HXBWIE3KMLKV',
+      campaignIds: ['C-exact'],
+      from: '2026-08-05',
+      to: '2026-08-19',
+    });
+  });
+
+  it('keeps sweeping after one profile throws', async () => {
+    // Independent work: one revoked profile must not hide another's blocked
+    // negative, which is the very thing this sweep exists to surface.
+    executeQuery.mockResolvedValue({
+      rows: [PROFILE, { ...PROFILE, advertiser_profile_id: 'P2' }],
+    });
+    reconcileDueNegatives
+      .mockRejectedValueOnce(new Error('token revoked'))
+      .mockResolvedValueOnce({
+        due: 1,
+        ready: 1,
+        blocked: 0,
+        blockedDetail: [],
+      });
+
+    const result = (await handler({ step: 'reconcile' } as never)) as {
+      ready: number;
+    };
+
+    expect(result.ready).toBe(1);
+    expect(emitted).toContainEqual(['NegativeReconcileErrors', 1]);
+  });
+
+  it('publishes the blocked count, which is the one worth an alarm', async () => {
+    reconcileDueNegatives.mockResolvedValue({
+      due: 3,
+      ready: 1,
+      blocked: 2,
+      blockedDetail: [
+        {
+          graduationId: 'g1',
+          term: 'french press',
+          reason: 'no impressions',
+          remedy: ['raise bid'],
+        },
+        {
+          graduationId: 'g2',
+          term: 'cafetiere',
+          reason: 'unknown',
+          remedy: ['sync'],
+        },
+      ],
+    });
+
+    await handler({ step: 'reconcile' } as never);
+
+    expect(emitted).toContainEqual(['NegativesBlocked', 2]);
+    expect(emitted).toContainEqual(['NegativesDue', 3]);
+    expect(emitted).toContainEqual(['NegativesReady', 1]);
+  });
+
+  it('publishes zeros so the series exists on a quiet day', async () => {
+    await handler({ step: 'reconcile' } as never);
+    expect(emitted).toContainEqual(['NegativesBlocked', 0]);
   });
 });

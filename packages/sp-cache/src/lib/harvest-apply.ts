@@ -245,6 +245,81 @@ export type DeliveryEvidence = {
   to: string;
 };
 
+/** The fields of a graduation this needs. Structural, so callers may pass the whole record. */
+type DeliverySubject = Pick<
+  Graduation,
+  'term' | 'keywordId' | 'toCampaignId' | 'toAdGroupId'
+>;
+
+/**
+ * Delivery evidence for each destination keyword, scoped to the DESTINATION.
+ *
+ * The scoping is the entire point, and getting it wrong silently defeats the
+ * gate it feeds. During the overlap window the SOURCE campaign is still serving
+ * the very term being graduated — that is what the overlap is for. So rows for
+ * that term exist in both campaigns, and matching on the term alone credits the
+ * source's impressions to the destination. The gate then reports a destination
+ * that has never served as delivering, and the negative it guards cuts a live
+ * source in favour of a dead keyword: precisely the outcome the gate exists to
+ * prevent, arrived at through the gate.
+ *
+ * Rows are therefore admitted only from the graduation's own destination
+ * campaign, and its ad group where the row carries one.
+ *
+ * A row with no `campaignId` cannot be attributed and is dropped rather than
+ * assumed. Console-CSV uploads carry no ids at all, so for those the map comes
+ * back empty and the decision is "unknown" — which refuses with a remedy,
+ * rather than cutting on evidence that was never about this campaign.
+ *
+ * Absent stays absent: a keyword with no rows is missing from the map, never
+ * present with zeros. "Not measured" and "measured and dead" lead to different
+ * decisions, and only one of them is safe to act on.
+ */
+export function deliveryFromRows(params: {
+  rows: Array<{
+    campaignId?: string;
+    adGroupId?: string;
+    searchTerm: string;
+    impressions: number;
+    clicks: number;
+  }>;
+  graduations: DeliverySubject[];
+  from: string;
+  to: string;
+}): Map<string, DeliveryEvidence> {
+  const delivery = new Map<string, DeliveryEvidence>();
+
+  for (const graduation of params.graduations) {
+    const keywordId = graduation.keywordId;
+    // No destination keyword means nothing to measure. The decision layer
+    // reports this separately, and far more usefully than "0 impressions".
+    if (!keywordId) continue;
+
+    const term = graduation.term.toLowerCase();
+    const matching = params.rows.filter((row) => {
+      if (row.campaignId !== graduation.toCampaignId) return false;
+      // Only when the row carries one: an ad-group-less row from the right
+      // campaign is still better evidence than nothing.
+      if (row.adGroupId && row.adGroupId !== graduation.toAdGroupId) {
+        return false;
+      }
+      return row.searchTerm.toLowerCase() === term;
+    });
+
+    if (!matching.length) continue;
+
+    delivery.set(keywordId, {
+      keywordId,
+      impressions: matching.reduce((sum, row) => sum + row.impressions, 0),
+      clicks: matching.reduce((sum, row) => sum + row.clicks, 0),
+      from: params.from,
+      to: params.to,
+    });
+  }
+
+  return delivery;
+}
+
 /**
  * A negative that a graduation scheduled, ready to propose.
  *

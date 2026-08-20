@@ -4,6 +4,8 @@ import { AmazonAdsApiClient } from '@farvisionllc/ad-client';
 import { executeQuery } from '@amz-spapi/couchbase-utils';
 import {
   collectAdsReport,
+  queryHarvestRows,
+  reconcileDueNegatives,
   requestAdsReport,
   type ReportKind,
 } from '@amz-spapi/sp-cache';
@@ -87,7 +89,16 @@ export type WorkItem = {
 };
 export type RequestStep = { step: 'request'; item: WorkItem };
 export type CollectStep = { step: 'collect'; item: WorkItem; polls?: number };
-export type AdsSyncEvent = PlanStep | RequestStep | CollectStep;
+/**
+ * Sweep for backward negatives whose overlap window has closed (#147).
+ *
+ * Runs after the reports are in, because it reads the rows they just ingested
+ * to decide whether each destination keyword is actually serving. One step for
+ * the whole account rather than one per profile: it is a handful of queries,
+ * and fanning it out would buy parallelism nobody is waiting on.
+ */
+export type ReconcileStep = { step: 'reconcile'; now?: string };
+export type AdsSyncEvent = PlanStep | RequestStep | CollectStep | ReconcileStep;
 
 type ProfileRow = {
   user_id: string;
@@ -207,6 +218,82 @@ export async function handler(event: AdsSyncEvent): Promise<unknown> {
     metrics.publishStoredMetrics();
 
     return { items };
+  }
+
+  if (event.step === 'reconcile') {
+    const now = event.now ? Date.parse(event.now) : Date.now();
+    const profiles = await eligibleProfiles();
+
+    let due = 0;
+    let ready = 0;
+    let blocked = 0;
+
+    for (const profile of profiles) {
+      // A funnel belongs to a user, its campaigns to a profile, and the rows to
+      // a seller. All three are needed and none substitutes for another; a
+      // profile with no seller has no rows to read and is skipped rather than
+      // reconciled against another account's numbers.
+      if (!profile.seller_id) continue;
+
+      try {
+        const summary = await reconcileDueNegatives({
+          userId: profile.user_id,
+          profileId: profile.advertiser_profile_id,
+          now,
+          readRows: (query) =>
+            queryHarvestRows({
+              sellerId: profile.seller_id as string,
+              from: query.from,
+              to: query.to,
+              campaignIds: query.campaignIds,
+            }),
+        });
+
+        due += summary.due;
+        ready += summary.ready;
+        blocked += summary.blocked;
+
+        for (const item of summary.blockedDetail) {
+          // Warn, not info. A blocked negative means a graduation stopped
+          // halfway: the keyword is live downstream while the source still
+          // carries the term, which is the self-competition this detects.
+          logger.warn('backward negative blocked', {
+            profileId: profile.advertiser_profile_id,
+            graduationId: item.graduationId,
+            term: item.term,
+            reason: item.reason,
+          });
+        }
+      } catch (error) {
+        // One profile's failure must not abandon the rest, for the same reason
+        // the Map swallows a failed report: the others are independent.
+        logger.error('negative reconcile failed', {
+          profileId: profile.advertiser_profile_id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        metrics.addMetric('NegativeReconcileErrors', MetricUnit.Count, 1);
+      }
+    }
+
+    /**
+     * Published even at zero, so the series exists.
+     *
+     * `NegativesBlocked` is the one worth an alarm: it counts graduations that
+     * came due and could not proceed, and a number that stays above zero for
+     * days is a funnel quietly bidding against itself.
+     */
+    metrics.addMetric('NegativesDue', MetricUnit.Count, due);
+    metrics.addMetric('NegativesReady', MetricUnit.Count, ready);
+    metrics.addMetric('NegativesBlocked', MetricUnit.Count, blocked);
+    metrics.publishStoredMetrics();
+
+    logger.info('negatives reconciled', {
+      profiles: profiles.length,
+      due,
+      ready,
+      blocked,
+    });
+    return { due, ready, blocked };
   }
 
   if (event.step === 'request') {

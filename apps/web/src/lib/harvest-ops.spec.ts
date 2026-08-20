@@ -15,6 +15,11 @@ const queryHarvestRows = vi.fn(async () => []);
 const getCoverage = vi.fn(async () => ({ covered: [], gaps: [] }));
 const listGraduations = vi.fn(async () => []);
 const dueNegativeDecisions = vi.fn(async () => []);
+// Stubbed, because the scoping it performs is tested directly in sp-cache
+// (`deliveryFromRows`). What matters here is the wiring around it: that the
+// rows handed to it were queried from the DESTINATION campaigns rather than
+// every node in the funnel.
+const deliveryFromRows = vi.fn(() => new Map());
 const getFunnel = vi.fn(async () => ({
   userId: 'auth0|1',
   funnel: {
@@ -34,6 +39,7 @@ vi.mock('@amz-spapi/sp-cache', () => ({
   getCoverage: (...a: unknown[]) => getCoverage(...(a as [])),
   listGraduations: (...a: unknown[]) => listGraduations(...(a as [])),
   dueNegativeDecisions: (...a: unknown[]) => dueNegativeDecisions(...(a as [])),
+  deliveryFromRows: (...a: unknown[]) => deliveryFromRows(...(a as [])),
   getFunnel: (...a: unknown[]) => getFunnel(...(a as [])),
   listFunnels: vi.fn(async () => []),
   storeFunnel: vi.fn(async () => ({
@@ -139,38 +145,76 @@ describe('planHarvest window defaults', () => {
 });
 
 describe('due negatives', () => {
-  it('leaves a keyword with no rows ABSENT from the delivery map', async () => {
-    // The gate reads absence as "not shown to deliver". Filling it with zeros
-    // would say the opposite thing — measured, and dead — and the two lead to
-    // different decisions about cutting a live traffic source.
+  it('queries only the DESTINATION campaigns, not every funnel node', async () => {
+    // The narrowing is a correctness gate, not an optimisation. During the
+    // overlap the source is still serving the graduated term — by design — so
+    // rows fetched across the whole funnel let a term-match credit the source's
+    // impressions to the destination, and the gate waves through a negative
+    // that cuts a live source in favour of a keyword that never served.
     listGraduations.mockResolvedValueOnce([
-      { graduation: { term: 'french press', keywordId: 'K-served' } },
-      { graduation: { term: 'never served', keywordId: 'K-silent' } },
-    ] as never);
-    queryHarvestRows.mockResolvedValueOnce([
       {
-        searchTerm: 'french press',
-        impressions: 900,
-        clicks: 12,
-        spend: 6,
-        sales: 40,
-        orders: 2,
+        graduation: {
+          term: 'french press',
+          keywordId: 'K1',
+          toCampaignId: 'C2',
+        },
+      },
+      {
+        graduation: { term: 'cafetiere', keywordId: 'K2', toCampaignId: 'C2' },
       },
     ] as never);
 
     await ops().dueNegatives({ funnelId: 'f1' });
 
-    const [call] = dueNegativeDecisions.mock.calls as unknown as [
-      [{ delivery: Map<string, { impressions: number }> }]
+    const [rowCall] = queryHarvestRows.mock.calls as unknown as [
+      [{ campaignIds: string[] }]
     ];
-    expect(call[0].delivery.has('K-served')).toBe(true);
-    expect(call[0].delivery.get('K-served')?.impressions).toBe(900);
-    expect(call[0].delivery.has('K-silent')).toBe(false);
+    // C1 is the auto node in this funnel — a source, and never evidence that
+    // the destination is delivering.
+    expect(rowCall[0].campaignIds).toEqual(['C2']);
+  });
+
+  it('hands the graduations and rows to the scoping function', async () => {
+    listGraduations.mockResolvedValueOnce([
+      {
+        graduation: {
+          term: 'french press',
+          keywordId: 'K1',
+          toCampaignId: 'C2',
+        },
+      },
+    ] as never);
+
+    await ops().dueNegatives({ funnelId: 'f1' });
+
+    const [call] = deliveryFromRows.mock.calls as unknown as [
+      [{ graduations: Array<{ keywordId: string }> }]
+    ];
+    expect(call[0].graduations).toEqual([
+      { term: 'french press', keywordId: 'K1', toCampaignId: 'C2' },
+    ]);
+  });
+
+  it('skips the row query entirely when nothing has graduated', async () => {
+    // An unnarrowed query with no campaign filter would scan the seller's whole
+    // window for a funnel that has never graduated anything.
+    await ops().dueNegatives({ funnelId: 'f1' });
+    expect(queryHarvestRows).not.toHaveBeenCalled();
   });
 
   it('reads delivery over a SHORT window, not the harvest window', async () => {
     // The question is whether the destination is serving now. Sixty days would
     // let a keyword that died three weeks ago still look alive.
+    listGraduations.mockResolvedValueOnce([
+      {
+        graduation: {
+          term: 'french press',
+          keywordId: 'K1',
+          toCampaignId: 'C2',
+        },
+      },
+    ] as never);
+
     await ops().dueNegatives({ funnelId: 'f1' });
 
     const [rowCall] = queryHarvestRows.mock.calls as unknown as [

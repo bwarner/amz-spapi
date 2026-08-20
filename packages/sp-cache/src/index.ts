@@ -244,9 +244,15 @@ export type {
 export {
   applyGraduation,
   applyBackwardNegative,
+  deliveryFromRows,
   dueNegativeDecisions,
   HarvestApplyError,
 } from './lib/harvest-apply.js';
+export { reconcileDueNegatives } from './lib/negative-reconcile.js';
+export type {
+  ReconcileRow,
+  ReconcileSummary,
+} from './lib/negative-reconcile.js';
 export type {
   ApplyGraduationParams,
   ApplyGraduationResult,
