@@ -174,11 +174,38 @@ export async function GET() {
 
     return Response.json(view);
   } catch (error) {
-    log.error(
-      `adops view failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    log.error(`adops view failed: ${message}`);
+
+    /**
+     * An unprovisioned environment is not a fault, and must not read as one.
+     *
+     * Couchbase answers a query against a collection that does not exist with
+     * "Keyspace not found" — which is what a scope that has never had the DDL
+     * applied looks like, and it is a deployment state rather than a bug. It
+     * surfaced here as a generic 500 saying "Could not load ad operations",
+     * which sent the reader looking for a fault in the code rather than at
+     * `scripts/couchbase-ddl.ts`.
+     *
+     * Deliberately NOT reported as an empty account. "This environment has no
+     * ad_funnels collection" and "you have not adopted a funnel yet" are
+     * different facts, and the second one quietly hides the first.
+     *
+     * The collection name goes to the log, not to the seller: they can do
+     * nothing with it, and the operator reading the log can.
+     */
+    if (/keyspace not found/i.test(message)) {
+      return Response.json(
+        {
+          error:
+            'Ad operations are not available in this environment yet — its ' +
+            'storage has not been provisioned. This is a configuration issue, ' +
+            'not a problem with your account.',
+        },
+        { status: 503 }
+      );
+    }
+
     return Response.json(
       { error: 'Could not load ad operations.' },
       { status: 500 }

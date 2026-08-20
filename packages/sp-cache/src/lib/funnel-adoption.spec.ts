@@ -328,3 +328,130 @@ describe('the proposed topology', () => {
     ]);
   });
 });
+
+describe('edges are scoped to shared products', () => {
+  /** Two products, each with its own auto source and exact destination. */
+  const twoProducts = {
+    campaigns: [
+      campaign({
+        campaignId: 'c-auto-a',
+        targetingType: 'AUTO',
+        name: 'Auto A',
+      }),
+      campaign({
+        campaignId: 'c-auto-b',
+        targetingType: 'AUTO',
+        name: 'Auto B',
+      }),
+      campaign({ campaignId: 'c-exact-a', name: 'Exact A' }),
+      campaign({ campaignId: 'c-exact-b', name: 'Exact B' }),
+    ],
+    adGroups: [
+      adGroup({ adGroupId: 'ag-auto-a', campaignId: 'c-auto-a' }),
+      adGroup({ adGroupId: 'ag-auto-b', campaignId: 'c-auto-b' }),
+      adGroup({ adGroupId: 'ag-exact-a', campaignId: 'c-exact-a' }),
+      adGroup({ adGroupId: 'ag-exact-b', campaignId: 'c-exact-b' }),
+    ],
+    keywords: [
+      keyword('ag-exact-a', 'EXACT', { campaignId: 'c-exact-a' }),
+      keyword('ag-exact-b', 'EXACT', { campaignId: 'c-exact-b' }),
+    ],
+    productAds: [
+      productAd('ag-auto-a', 'B0TEAPOT', { campaignId: 'c-auto-a' }),
+      productAd('ag-exact-a', 'B0TEAPOT', { campaignId: 'c-exact-a' }),
+      productAd('ag-auto-b', 'B0CUPS', { campaignId: 'c-auto-b' }),
+      productAd('ag-exact-b', 'B0CUPS', { campaignId: 'c-exact-b' }),
+    ],
+  };
+
+  it('does NOT harvest one product into another product’s campaign', () => {
+    // The flaw this replaces: every source wired to every destination, which
+    // proposes feeding a teapot campaign's search terms into a cup campaign.
+    // Nonsense on its face, and it arrives thousands of edges at a time.
+    const proposal = infer(twoProducts);
+    // Asserted as CAMPAIGN pairs rather than node ids: the ids are an internal
+    // disambiguation detail, and what this test is about is which real
+    // campaigns get wired together.
+    const byId = new Map(
+      proposal.funnel.nodes.map((n) => [n.nodeId, n.campaignId] as const)
+    );
+    const pairs = proposal.funnel.edges
+      .map((e) => `${byId.get(e.from)}->${byId.get(e.to)}`)
+      .sort();
+
+    expect(pairs).toEqual(['c-auto-a->c-exact-a', 'c-auto-b->c-exact-b']);
+  });
+
+  it('stays quadratic-free: 4 nodes give 2 edges, not 4', () => {
+    // The number is the point. A dozen campaigns across four products used to
+    // produce thousands of edges — not something a human reviews, only
+    // something they accept wholesale or abandon.
+    expect(infer(twoProducts).funnel.edges).toHaveLength(2);
+  });
+
+  it('still spans campaigns when the product is shared', () => {
+    // Scoping by product must not become scoping by campaign. A funnel
+    // routinely spans campaigns — that is what a funnel IS.
+    const edges = infer().funnel.edges;
+    expect(edges).toHaveLength(1);
+    expect(edges[0].from).toBe('auto');
+    expect(edges[0].to).toBe('exact');
+  });
+
+  it('wires every destination for the SAME product', () => {
+    // Deliberately over-inclusive within a product: which exact campaign a
+    // seller prefers is a real choice this cannot read off the account. That
+    // is a handful of edges to review, not thousands.
+    const result = infer({
+      campaigns: [
+        campaign({ campaignId: 'c-auto', targetingType: 'AUTO' }),
+        campaign({ campaignId: 'c-ex1' }),
+        campaign({ campaignId: 'c-ex2' }),
+      ],
+      adGroups: [
+        adGroup({ adGroupId: 'ag-auto', campaignId: 'c-auto' }),
+        adGroup({ adGroupId: 'ag-ex1', campaignId: 'c-ex1' }),
+        adGroup({ adGroupId: 'ag-ex2', campaignId: 'c-ex2' }),
+      ],
+      keywords: [
+        keyword('ag-ex1', 'EXACT', { campaignId: 'c-ex1' }),
+        keyword('ag-ex2', 'EXACT', { campaignId: 'c-ex2' }),
+      ],
+      productAds: [
+        productAd('ag-auto', 'B0TEAPOT', { campaignId: 'c-auto' }),
+        productAd('ag-ex1', 'B0TEAPOT', { campaignId: 'c-ex1' }),
+        productAd('ag-ex2', 'B0TEAPOT', { campaignId: 'c-ex2' }),
+      ],
+    });
+
+    expect(result.funnel.edges).toHaveLength(2);
+  });
+
+  it('wires an ad group that shares ONE of several products', () => {
+    // A destination advertising a subset still sells the thing the source
+    // found. Overlap, not equality, is the test.
+    const result = infer({
+      productAds: [
+        productAd('ag-auto', 'B0TEAPOT'),
+        productAd('ag-auto', 'B0CUPS'),
+        productAd('ag-exact', 'B0CUPS'),
+      ],
+    });
+
+    expect(result.funnel.edges).toHaveLength(1);
+  });
+
+  it('proposes NO edge when a node advertises nothing', () => {
+    // An empty product list is not a wildcard. It means we looked and found
+    // none, or the read failed — and applyGraduation's product-scope gate
+    // refuses both, so an edge here could never be acted on.
+    const result = infer({
+      productAds: [productAd('ag-auto', 'B0TEAPOT')],
+    });
+
+    expect(result.funnel.edges).toEqual([]);
+    // The node still exists, and productsReadAt is what distinguishes
+    // "read, and there were none" from "never looked".
+    expect(result.funnel.nodes).toHaveLength(2);
+  });
+});

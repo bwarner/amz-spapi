@@ -298,19 +298,61 @@ function specificity(role: string): number {
 }
 
 /**
+ * Do these two nodes advertise any product in common?
+ *
+ * The question a funnel edge is really asking. A term harvested from a source
+ * only belongs in a destination that sells the same thing — otherwise the
+ * destination bids on a query its products cannot satisfy.
+ *
+ * An empty list is NOT a wildcard. It means we read the ad group's product ads
+ * and found none, or the read failed — and `applyGraduation`'s product-scope
+ * gate refuses both. Treating unknown as "matches everything" would propose
+ * exactly the edges that can never be acted on.
+ */
+function sharesProduct(a: FunnelNode, b: FunnelNode): boolean {
+  const from = a.advertisedProductIds ?? [];
+  const to = b.advertisedProductIds ?? [];
+  if (!from.length || !to.length) return false;
+  const wanted = new Set(to);
+  return from.some((id) => wanted.has(id));
+}
+
+/**
  * The standard topology, pre-wired for a human to edit.
  *
- * Discovery feeds focus: every auto and broad node points at every phrase and
- * exact node in the funnel, and broad is a destination for auto as well as a
- * source — a term auto surfaces is often added as broad to explore its
- * neighbourhood before it earns exact.
+ * Discovery feeds focus: an auto or broad node points at the phrase and exact
+ * nodes **that advertise the same products**, and broad is a destination for
+ * auto as well as a source — a term auto surfaces is often added as broad to
+ * explore its neighbourhood before it earns exact.
  *
- * Deliberately generous rather than clever. An edge nobody wants is visible in
- * the proposal and deleted in one click; an edge that should exist and does not
- * is a term that silently never graduates, and nothing surfaces that. The
- * product-scope gate is what stops a wrong edge doing damage if one survives
- * review — it refuses a graduation between ad groups advertising different
- * products regardless of what the topology says.
+ * ## Why this is scoped rather than generous
+ *
+ * An earlier version connected every source to every destination and left the
+ * judgement to the product-scope gate at graduation time. The reasoning was
+ * that a wrong edge is visible in the proposal and deleted in one click, while
+ * a missing edge is a term that silently never graduates.
+ *
+ * It does not survive contact with a real account. The cross product is
+ * quadratic: a seller with a dozen campaigns across four products gets
+ * thousands of edges, which is not something a human reviews and clicks through
+ * — it is something they accept wholesale or abandon. And most of those edges
+ * are nonsense on their face, proposing to harvest a teapot campaign's terms
+ * into a coffee cup campaign. A proposal nobody can read is not a proposal.
+ *
+ * The gate still exists and still refuses those graduations. But refusing at
+ * graduation time is the wrong moment: the funnel has already been stored with
+ * thousands of meaningless edges, every harvest run evaluates them, and the
+ * seller sees a structure that does not describe their account.
+ *
+ * The data to do better is already here — `advertisedProductIds` is read from
+ * `listProductAds` per ad group at proposal time. Product scope is what Amazon
+ * itself keys a promotion edge on (`targetPromotionGroups` pins the ad ids), so
+ * scoping here agrees with how Amazon models the same relationship.
+ *
+ * Still deliberately over-inclusive WITHIN a product: several exact campaigns
+ * for one ASIN all get an edge, because which one a seller prefers is a
+ * genuine choice this cannot read off the account. That is a handful of edges
+ * to review, not thousands.
  */
 function proposeEdges(nodes: FunnelNode[]): FunnelEdge[] {
   const policy = GraduationPolicySchema.parse({});
@@ -319,14 +361,13 @@ function proposeEdges(nodes: FunnelNode[]): FunnelEdge[] {
   for (const from of nodes) {
     for (const to of nodes) {
       if (from.nodeId === to.nodeId) continue;
-      // The only rule: a term may move to a strictly narrower match, never
-      // back. That admits phrase→exact, which #147's own diagram calls for —
-      // an earlier version restricted sources to auto and broad and silently
-      // dropped it.
+      // A term may move to a strictly narrower match, never back. That admits
+      // phrase→exact, which #147's own diagram calls for — an earlier version
+      // restricted sources to auto and broad and silently dropped it.
       if (specificity(to.role) <= specificity(from.role)) continue;
-      // Not restricted to one campaign's ad groups: a funnel routinely spans
-      // campaigns, and which pairings are legitimate is the product-scope
-      // gate's judgement rather than something to guess at here.
+      // Not restricted to one campaign's ad groups — a funnel routinely spans
+      // campaigns — but restricted to ad groups selling the same product.
+      if (!sharesProduct(from, to)) continue;
       edges.push({ from: from.nodeId, to: to.nodeId, policy });
     }
   }
