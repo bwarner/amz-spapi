@@ -58,8 +58,10 @@ type AdOpsView = {
   }>;
   freshness: {
     through?: string;
+    /** Absent means UNKNOWN, not fresh — see the tone logic below. */
     staleDays?: number;
     gaps: Array<{ from: string; to: string }>;
+    unreadableWindows?: number;
   };
 };
 
@@ -80,9 +82,12 @@ function Freshness({ freshness }: { freshness: AdOpsView['freshness'] }) {
     );
   }
 
-  const stale = freshness.staleDays ?? 0;
+  const stale = freshness.staleDays;
+  // Unknown is amber, never green. `?? 0` here is what let unreadable dates
+  // render as "current": NaN days serialises to null over JSON, and a default
+  // of zero turns "we cannot tell" into "it is fresh".
   const tone =
-    stale <= 2
+    stale !== undefined && stale <= 2
       ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
       : 'border-amber-300 bg-amber-50 text-amber-900';
 
@@ -90,16 +95,29 @@ function Freshness({ freshness }: { freshness: AdOpsView['freshness'] }) {
     <p className={`rounded-md border px-3 py-2 text-sm ${tone}`}>
       Performance figures cover data through{' '}
       <strong>{freshness.through}</strong>
-      {stale > 0
+      {stale === undefined
+        ? ' — but how current that is could not be determined, so treat these figures as unverified.'
+        : stale > 0
         ? ` — ${stale} day${stale === 1 ? '' : 's'} old.`
         : ' — current.'}
       {freshness.gaps.length > 0 && (
         <>
           {' '}
           {freshness.gaps.length} gap
-          {freshness.gaps.length === 1 ? '' : 's'} in the window have no data.
+          {freshness.gaps.length === 1
+            ? ' in the window has'
+            : 's in the window have'}{' '}
+          no data.
         </>
       )}
+      {freshness.unreadableWindows ? (
+        <>
+          {' '}
+          {freshness.unreadableWindows} ingested window
+          {freshness.unreadableWindows === 1 ? '' : 's'} could not be read, so
+          coverage is understated.
+        </>
+      ) : null}
     </p>
   );
 }

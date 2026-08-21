@@ -81,12 +81,26 @@ export type AdOpsFunnelView = {
  * week-old numbers is worse than one that shows none.
  */
 export type Freshness = {
-  /** Latest day any ingested window covers, or absent if nothing is stored. */
+  /** Latest day any ingested ISO window covers, or absent if none is readable. */
   through?: string;
   /** Days inside the requested range with nothing ingested. */
   gaps: Array<{ from: string; to: string }>;
-  /** Days between `through` and today. Zero means fresh, absent means unknown. */
+  /**
+   * Days between `through` and today.
+   *
+   * ABSENT MEANS UNKNOWN, AND MUST NOT BE READ AS FRESH. A reader that
+   * defaults it to zero reports unmeasured data as current, which is the one
+   * thing this whole type exists to prevent.
+   */
   staleDays?: number;
+  /**
+   * Ingested windows whose dates could not be read as ISO.
+   *
+   * Surfaced because it means the coverage picture is incomplete for a reason
+   * nobody can see from the numbers — a console export storing "May 31, 2026"
+   * rather than "2026-05-31" leaves rows that no window accounts for.
+   */
+  unreadableWindows?: number;
 };
 
 export type AdOpsView = {
@@ -114,9 +128,29 @@ function shiftDays(iso: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function daysBetween(from: string, to: string): number {
-  const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
-  return Math.max(0, Math.round(ms / 86_400_000));
+/**
+ * Days between two ISO dates, or UNDEFINED when either cannot be read.
+ *
+ * Returning a number for an unreadable date is how a stale page calls itself
+ * current. `Date.parse` gives NaN for anything that is not ISO — a console
+ * export writes "May 31, 2026" — and `Math.max(0, NaN)` is NaN, which JSON
+ * serialises to null, which a `?? 0` on the far side turns into zero. Three
+ * defensible steps, and the screen ends up reporting three-month-old data as
+ * current in green.
+ *
+ * So the unreadable case is named rather than numbered, and every caller has
+ * to decide what to do about it.
+ */
+function daysBetween(from: string, to: string): number | undefined {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (Number.isNaN(start) || Number.isNaN(end)) return undefined;
+  return Math.max(0, Math.round((end - start) / 86_400_000));
+}
+
+/** ISO `YYYY-MM-DD`, which is what every comparison here assumes. */
+function isIsoDay(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 /**
@@ -133,13 +167,29 @@ export function summariseFreshness(
   },
   today: string
 ): Freshness {
-  const through = coverage.covered.reduce<string | undefined>(
+  /**
+   * Only ISO windows are considered, and a discarded one is not silence.
+   *
+   * `window.to > latest` is a STRING comparison, which is correct for ISO and
+   * nonsense for anything else: against "May 31, 2026" and "Jun 01, 2026" it
+   * picks May, because 'M' sorts before 'J'. So a malformed window does not
+   * merely fail to parse later — it can win the max and become the date the
+   * page reports.
+   */
+  const usable = coverage.covered.filter((window) => isIsoDay(window.to));
+  const unreadable = coverage.covered.length - usable.length;
+
+  const through = usable.reduce<string | undefined>(
     (latest, window) => (!latest || window.to > latest ? window.to : latest),
     undefined
   );
 
+  const staleDays = through ? daysBetween(through, today) : undefined;
+
   return {
-    ...(through ? { through, staleDays: daysBetween(through, today) } : {}),
+    ...(through ? { through } : {}),
+    ...(staleDays === undefined ? {} : { staleDays }),
+    ...(unreadable ? { unreadableWindows: unreadable } : {}),
     gaps: coverage.gaps,
   };
 }

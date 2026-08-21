@@ -282,3 +282,58 @@ describe('the empty account', () => {
     expect(view.funnels).toEqual([]);
   });
 });
+
+describe('freshness when the stored dates are not ISO', () => {
+  // The real shape that produced a green "current" banner over three-month-old
+  // data: a console export stores display dates, and the window is inverted.
+  const CONSOLE_DATES = {
+    covered: [{ from: 'Jun 01, 2026', to: 'May 31, 2026' }],
+    gaps: [],
+  };
+
+  it('does NOT report unreadable coverage as current', () => {
+    // The whole failure in one assertion. Date.parse gives NaN, NaN survives
+    // as null through JSON, and a `?? 0` on the far side renders "current".
+    const freshness = summariseFreshness(CONSOLE_DATES, '2026-08-20');
+
+    expect(freshness.staleDays).toBeUndefined();
+    expect(freshness.through).toBeUndefined();
+  });
+
+  it('counts the windows it could not read', () => {
+    // Silence would leave the seller with a page that simply shows less
+    // coverage than exists, and no reason why.
+    const freshness = summariseFreshness(CONSOLE_DATES, '2026-08-20');
+    expect(freshness.unreadableWindows).toBe(1);
+  });
+
+  it('never lets a malformed window win the max', () => {
+    // `window.to > latest` is a string comparison — correct for ISO, nonsense
+    // otherwise. Against these two it picks "May 31, 2026", because 'M' sorts
+    // before 'J'. A real ISO window must win regardless of what sits beside it.
+    const freshness = summariseFreshness(
+      {
+        covered: [
+          { from: 'Jun 01, 2026', to: 'May 31, 2026' },
+          { from: '2026-08-01', to: '2026-08-18' },
+        ],
+        gaps: [],
+      },
+      '2026-08-20'
+    );
+
+    expect(freshness.through).toBe('2026-08-18');
+    expect(freshness.staleDays).toBe(2);
+    expect(freshness.unreadableWindows).toBe(1);
+  });
+
+  it('reports nothing unreadable when every window is ISO', () => {
+    const freshness = summariseFreshness(
+      { covered: [{ from: '2026-08-01', to: '2026-08-19' }], gaps: [] },
+      '2026-08-20'
+    );
+
+    expect(freshness.unreadableWindows).toBeUndefined();
+    expect(freshness.staleDays).toBe(1);
+  });
+});
