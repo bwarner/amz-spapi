@@ -112,7 +112,7 @@ export function createHarvestOps(params: {
       }));
     },
 
-    async proposeFunnel({ profileId }) {
+    async proposeFunnel({ profileId, productIds }) {
       const { client, profileId: profile } = await params.resolveAds(profileId);
       const [campaigns, adGroups, keywords, productAds] = await Promise.all([
         // No `profileId` argument: the client is constructed against one
@@ -124,18 +124,35 @@ export function createHarvestOps(params: {
         client.listProductAds(),
       ]);
 
+      // Normalised once so the id and the filter agree: an id derived from
+      // `b0abc` and a filter matching `B0ABC` would key two funnels to what the
+      // seller typed rather than to what they meant.
+      const scope = productIds?.length
+        ? [...new Set(productIds.map((id) => id.trim().toUpperCase()))].sort()
+        : undefined;
+
       const proposal = inferFunnelTopology({
         profileId: profile,
-        name: `Harvest funnel ${profile}`,
-        // Derived from the profile, not random: re-proposing for the same
-        // account must land on the same id, or confirming a proposal twice
-        // would store two funnels describing one structure.
-        funnelId: `funnel-${profile}`,
+        name: scope
+          ? `Harvest funnel — ${scope.join(', ')}`
+          : `Harvest funnel ${profile}`,
+        // Derived from the profile AND the scope, not random: re-proposing the
+        // same scope must land on the same id, or confirming twice would store
+        // two funnels describing one structure.
+        //
+        // The scope has to be IN the id. Keying only on the profile means a
+        // funnel for one product silently overwrites the funnel for another —
+        // the seller adopts their cups funnel, adopts their teapots funnel, and
+        // the first one is gone with nothing said.
+        funnelId: scope
+          ? `funnel-${profile}-${scope.join('-')}`
+          : `funnel-${profile}`,
         campaigns: (campaigns.items ?? []) as never,
         adGroups: (adGroups.items ?? []) as never,
         keywords: (keywords.items ?? []) as never,
         productAds: (productAds.items ?? []) as never,
         readAt: now(),
+        ...(scope ? { productIds: scope } : {}),
       });
 
       return {

@@ -269,7 +269,11 @@ export interface SellerHarvestOps {
    * varies between sellers, so the topology is shown for correction before it
    * becomes the thing every later harvest reads.
    */
-  proposeFunnel(params: { profileId?: string }): Promise<{
+  proposeFunnel(params: {
+    profileId?: string;
+    /** ASINs to scope the proposal to. Absent proposes the whole account. */
+    productIds?: string[];
+  }): Promise<{
     proposal?: unknown;
     skipped: unknown[];
     reason?: string;
@@ -3030,8 +3034,21 @@ function getHarvestTools(harvestOps: SellerHarvestOps) {
           .describe(
             'Advertiser profile. Required when the account has more than one.'
           ),
+        productIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'ASINs to scope the funnel to. ASK FOR THIS FIRST and pass it. ' +
+              'A seller thinks in products — "the funnel for my 8oz cups" — ' +
+              'and without it this proposes every campaign in the account, ' +
+              'which for a real seller is dozens of nodes and hundreds of ' +
+              'edges. That is not a proposal anyone can review, and saving it ' +
+              'points a harvest at campaigns selling unrelated products. ' +
+              'Omit it only when the seller has explicitly asked for the whole ' +
+              'account.'
+          ),
       }),
-      execute: async (input: { profileId?: string }) =>
+      execute: async (input: { profileId?: string; productIds?: string[] }) =>
         run(() => harvestOps.proposeFunnel(input)),
     },
 

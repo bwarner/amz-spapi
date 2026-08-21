@@ -455,3 +455,100 @@ describe('edges are scoped to shared products', () => {
     expect(result.funnel.nodes).toHaveLength(2);
   });
 });
+
+describe('scoping the proposal to a product', () => {
+  const mixedAccount = {
+    campaigns: [
+      campaign({ campaignId: 'c-auto-cups', targetingType: 'AUTO' }),
+      campaign({ campaignId: 'c-exact-cups' }),
+      campaign({ campaignId: 'c-exact-teapot' }),
+    ],
+    adGroups: [
+      adGroup({ adGroupId: 'ag-auto-cups', campaignId: 'c-auto-cups' }),
+      adGroup({ adGroupId: 'ag-exact-cups', campaignId: 'c-exact-cups' }),
+      adGroup({
+        adGroupId: 'ag-exact-teapot',
+        campaignId: 'c-exact-teapot',
+        name: 'Teapot exact',
+      }),
+    ],
+    keywords: [
+      keyword('ag-exact-cups', 'EXACT', { campaignId: 'c-exact-cups' }),
+      keyword('ag-exact-teapot', 'EXACT', { campaignId: 'c-exact-teapot' }),
+    ],
+    productAds: [
+      productAd('ag-auto-cups', 'B0CUPS', { campaignId: 'c-auto-cups' }),
+      productAd('ag-exact-cups', 'B0CUPS', { campaignId: 'c-exact-cups' }),
+      productAd('ag-exact-teapot', 'B0TEAPOT', {
+        campaignId: 'c-exact-teapot',
+      }),
+    ],
+  };
+
+  it('adopts only the ad groups advertising the requested product', () => {
+    // A seller thinks in products, not accounts. Without this the proposal is
+    // every campaign they have ever run — for a real account, dozens of nodes
+    // and hundreds of edges, which gets accepted wholesale or abandoned.
+    const result = infer({ ...mixedAccount, productIds: ['B0CUPS'] });
+
+    expect(result.funnel.nodes.map((n) => n.campaignId).sort()).toEqual([
+      'c-auto-cups',
+      'c-exact-cups',
+    ]);
+    expect(result.funnel.edges).toHaveLength(1);
+  });
+
+  it('reports what it excluded, rather than dropping it silently', () => {
+    // A seller who asked for the cups funnel and finds a campaign missing
+    // needs to know it was left out on purpose, and why.
+    const result = infer({ ...mixedAccount, productIds: ['B0CUPS'] });
+
+    const teapot = result.skipped.find(
+      (s) => s.adGroupId === 'ag-exact-teapot'
+    );
+    expect(teapot?.reason).toContain('B0TEAPOT');
+  });
+
+  it('matches the ASIN case-insensitively', () => {
+    // The id is keyed off this too, so a lower-case ASIN typed by a human must
+    // not key a second funnel describing the same structure.
+    const result = infer({ ...mixedAccount, productIds: ['b0cups'] });
+    expect(result.funnel.nodes).toHaveLength(2);
+  });
+
+  it('adopts the whole account when no scope is given', () => {
+    // The parameter is optional and absence must keep meaning "everything" —
+    // this is the behaviour every existing caller relies on.
+    const result = infer(mixedAccount);
+    expect(result.funnel.nodes).toHaveLength(3);
+  });
+
+  it('returns an EMPTY funnel when the scope matches nothing', () => {
+    // Not the whole account. A filter that matched nothing is an honest empty
+    // answer; falling back to everything would hand the seller the account-wide
+    // graph they were trying to avoid, labelled as their product.
+    const result = infer({ ...mixedAccount, productIds: ['B0MISSING'] });
+
+    expect(result.funnel.nodes).toEqual([]);
+    expect(result.funnel.edges).toEqual([]);
+    expect(result.skipped.length).toBe(3);
+  });
+
+  it('excludes an ad group whose products could not be read', () => {
+    // Unknown is not a match. It would otherwise pull a campaign of unknown
+    // contents into a funnel the seller believes is about one product.
+    const result = infer({
+      ...mixedAccount,
+      productAds: [
+        productAd('ag-auto-cups', 'B0CUPS', { campaignId: 'c-auto-cups' }),
+      ],
+      productIds: ['B0CUPS'],
+    });
+
+    expect(result.funnel.nodes.map((n) => n.campaignId)).toEqual([
+      'c-auto-cups',
+    ]);
+    const unread = result.skipped.find((s) => s.adGroupId === 'ag-exact-cups');
+    expect(unread?.reason).toContain('No product ads read');
+  });
+});

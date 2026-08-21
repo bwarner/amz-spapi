@@ -104,6 +104,23 @@ export type InferFunnelParams = {
   productAds: AdoptionProductAd[];
   /** Epoch ms, supplied rather than read from a clock. Stamps `productsReadAt`. */
   readAt: number;
+  /**
+   * Adopt only the ad groups advertising these products. Absent means the whole
+   * account.
+   *
+   * A seller does not think in accounts, they think in products: "the funnel
+   * for my 8oz cups". Without this the proposal is every campaign the account
+   * has ever run — for a real account that is dozens of nodes and hundreds of
+   * edges, which is not a thing anyone reviews. It is accepted wholesale or
+   * abandoned, and both are wrong.
+   *
+   * Scoping at the NODE level rather than filtering edges afterwards, because
+   * an unrelated campaign should not appear in the funnel at all. A node that
+   * is in the graph is a node `plan-harvest` reads, `listFunnels` shows, and
+   * the AdOps screen renders — belonging in the picture is the same question
+   * as belonging in the funnel.
+   */
+  productIds?: string[];
 };
 
 /**
@@ -130,6 +147,13 @@ export function inferFunnelTopology(
     params.productAds.filter((ad) => !isArchived(ad.state)),
     (ad) => ad.adGroupId
   );
+
+  // Absent means the whole account, so an EMPTY array must not silently mean
+  // that too — a caller who passed a filter and matched nothing gets an empty
+  // funnel, which is the honest answer.
+  const wanted = params.productIds
+    ? new Set(params.productIds.map((id) => id.trim().toUpperCase()))
+    : undefined;
 
   const nodes: FunnelNode[] = [];
   const skipped: AdoptionSkip[] = [];
@@ -180,6 +204,22 @@ export function inferFunnelTopology(
           .filter((id): id is string => Boolean(id))
       ),
     ].sort();
+
+    // Out of scope, and reported rather than dropped in silence. A seller who
+    // asked for "the 8oz cups funnel" and got a proposal missing a campaign
+    // they expected needs to know it was excluded on purpose, and why.
+    if (wanted && !products.some((id) => wanted.has(id.toUpperCase()))) {
+      skipped.push({
+        campaignId: adGroup.campaignId,
+        adGroupId: adGroup.adGroupId,
+        name: adGroup.name,
+        reason: products.length
+          ? `Advertises ${products.join(', ')}, not the requested product.`
+          : 'No product ads read for this ad group, so it cannot be matched ' +
+            'to the requested product.',
+      });
+      continue;
+    }
 
     nodes.push({
       nodeId: uniqueNodeId(role.role, adGroup, usedIds),
