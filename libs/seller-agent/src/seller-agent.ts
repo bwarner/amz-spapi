@@ -3058,11 +3058,57 @@ function getHarvestTools(harvestOps: SellerHarvestOps) {
         'from propose-harvest-funnel, with any corrections they asked for. ' +
         'Creates no keywords and spends nothing — it records which campaign ' +
         'feeds which.',
+      /**
+       * The funnel is described, and REQUIRED, rather than `z.unknown()`.
+       *
+       * `z.unknown()` converts to a bare `{ description }` with no `type`, and
+       * Zod treats it as optional so it never reaches `required`. The model was
+       * handed a parameter with no shape and no obligation to send it, and
+       * `additionalProperties: false` then stripped anything mis-keyed — so the
+       * funnel arrived undefined and the store reported funnelId, name and
+       * nodes all missing. The tool looked like it was ignoring its own
+       * argument, because in effect it was.
+       *
+       * Passthrough on the nodes and edges: `propose` returns more per node
+       * than this lists (names, advertisedProductIds, productsReadAt), all of
+       * it worth keeping, and none of it something the model should have to
+       * restate. Only the fields the store requires are named — enough to
+       * build a trimmed funnel deliberately rather than by copying a blob.
+       */
       inputSchema: z.object({
         profileId: z.string().optional(),
         funnel: z
-          .unknown()
-          .describe('The confirmed topology, in the shape propose returned.'),
+          .object({
+            funnelId: z.string(),
+            name: z.string(),
+            nodes: z
+              .array(
+                z
+                  .object({
+                    nodeId: z.string(),
+                    campaignId: z.string(),
+                    adGroupId: z.string(),
+                    role: z.enum(['auto', 'broad', 'phrase', 'exact']),
+                  })
+                  .passthrough()
+              )
+              .min(1),
+            edges: z
+              .array(
+                z.object({ from: z.string(), to: z.string() }).passthrough()
+              )
+              .describe(
+                'Only the pairs the seller confirmed. Every `from` and `to` ' +
+                  'MUST be a nodeId present in `nodes` — an edge pointing at a ' +
+                  'node you trimmed away is rejected. Drop the node and its ' +
+                  'edges together.'
+              ),
+          })
+          .passthrough()
+          .describe(
+            'The confirmed topology. Start from what propose-harvest-funnel ' +
+              'returned and remove what the seller did not confirm.'
+          ),
       }),
       execute: async (input: { profileId?: string; funnel: unknown }) =>
         run(() => harvestOps.saveFunnel(input)),
