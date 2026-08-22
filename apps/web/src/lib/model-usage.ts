@@ -28,6 +28,9 @@ const MODEL_PRICES_PER_MTOK: Record<
   // consistent and disagreed with reality — see `pricesEveryModel` in the spec,
   // which now derives its cases from the model registry instead of restating
   // the keys here.
+  // Verified 2026-08-22 against the gateway's own /v1/models pricing, which is
+  // the authority — this table is a copy and drifts.
+  'claude-sonnet-5': { input: 2, output: 10, cachedInput: 0.2 },
   'claude-sonnet-4.6': { input: 3, output: 15, cachedInput: 0.3 },
   'claude-haiku-4.5': { input: 1, output: 5, cachedInput: 0.1 },
   'claude-opus-4.8': { input: 5, output: 25, cachedInput: 0.5 },

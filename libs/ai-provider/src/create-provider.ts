@@ -8,8 +8,29 @@ import type {
   ModelTier,
 } from './types.js';
 
+/**
+ * Two tiers, and what each is for.
+ *
+ * `default` carries the seller agent, which orchestrates ~77 tools across
+ * SP-API, Ads, harvest funnels and A+ content. Multi-step tool sequencing is
+ * where smaller models come apart, and that agent IS the product — cheaper
+ * turns that pick the wrong campaign are not a saving. So this tier is chosen
+ * for capability and made cheaper by picking a better-priced model of the same
+ * class, never by dropping a class.
+ *
+ * `fast` carries A+ generation and section regeneration: bounded, single-shot
+ * writing tasks with a human reading every result.
+ *
+ * Sonnet 5 rather than Sonnet 4.6 because it is a LATER model at a LOWER price
+ * — $2/$10 per Mtok against $3/$15, and $0.20 against $0.30 on cached input,
+ * which matters most here because the agent's 50-70k token prefix is cached on
+ * every turn. Roughly a third off the chat bill with no change of class.
+ *
+ * `AI_DEFAULT_MODEL` overrides this without a deploy, which is the rollback if
+ * quality regresses.
+ */
 const DEFAULT_MODELS: Record<ModelTier, string> = {
-  default: 'anthropic/claude-sonnet-4.6',
+  default: 'anthropic/claude-sonnet-5',
   fast: 'anthropic/claude-haiku-4.5',
 };
 

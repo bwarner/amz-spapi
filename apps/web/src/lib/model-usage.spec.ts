@@ -34,6 +34,11 @@ describe('pricesFor', () => {
    * per token.
    */
   const SELECTABLE_TEXT_MODELS = [
+    // The current `default` tier. An unpriced default is the expensive kind of
+    // gap: every chat turn — 98% of AI spend — would fall to the placeholder
+    // rate with priceKnown false, and the ledger would misreport the one
+    // number it exists to get right.
+    'anthropic/claude-sonnet-5',
     'anthropic/claude-sonnet-4.6',
     'anthropic/claude-haiku-4.5',
     'anthropic/claude-opus-4.8',
