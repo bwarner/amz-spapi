@@ -16,6 +16,7 @@ import {
   Images,
   Container,
   Scale,
+  Megaphone,
   Users,
   CreditCard,
 } from 'lucide-react';
@@ -37,6 +38,7 @@ const navItems = [
   { href: '/assets', label: 'Assets', icon: Images },
   { href: '/shipments', label: 'Shipments', icon: Container },
   { href: '/reconciliation', label: 'Reconcile', icon: Scale },
+  { href: '/ads', label: 'Ad Ops', icon: Megaphone },
   { href: '/connections', label: 'Connections', icon: Activity },
   { href: '/team', label: 'Team', icon: Users },
   { href: '/billing', label: 'Billing', icon: CreditCard },

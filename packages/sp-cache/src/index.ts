@@ -249,6 +249,15 @@ export {
   HarvestApplyError,
 } from './lib/harvest-apply.js';
 export { reconcileDueNegatives } from './lib/negative-reconcile.js';
+export { buildAdOpsView, summariseFreshness } from './lib/adops-view.js';
+export type {
+  AdOpsView,
+  AdOpsFunnelView,
+  AdOpsRow,
+  DestinationHealth,
+  DueNegativeView,
+  Freshness,
+} from './lib/adops-view.js';
 export type {
   ReconcileRow,
   ReconcileSummary,

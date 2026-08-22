@@ -269,7 +269,11 @@ export interface SellerHarvestOps {
    * varies between sellers, so the topology is shown for correction before it
    * becomes the thing every later harvest reads.
    */
-  proposeFunnel(params: { profileId?: string }): Promise<{
+  proposeFunnel(params: {
+    profileId?: string;
+    /** ASINs to scope the proposal to. Absent proposes the whole account. */
+    productIds?: string[];
+  }): Promise<{
     proposal?: unknown;
     skipped: unknown[];
     reason?: string;
@@ -317,6 +321,20 @@ export interface SellerReportOps {
     from: string;
     to: string;
   }): Promise<ReportIngestResult>;
+  /**
+   * Queue the pull instead of holding the turn open for it.
+   *
+   * Amazon takes 30s to several minutes; a chat turn has 300 seconds for the
+   * model, every other tool and streaming combined. Blocking in-turn used to
+   * time out and DISCARD the report id, so the retry made Amazon build the same
+   * report again. Optional because an environment with no background runner
+   * still has to work — see the fallback in `sync-report`.
+   */
+  startReportJob?(params: {
+    kind: string;
+    from: string;
+    to: string;
+  }): Promise<{ started: boolean; jobId?: string; error?: string }>;
   getCoverage(params: {
     kind: string;
     from?: string;
@@ -573,6 +591,20 @@ export interface SellerAdsOps {
     attribution: string;
     status?: string;
   }>;
+  /**
+   * Hand the report to something allowed to wait for it, and return at once.
+   *
+   * The host starts a state machine and tells the chat when it lands. Present
+   * only when the environment can run background work; without it the tool
+   * falls back to the in-turn request, which is why it is optional.
+   */
+  startPerformanceReportJob?(params: {
+    profileId?: string;
+    level: 'campaign' | 'keyword' | 'searchTerm';
+    startDate: string;
+    endDate: string;
+    attribution?: '1d' | '7d' | '14d' | '30d';
+  }): Promise<{ started: boolean; jobId?: string; error?: string }>;
   /** Check once. Not-ready is a normal answer, not a failure. */
   fetchPerformanceReport(params: {
     profileId?: string;
@@ -3002,8 +3034,21 @@ function getHarvestTools(harvestOps: SellerHarvestOps) {
           .describe(
             'Advertiser profile. Required when the account has more than one.'
           ),
+        productIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'ASINs to scope the funnel to. ASK FOR THIS FIRST and pass it. ' +
+              'A seller thinks in products — "the funnel for my 8oz cups" — ' +
+              'and without it this proposes every campaign in the account, ' +
+              'which for a real seller is dozens of nodes and hundreds of ' +
+              'edges. That is not a proposal anyone can review, and saving it ' +
+              'points a harvest at campaigns selling unrelated products. ' +
+              'Omit it only when the seller has explicitly asked for the whole ' +
+              'account.'
+          ),
       }),
-      execute: async (input: { profileId?: string }) =>
+      execute: async (input: { profileId?: string; productIds?: string[] }) =>
         run(() => harvestOps.proposeFunnel(input)),
     },
 
@@ -3013,11 +3058,57 @@ function getHarvestTools(harvestOps: SellerHarvestOps) {
         'from propose-harvest-funnel, with any corrections they asked for. ' +
         'Creates no keywords and spends nothing — it records which campaign ' +
         'feeds which.',
+      /**
+       * The funnel is described, and REQUIRED, rather than `z.unknown()`.
+       *
+       * `z.unknown()` converts to a bare `{ description }` with no `type`, and
+       * Zod treats it as optional so it never reaches `required`. The model was
+       * handed a parameter with no shape and no obligation to send it, and
+       * `additionalProperties: false` then stripped anything mis-keyed — so the
+       * funnel arrived undefined and the store reported funnelId, name and
+       * nodes all missing. The tool looked like it was ignoring its own
+       * argument, because in effect it was.
+       *
+       * Passthrough on the nodes and edges: `propose` returns more per node
+       * than this lists (names, advertisedProductIds, productsReadAt), all of
+       * it worth keeping, and none of it something the model should have to
+       * restate. Only the fields the store requires are named — enough to
+       * build a trimmed funnel deliberately rather than by copying a blob.
+       */
       inputSchema: z.object({
         profileId: z.string().optional(),
         funnel: z
-          .unknown()
-          .describe('The confirmed topology, in the shape propose returned.'),
+          .object({
+            funnelId: z.string(),
+            name: z.string(),
+            nodes: z
+              .array(
+                z
+                  .object({
+                    nodeId: z.string(),
+                    campaignId: z.string(),
+                    adGroupId: z.string(),
+                    role: z.enum(['auto', 'broad', 'phrase', 'exact']),
+                  })
+                  .passthrough()
+              )
+              .min(1),
+            edges: z
+              .array(
+                z.object({ from: z.string(), to: z.string() }).passthrough()
+              )
+              .describe(
+                'Only the pairs the seller confirmed. Every `from` and `to` ' +
+                  'MUST be a nodeId present in `nodes` — an edge pointing at a ' +
+                  'node you trimmed away is rejected. Drop the node and its ' +
+                  'edges together.'
+              ),
+          })
+          .passthrough()
+          .describe(
+            'The confirmed topology. Start from what propose-harvest-funnel ' +
+              'returned and remove what the seller did not confirm.'
+          ),
       }),
       execute: async (input: { profileId?: string; funnel: unknown }) =>
         run(() => harvestOps.saveFunnel(input)),
@@ -3309,15 +3400,16 @@ function getAdsTools(adsOps: SellerAdsOps) {
 
     'request-ad-report': {
       description:
-        'START a spend/sales/ACOS report. Returns a reportId in about a second ' +
-        'and does NOT wait — Amazon builds these asynchronously and it commonly ' +
-        'takes one to several minutes. ' +
+        'START a spend/sales/ACOS report. Returns in about a second and does ' +
+        'NOT wait — Amazon builds these asynchronously and it commonly takes ' +
+        'one to several minutes. ' +
         'Use this for "which campaigns are wasting money", "what is my ACOS", ' +
         '"which keywords should I cut" — the structure tools cannot answer any ' +
         'of those. ' +
-        'After calling: tell the user it is running, give them the reportId, and ' +
-        'END YOUR TURN. Do not loop on get-ad-report waiting for it. When they ' +
-        'come back, or after a minute or two of other work, fetch it. ' +
+        'After calling: tell the user it is running and END YOUR TURN. Do not ' +
+        'loop on get-ad-report waiting for it. You will be told when it lands, ' +
+        'and the message will carry the reportId — the user does NOT have to ' +
+        'ask again, so do not tell them to check back. ' +
         'Levels: campaign for where the money goes, keyword for which targets ' +
         'are inefficient, searchTerm for what shoppers actually typed — that ' +
         'last one finds negative-keyword candidates, since a broad-match ' +
@@ -3351,15 +3443,34 @@ function getAdsTools(adsOps: SellerAdsOps) {
           );
           if (problem) throw new Error(problem);
 
+          if (adsOps.startPerformanceReportJob) {
+            const queued = await adsOps.startPerformanceReportJob(input);
+            if (queued.started) {
+              return {
+                jobId: queued.jobId,
+                note:
+                  'The report is building in the background and this ' +
+                  'conversation will be told when it lands, with the reportId. ' +
+                  'Say it is running and END YOUR TURN. Do NOT tell the user to ' +
+                  'check back or ask again — they will not have to. Do NOT ' +
+                  'request the same report again: Amazon charges for the work ' +
+                  'either way and a second request does not make it faster.',
+              };
+            }
+          }
+
+          // No background runner in this environment. Falls back to the direct
+          // request, which still returns immediately — only the delivery is
+          // manual, which is worse than the line above but better than nothing.
           const started = await adsOps.requestPerformanceReport(input);
           return {
             ...started,
             note:
               `Report ${started.reportId} is building and usually takes one to ` +
-              'several minutes. Tell the user, hand them the reportId, and end ' +
-              'your turn — then call get-ad-report with that id. Do NOT request ' +
-              'the same report again while it is building: Amazon charges for ' +
-              'the work either way and a second request does not make it faster.',
+              'several minutes. Background delivery is not available here, so ' +
+              'hand the user the reportId, end your turn, and call get-ad-report ' +
+              'with that id when they come back. Do NOT request the same report ' +
+              'again while it is building.',
           };
         }),
     },
@@ -4208,7 +4319,10 @@ function getReportTools(reportOps: SellerReportOps) {
       description:
         'Pull an FBA report from Amazon for a date range and ingest it. Rows are ' +
         'de-duplicated, so overlapping ranges are safe to re-sync. Reports are ' +
-        'generated asynchronously and can take 30s-several minutes. ' +
+        'generated asynchronously and can take 30s-several minutes, so this ' +
+        'queues the pull and returns at once; this conversation is told when it ' +
+        'lands. Say it is running and END YOUR TURN — do NOT tell the user to ' +
+        'ask again, and do NOT re-sync the same window while it is building. ' +
         'If this fails with a 403, the SP-API app lacks the role for FBA reports — ' +
         'tell the user they can instead download that report in Seller Central and ' +
         'upload the file, which needs no role at all.',
@@ -4222,6 +4336,23 @@ function getReportTools(reportOps: SellerReportOps) {
       }),
       execute: async (input: { kind: string; from: string; to: string }) => {
         try {
+          if (reportOps.startReportJob) {
+            const queued = await reportOps.startReportJob(input);
+            if (queued.started) {
+              return {
+                success: true as const,
+                jobId: queued.jobId,
+                note:
+                  `The ${input.kind} pull for ${input.from}..${input.to} is ` +
+                  'running in the background. This conversation will be told ' +
+                  'when it lands, with the row counts. Say so and END YOUR ' +
+                  'TURN; the user does not need to ask again.',
+              };
+            }
+          }
+
+          // No background runner here. The in-turn path still works for short
+          // windows, and reports its own timeout with the report id.
           const result = await reportOps.syncReport(input);
           if (result.error)
             return { success: false as const, error: result.error };
@@ -6088,9 +6219,30 @@ CAPABILITIES YOU DO NOT HAVE:
     ? `${baseInstructions}\n\n${additionalInstructions}`
     : baseInstructions;
 
+  /**
+   * Cache the prefix for an HOUR, not the default five minutes.
+   *
+   * The prefix is expensive and almost entirely fixed: the instructions above
+   * plus this agent's tool definitions come to roughly 50-70k input tokens
+   * before the seller has typed anything. That is the floor price of every
+   * turn, and it is identical on all of them.
+   *
+   * Five minutes is the wrong window for how this is actually used. Measured
+   * against `ops.cost_ledger`, spend concentrates in long sessions — four
+   * conversations of 23 to 64 turns were 86% of it — and the gap between turns
+   * is a human reading an answer and deciding what to ask next. A five-minute
+   * cache expires in exactly those gaps, so the prefix gets re-written far more
+   * often than it is read, and a cache write costs MORE than an ordinary read.
+   *
+   * The trade is real rather than free: a 1h write is dearer than a 5m one, so
+   * a session that asks one question and leaves pays slightly more than before.
+   * The ledger says those are rare and cheap — single-turn chats were four
+   * conversations and $0.65 in total — while the long sessions that dominate
+   * the bill read the cached prefix dozens of times.
+   */
   const providerOptions = {
     anthropic: {
-      cacheControl: { type: 'ephemeral' as const },
+      cacheControl: { type: 'ephemeral' as const, ttl: '1h' as const },
     },
   };
 
